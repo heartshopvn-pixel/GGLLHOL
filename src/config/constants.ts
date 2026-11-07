@@ -1744,11 +1744,26 @@ async function connectTikTok(customUser) {
   try {
     const TikTokConnector = await loadTikTokConnectorClass();
     console.log(\`⏳ [ĐANG KẾT NỐI] Đang vào phòng Live TikTok: @\${TIKTOK_USERNAME}...\`);
+    // QUAN TRỌNG: Tắt enableExtendedGiftInfo & fetchRoomInfoOnConnect để KHÔNG gọi endpoint signTikTokUrl trả phí (Business plan) của EulerStream!
     const tiktok = new TikTokConnector(TIKTOK_USERNAME, {
       processInitialData: true,
-      enableExtendedGiftInfo: true,
+      enableExtendedGiftInfo: false,
+      fetchRoomInfoOnConnect: false,
     });
+    if (typeof tiktok.fetchAvailableGifts === 'function') {
+      tiktok.fetchAvailableGifts = async () => [];
+    }
     activeTiktok = tiktok;
+
+    const GIFT_ID_FALLBACK = {
+      5655: { name: 'Rose', coins: 1 },
+      5827: { name: 'Ice Cream Cone', coins: 1 },
+      5269: { name: 'TikTok', coins: 1 },
+      7934: { name: 'GG', coins: 1 },
+      5487: { name: 'Finger Heart', coins: 5 },
+      5658: { name: 'Perfume', coins: 20 },
+      5660: { name: 'Doughnut', coins: 30 },
+    };
 
     tiktok.on('chat', data => {
       const username = getUserName(data);
@@ -1760,13 +1775,16 @@ async function connectTikTok(customUser) {
 
     tiktok.on('gift', data => {
       const giftType = data?.giftType ?? data?.gift?.giftType ?? data?.giftDetails?.giftType;
-      if (giftType === 1 && !data?.repeatEnd) return;
+      const repeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
+      if (giftType === 1 && !repeatEnd) return;
       const username = getUserName(data);
+      const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
       const diamondCount = Number(
         data?.giftDetails?.diamondCount ??
         data?.gift?.diamondCount ??
         data?.extendedGiftInfo?.diamond_count ??
         data?.diamondCount ??
+        fallbackGift?.coins ??
         1
       ) || 1;
       const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1);
@@ -1775,6 +1793,8 @@ async function connectTikTok(customUser) {
         data?.gift?.name ||
         data?.extendedGiftInfo?.name ||
         data?.giftName ||
+        fallbackGift?.name ||
+        (typeof data?.describe === 'string' ? data.describe.replace(/^sent\\s+/i, '').trim() : '') ||
         'Quà tặng';
       const coins = Math.max(1, diamondCount * repeatCount);
       console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);

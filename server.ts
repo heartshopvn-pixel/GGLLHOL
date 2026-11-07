@@ -268,8 +268,12 @@ async function startServer() {
 
       const conn = new ConnectorClass(rawUser, {
         processInitialData: true,
-        enableExtendedGiftInfo: true,
+        enableExtendedGiftInfo: false,
+        fetchRoomInfoOnConnect: false,
       });
+      if (typeof conn.fetchAvailableGifts === 'function') {
+        conn.fetchAvailableGifts = async () => [];
+      }
       activeTikTokConn = conn;
 
       const onChat = (data: any) => {
