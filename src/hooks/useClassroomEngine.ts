@@ -2294,7 +2294,7 @@ export function useClassroomEngine() {
         return true;
       }
 
-      const existingInClass = pilgrimsRef.current.find(
+      let existingInClass = pilgrimsRef.current.find(
         (p) =>
           p.username.trim().toLowerCase() === lowerUser &&
           Boolean(p.slotId) &&
@@ -2303,18 +2303,19 @@ export function useClassroomEngine() {
       );
       let existingInWaitingQueue = waitingPoolRef.current.get(lowerUser);
 
-      const isSeated = Boolean(existingInClass);
+      let isSeated = Boolean(existingInClass);
       const punishmentMult =
         existingInClass?.isPunishedInCurrentRound &&
         existingInClass?.punishmentMultiplier
           ? existingInClass.punishmentMultiplier
           : 1;
 
-      const elapsedSec = Math.max(
-        0.3,
+      const rawElapsedSec =
         Math.round(((bState.totalDurationMs - bState.timeLeftMs) / 1000) * 10) /
-          10
-      );
+        10;
+      const elapsedSec = isBot
+        ? Math.max(5.1, rawElapsedSec)
+        : Math.max(0.3, rawElapsedSec);
 
       const prevClassCount = (
         bState.classWinners ||
@@ -2325,15 +2326,15 @@ export function useClassroomEngine() {
         bState.winners.filter((w) => w.isSeated === false)
       ).length;
 
-      const groupRank = isSeated ? prevClassCount + 1 : prevOutsideCount + 1;
-      const baseRewardPoints = getQuizRankPoints(groupRank);
+      let groupRank = isSeated ? prevClassCount + 1 : prevOutsideCount + 1;
+      let baseRewardPoints = getQuizRankPoints(groupRank);
       const rawLuckyStars = bState.currentQuestion?.luckyStars || 0;
       const luckyMult = rawLuckyStars > 0 ? rawLuckyStars + 1 : 1;
-      const rewardPoints = baseRewardPoints * punishmentMult * luckyMult;
+      let rewardPoints = baseRewardPoints * punishmentMult * luckyMult;
 
       if (existingInClass) {
         const nextPilgrims = pilgrimsRef.current.map((p) =>
-          p.id === existingInClass.id
+          p.id === existingInClass!.id
             ? {
                 ...p,
                 answeredCurrentQuestion: true,
@@ -2345,7 +2346,8 @@ export function useClassroomEngine() {
       }
 
       // Nếu người chơi chưa ở trong lớp và cũng chưa ở trong Hàng Chờ nhưng trả lời ĐÚNG câu hỏi trong thời gian hỏi:
-      // Tự động thêm ngay vào Hàng Chờ (điểm của câu trả lời đúng sẽ được cộng đồng loạt vào lúc đọc câu trả lời ở Luồng 4!)
+      // Bước 1: Tự động thêm vào Hàng Chờ.
+      // Bước 2 (check liên tiếp): Nếu lớp đang có ghế trống thì cho vào lớp liền luôn!
       if (!isSeated) {
         if (existingInWaitingQueue) {
           existingInWaitingQueue.answeredCorrectInRound = true;
@@ -2381,21 +2383,135 @@ export function useClassroomEngine() {
             waitingQueueRef.current = nextTop;
             setWaitingQueue(nextTop);
           }
-          // Đồng bộ ngay đám đông cửa lớp (doorCrowdRef) để hiển thị nhân vật vừa vào hàng chờ
-          const maxCluster = configRef.current.doorCrowdCount ?? 7;
-          if (doorCrowdRef.current.length < maxCluster) {
-            const nextCrowd = buildDoorCrowdPool(
-              maxCluster,
-              configRef.current.doorCrowdPos || { x: 46, y: 506 },
-              doorCrowdRef.current,
-              npcNamesRef.current,
-              npcAvatarsRef.current,
-              configRef.current.doorCrowdSpread ?? 1,
-              Array.from(pool.values())
-            );
-            doorCrowdRef.current = nextCrowd;
-            setDoorCrowd(nextCrowd);
+
+          // Check liên tiếp điều kiện thứ 2: Nếu lớp hiện đang có ghế trống thì cho học sinh này từ Hàng Chờ vào lớp liền luôn!
+          const activeSlotMap = new Map<string, number>();
+          for (const p of pilgrimsRef.current) {
+            if (
+              p.slotId &&
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit'
+            ) {
+              activeSlotMap.set(p.slotId, p.id);
+            }
           }
+          const freeVipSlots = vipSlotsRef.current.filter(
+            (s) => !activeSlotMap.has(s.id)
+          );
+          const freeNormSlots = normalSlotsRef.current.filter(
+            (s) => !activeSlotMap.has(s.id)
+          );
+          const allFreeSlots = [...freeVipSlots, ...freeNormSlots];
+
+          if (allFreeSlots.length > 0) {
+            const chosenSlot =
+              allFreeSlots[Math.floor(Math.random() * allFreeSlots.length)];
+            pool.delete(lowerUser);
+            existingInWaitingQueue = undefined;
+            setQueueCount(pool.size);
+
+            const nextTopAfterPop = waitingQueueRef.current.filter(
+              (item) => item.username.trim().toLowerCase() !== lowerUser
+            );
+            waitingQueueRef.current = nextTopAfterPop;
+            setWaitingQueue(nextTopAfterPop);
+
+            const id = nextIdRef.current++;
+            const slotX = chosenSlot.x;
+            const slotY = chosenSlot.y;
+            const laneX = chosenSlot.aisleX ?? 270;
+
+            if (vipSlotsRef.current.some((s) => s.id === chosenSlot.id)) {
+              const nextVip = vipSlotsRef.current.map((s) =>
+                s.id === chosenSlot.id
+                  ? { ...s, occupiedById: id }
+                  : { ...s, occupiedById: activeSlotMap.get(s.id) ?? null }
+              );
+              vipSlotsRef.current = nextVip;
+              setVipSlots(nextVip);
+            } else {
+              const nextNorm = normalSlotsRef.current.map((s) =>
+                s.id === chosenSlot.id
+                  ? { ...s, occupiedById: id }
+                  : { ...s, occupiedById: activeSlotMap.get(s.id) ?? null }
+              );
+              normalSlotsRef.current = nextNorm;
+              setNormalSlots(nextNorm);
+            }
+
+            const existingDonorScore =
+              lotusDonorsRef.current.find(
+                (d) => d.username.trim().toLowerCase() === lowerUser
+              )?.coins || 0;
+            const cfgNow = configRef.current;
+            const cleanName = username.trim();
+
+            const admittedStudent: PilgrimData = {
+              id,
+              username: cleanName,
+              currentScoreDisplay: existingDonorScore,
+              prayer: rawComment,
+              gender: isBot
+                ? resolveBalancedNpcGender(cleanName, 'class', newEntry.gender)
+                : resolveUserGender(cleanName, newEntry.gender),
+              isVip: false,
+              isBot: Boolean(isBot),
+              coins: 0,
+              offeringType: 'incense',
+              slotId: chosenSlot.id,
+              x: LEFT_DOOR_POS.x,
+              y: LEFT_DOOR_POS.y,
+              laneX,
+              slotX,
+              slotY,
+              speed: 220 + Math.random() * 18,
+              state: 'walk_carpet_to_slot_y',
+              stateTimer: 0,
+              prayTimer: 0,
+              totalPrayDuration: cfgNow.normalPrayDurationSec || 90,
+              animTime: Math.random() * 10,
+              facingLeft: false,
+              avatarColor: AVATAR_COLORS[id % AVATAR_COLORS.length],
+              avatarUrl:
+                avatarUrl ||
+                (isBot
+                  ? npcAvatarsRef.current[id % npcAvatarsRef.current.length]
+                  : null),
+              hairSeed: id,
+              hasComment: Boolean(rawComment.trim()),
+              chatBubbleUntil: rawComment.trim()
+                ? Date.now() + (cfgNow.chatBubbleDurationSec || 12) * 1000
+                : 0,
+              correctStreak: 0,
+              answeredCurrentQuestion: true,
+              quizResultStatus: null,
+              quizResultUntil: 0,
+            };
+
+            const nextPilgrimsList = [...pilgrimsRef.current, admittedStudent];
+            pilgrimsRef.current = nextPilgrimsList;
+            setPilgrims(nextPilgrimsList);
+
+            existingInClass = admittedStudent;
+            isSeated = true;
+            groupRank = prevClassCount + 1;
+            baseRewardPoints = getQuizRankPoints(groupRank);
+            rewardPoints = baseRewardPoints * punishmentMult * luckyMult;
+          }
+
+          // Đồng bộ đám đông cửa lớp (doorCrowdRef) theo danh sách Hàng Chờ hiện tại
+          const maxCluster = configRef.current.doorCrowdCount ?? 7;
+          const nextCrowd = buildDoorCrowdPool(
+            maxCluster,
+            configRef.current.doorCrowdPos || { x: 46, y: 506 },
+            doorCrowdRef.current,
+            npcNamesRef.current,
+            npcAvatarsRef.current,
+            configRef.current.doorCrowdSpread ?? 1,
+            Array.from(pool.values())
+          );
+          doorCrowdRef.current = nextCrowd;
+          setDoorCrowd(nextCrowd);
         }
       }
 
@@ -2483,7 +2599,13 @@ export function useClassroomEngine() {
 
       return true;
     },
-    [addGrandEventPoints, addLotusPointsToDonor, pushToast, resolveUserGender]
+    [
+      addGrandEventPoints,
+      addLotusPointsToDonor,
+      pushToast,
+      resolveBalancedNpcGender,
+      resolveUserGender,
+    ]
   );
 
   // Thêm học sinh vào Kho Hàng Chờ O(1) (waitingPoolRef):
@@ -4127,6 +4249,19 @@ export function useClassroomEngine() {
       }
 
       // 4. Xử lý Học Sinh đang ngồi trong lớp bình luận (coins === 0)
+      // Nếu học sinh chưa có trong lớp lúc đầu nhưng vừa được cho vào lớp liền luôn do trả lời đúng khi lớp còn ghế trống:
+      if (!existingInClassNow && answeredQuizRight) {
+        const justAdmitted = pilgrimsRef.current.some(
+          (p) =>
+            p.username.trim().toLowerCase() === lowerUser &&
+            Boolean(p.slotId) &&
+            p.state !== 'leave_side_to_aisle' &&
+            p.state !== 'leave_down_exit'
+        );
+        if (justAdmitted) {
+          return true;
+        }
+      }
       const existing = existingInClassNow;
 
       if (existing) {
@@ -6216,9 +6351,12 @@ export function useClassroomEngine() {
       // Xáo trộn thứ tự NPC (trong lớp + hàng chờ) để mỗi câu hỏi thứ tự phát biểu khác nhau
       const shuffledBots = [...allParticipants].sort(() => Math.random() - 0.5);
       const count = shuffledBots.length;
-      // Trải đều thời gian trả lời trong 10s đầu (từ 0.8s đến tối đa 10.0s), tuyệt đối không trả lời đồng thanh
-      const minStartMs = 800;
-      const maxWindowEndMs = Math.min(10000, Math.max(3000, askDurMs - 1000));
+      // Chỉ cho NPC bắt đầu trả lời sau > 5s (từ 5.2s đến gần hết giờ hỏi bài) để không cướp Top tốc độ của người chơi thật
+      const minStartMs = 5200;
+      const maxWindowEndMs = Math.max(
+        minStartMs + 1500,
+        Math.min(11500, askDurMs - 600)
+      );
       const totalSpanMs = Math.max(1500, maxWindowEndMs - minStartMs);
       const stepMs = totalSpanMs / Math.max(1, count);
 
@@ -6853,52 +6991,20 @@ export function useClassroomEngine() {
         const askDurMs =
           Math.max(5, cfg.hudLayout.classBoardQuestionDurationSec || 12) * 1000;
 
-        // Cơ chế tự phục hồi & lấp chỗ trống trước mỗi câu hỏi:
-        // Nếu Sĩ Số hiện tại = 0 hoặc lớp còn ghế trống mà Hàng Chờ đang có người, đẩy thẳng học sinh từ Hàng Chờ vào lớp!
+        // Lưu ý: Mỗi đợt sắp xếp lớp (ra hay vào lớp từ Hàng Chờ) đều chỉ bắt đầu khi mới vào Luồng 5 (sau khi kết thúc Luồng 4).
+        // Ở đầu câu hỏi mới (Luồng 1 -> Luồng 2), chỉ bổ sung NPC vào Hàng Chờ nếu cả lớp và Hàng Chờ đều trống hoàn toàn.
         const activeSeatedCount = pilgrimsRef.current.filter(
           (p) =>
             p.slotId !== null &&
             p.state !== 'leave_side_to_aisle' &&
             p.state !== 'leave_down_exit'
         ).length;
-        const totalClassroomSeats =
-          vipSlotsRef.current.length + normalSlotsRef.current.length;
-        if (activeSeatedCount === 0 && waitingPoolRef.current.size === 0 && cfg.autoCrowd) {
-          enqueueBatchNpcsAfterQuestion();
-        }
         if (
-          activeSeatedCount < totalClassroomSeats &&
-          waitingPoolRef.current.size > 0
+          activeSeatedCount === 0 &&
+          waitingPoolRef.current.size === 0 &&
+          cfg.autoCrowd
         ) {
-          if (activeSeatedCount === 0) {
-            rotateClassroomSeatsAfterReveal();
-          } else {
-            recomputeWaitingQueueLazy();
-            let freeSeatsNow =
-              vipSlotsRef.current.filter((s) => !s.occupiedById).length +
-              normalSlotsRef.current.filter((s) => !s.occupiedById).length;
-            let guard = waitingPoolRef.current.size;
-            while (
-              freeSeatsNow > 0 &&
-              waitingPoolRef.current.size > 0 &&
-              guard > 0
-            ) {
-              guard -= 1;
-              const fk = waitingPoolRef.current.keys().next().value;
-              if (!fk) break;
-              const nextStudent = waitingPoolRef.current.get(fk)!;
-              waitingPoolRef.current.delete(fk);
-              if (
-                spawnOrPromotePilgrim(
-                  { ...nextStudent, coins: 0 },
-                  { forceAdmitFromQueue: true }
-                )
-              ) {
-                freeSeatsNow -= 1;
-              }
-            }
-            recomputeWaitingQueueLazy();
-          }
+          enqueueBatchNpcsAfterQuestion();
         }
 
         // Làm mới cờ trả lời của toàn bộ học sinh trong lớp trước khi bắt đầu câu hỏi
