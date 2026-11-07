@@ -6,8 +6,9 @@ import {
   Download,
   Gamepad2,
   PanelRightClose,
-   Skull,
+  Skull,
   Sliders,
+  Sparkles,
   ShieldCheck,
   MapPin,
   Radio,
@@ -46,6 +47,7 @@ import { TabMapEditor } from './TabMapEditor';
 import { TabTikTokNode } from './TabTikTokNode';
 import { TabCamera } from './TabCamera';
 import { TabEvent } from './TabEvent';
+import { TabVfx } from './TabVfx';
 
 interface DevStudioProps {
   activeTab: DevTabId;
@@ -577,6 +579,19 @@ export const DevStudio: React.FC<DevStudioProps> = ({
 
           <button
             type="button"
+            onClick={() => onSelectTab('vfx')}
+            className={`py-1.5 px-1 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'vfx'
+                ? 'bg-stone-800 text-pink-300 shadow-xs'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            <Sparkles className="w-3 h-3" />
+            <span>VFX</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => onSelectTab('tiktok')}
             className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
               activeTab === 'tiktok'
@@ -739,6 +754,14 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onStopZombieEvent={onStopZombieEvent}
             onKillZombieImmediately={onKillZombieImmediately}
             onTestZombieAttack={onTestZombieAttack}
+          />
+        )}
+
+        {activeTab === 'vfx' && (
+          <TabVfx
+            config={config}
+            onUpdateConfig={onUpdateConfig}
+            onTestFlower10Burst={() => onTriggerClassroomGift?.('Hoa Hồng', 1, undefined, null, true)}
           />
         )}
 

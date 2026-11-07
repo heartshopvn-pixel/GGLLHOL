@@ -230,7 +230,13 @@ export interface GuideTaskItem {
 
 export type ClassBoardEngineId = 'english_quiz' | 'result_board' | 'notice';
 
-export type ClassBoardLetterMode = 'hint' | 'blank' | 'full';
+export type ClassBoardLetterMode =
+  | 'default'
+  | 'hint_2'
+  | 'hint_3'
+  | 'hint'
+  | 'blank'
+  | 'full';
 
 export interface EnglishQuizItem {
   id: string;
@@ -350,6 +356,7 @@ export interface HudLayoutConfig {
   classBoardOpacity?: number;
   classBoardBlur?: number;
   classBoardEngine?: ClassBoardEngineId;
+  classBoardLessonTitle?: string;
   classBoardLetterMode?: ClassBoardLetterMode;
   classBoardQuestionDurationSec?: number;
   classBoardRevealDurationSec?: number;
@@ -599,10 +606,17 @@ export interface GameConfig {
   nameTagScale: number;
   nameTagMaxChars?: number;
   nameTagOffsetY?: number;
+  streakTagFontFamily?: string;
+  streakTagScale?: number;
+  scoreTagScale?: number;
   scoreTagOffsetY?: number;
   scoreTagDurationSec?: number;
   scoreChangeFontSize?: number;
   scoreChangeStrokeWidth?: number;
+  vfxFlower10Enabled?: boolean;
+  vfxFlower10Scale?: number;
+  vfxFlower10OffsetX?: number;
+  vfxFlower10OffsetY?: number;
   chatBubbleFontFamily: string;
   chatBubbleScale: number;
   chatBubbleDurationSec: number;
@@ -972,6 +986,7 @@ export type DevTabId =
   | 'npc'
   | 'safety'
   | 'map'
+  | 'vfx'
   | 'tiktok';
 
 export interface StudioBackupData {

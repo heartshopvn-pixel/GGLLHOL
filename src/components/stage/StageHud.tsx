@@ -343,7 +343,8 @@ export const StageHud: React.FC<StageHudProps> = ({
     classBoardOpacity = 0.42,
     classBoardBlur = 2,
     classBoardEngine = 'english_quiz',
-    classBoardLetterMode = 'hint',
+    classBoardLessonTitle = 'Tiết Tiếng Anh',
+    classBoardLetterMode = 'default',
     showClassBoardBox = true,
     grandEventFontSize = 10,
     lotusLeaderboardFontSize = 10,
@@ -503,11 +504,35 @@ export const StageHud: React.FC<StageHudProps> = ({
     ENGLISH_QUIZ_QUESTIONS[qIdx % ENGLISH_QUIZ_QUESTIONS.length] ||
     ENGLISH_QUIZ_QUESTIONS[0];
   const quizLetters = quizItem.en.toUpperCase().split('');
-  // Gợi ý thêm 1 ô ngẫu nhiên (ngoài chữ đầu tiên) ở 5s cuối nếu từ dài hơn 5 ký tự
-  const extraHintIndex = React.useMemo(() => {
+  // Chế độ Mặc định: Luôn gợi ý 1 chữ cái đầu; 5s sau thêm 1 chữ nếu 6 ký tự, thêm 2 nếu 7-9 ký tự, thêm 3 nếu >= 10 ký tự
+  const defaultHintExtraIndices = React.useMemo(() => {
     const len = quizLetters.length;
-    if (len <= 5) return -1;
-    return 1 + Math.floor(Math.random() * (len - 1));
+    const extraCount = len >= 10 ? 3 : len >= 7 ? 2 : len === 6 ? 1 : 0;
+    if (extraCount <= 0 || len <= 1) return [] as number[];
+    const pool: number[] = [];
+    for (let i = 1; i < len; i++) pool.push(i);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.slice(0, Math.min(extraCount, pool.length));
+  }, [quizItem.id, qIdx, quizLetters.length]);
+
+  // Chế độ Gợi ý 2: Gợi ý 2 chữ cái ngẫu nhiên
+  const hint2RandomIndices = React.useMemo(() => {
+    const len = quizLetters.length;
+    if (len <= 0) return [] as number[];
+    const pool: number[] = [];
+    for (let i = 0; i < len; i++) pool.push(i);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.slice(0, Math.min(2, pool.length));
   }, [quizItem.id, qIdx, quizLetters.length]);
   const isBoardRunning = Boolean(classBoardState?.isRunning);
   const boardPhase = classBoardState?.phase || 'asking';
@@ -1179,7 +1204,7 @@ export const StageHud: React.FC<StageHudProps> = ({
               {/* Khu vực giữa: Luồng 5 là 2 cột Học ké / Trong lớp (Top 1-4); Luồng 6 là Bảng Xếp Hạng Trong Lớp 10 thẻ cố định (5 hàng) */}
               {showTotalScoreBoard ? (
                 <div className="rounded-lg bg-slate-950/45 border border-amber-300/40 px-2 py-1 my-auto flex-1 min-h-0 flex flex-col justify-center">
-                  <div className="grid grid-cols-2 gap-1 my-auto">
+                  <div className="grid grid-cols-2 grid-rows-5 grid-flow-col gap-1 my-auto">
                     {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((slotIdx) =>
                       renderTotalScoreRankCard(slotIdx)
                     )}
@@ -1431,7 +1456,7 @@ export const StageHud: React.FC<StageHudProps> = ({
                 <div className="flex items-center gap-1 min-w-0">
                   <BookOpen className="w-[11px] h-[11px] text-amber-300 shrink-0" />
                   <span className="font-extrabold tracking-wide text-amber-200 uppercase truncate">
-                    Tiết Tiếng Anh • Câu #{qIdx + 1}/{totalQuizCount}
+                    {classBoardLessonTitle || 'Tiết Tiếng Anh'} • Câu #{qIdx + 1}/{totalQuizCount}
                   </span>
                   {Boolean(quizItem.luckyStars && quizItem.luckyStars >= 1) && (
                     <span
@@ -1496,20 +1521,33 @@ export const StageHud: React.FC<StageHudProps> = ({
                 <div className="flex flex-wrap items-center justify-center gap-1.5 px-1">
                   {quizLetters.map((letter, idx) => {
                     const len = quizLetters.length;
+                    const elapsedQuestionMs = Math.max(
+                      elapsedPhaseMs,
+                      totalDurMs - remMs
+                    );
                     let showChar = false;
-                    if (
-                      isAnswerFlashPhase ||
-                      isLegacyRevealed ||
+                    if (isAnswerFlashPhase || isLegacyRevealed) {
+                      showChar = true;
+                    } else if (
+                      classBoardLetterMode === 'hint_3' ||
                       classBoardLetterMode === 'full'
                     ) {
-                      showChar = true;
-                    } else if (classBoardLetterMode === 'blank') {
-                      showChar = false;
+                      // Gợi ý 3: 2 chữ cái đầu & cuối
+                      showChar = idx === 0 || idx === len - 1;
+                    } else if (
+                      classBoardLetterMode === 'hint_2' ||
+                      classBoardLetterMode === 'blank'
+                    ) {
+                      // Gợi ý 2: 2 chữ cái random
+                      showChar = hint2RandomIndices.includes(idx);
                     } else {
-                      // Chế độ 'hint': chỉ gợi ý duy nhất chữ đầu tiên; nếu ký tự dài hơn 5, gợi ý thêm 1 ô ngẫu nhiên ở 5s cuối
+                      // Mặc định ('default' / 'hint'): Luôn gợi ý 1 chữ cái đầu, 5s sau thêm 1 chữ nếu 6 ký tự, thêm 2 nếu 7-9 ký tự, thêm 3 nếu >= 10 ký tự
                       if (idx === 0) {
                         showChar = true;
-                      } else if (len > 5 && remSec <= 5 && idx === extraHintIndex) {
+                      } else if (
+                        elapsedQuestionMs >= 5000 &&
+                        defaultHintExtraIndices.includes(idx)
+                      ) {
                         showChar = true;
                       }
                     }
@@ -2216,8 +2254,8 @@ export const StageHud: React.FC<StageHudProps> = ({
         </div>
       )}
 
-      {/* 9. BẢNG "KỶ LỤC HÔM NAY" (Lưu 5 bạn điểm cao nhất ngày • Format: Avatar / Tên / Điểm màu cam / Thẻ Top 1,2,3,4,5 + Animation + Nút Reset) */}
-      {showDailyRecordBox && (
+      {/* 9. BẢNG "KỶ LỤC HÔM NAY" (Lưu 5 bạn điểm cao nhất ngày • Format: Avatar / Tên / Điểm màu cam / Thẻ Top 1,2,3,4,5 + Animation + Nút Reset — Tạm ẩn khi sự kiện Zombie xảy ra) */}
+      {showDailyRecordBox && !isZombieEventActive && (
         <div
           onMouseDown={(e) =>
             editLayoutMode && onStartDragHudBox('dailyRecordBox', e)
@@ -2349,7 +2387,7 @@ export const StageHud: React.FC<StageHudProps> = ({
                   {/* 3. Điểm màu cam + 4. Thẻ Top 1, 2, 3, 4, 5 */}
                   <div className="flex items-center gap-1 shrink-0">
                     <span className="font-mono font-black text-orange-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
-                      {rec ? `${rec.points.toLocaleString('vi-VN')}đ` : '0đ'}
+                      {rec ? rec.points.toLocaleString('vi-VN') : '0'}
                     </span>
                     <span
                       className={`px-1 py-[0.5px] rounded text-[7px] font-black border leading-tight shrink-0 ${topTagClass}`}

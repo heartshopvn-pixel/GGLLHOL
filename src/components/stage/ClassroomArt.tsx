@@ -692,7 +692,7 @@ export const ClassroomArt: React.FC<ClassroomArtProps> = ({
               {(() => {
                 const maxCats = Math.max(
                   1,
-                  Math.min(5, giftModelScales?.maxDeskCats ?? 5)
+                  Math.min(1, giftModelScales?.maxDeskCats ?? 1)
                 );
                 const rawLeftCats = leftOccupant?.hasDeskCat
                   ? Math.max(1, leftOccupant.deskCatCount || 1)

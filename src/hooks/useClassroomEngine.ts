@@ -94,6 +94,38 @@ function getActiveQuizList(cfg?: GameConfig): EnglishQuizItem[] {
   return ENGLISH_QUIZ_QUESTIONS;
 }
 
+function consumeCurrentAndGetNextQuizQueue(
+  cfg: GameConfig,
+  currentIdx: number
+): { nextQuizList: EnglishQuizItem[]; nextQuiz: EnglishQuizItem } {
+  const currentList = getActiveQuizList(cfg);
+  const safeIdx =
+    currentList.length > 0 ? Math.max(0, currentIdx % currentList.length) : 0;
+  let remaining = currentList.slice(safeIdx + 1);
+  if (remaining.length === 0) {
+    const decks =
+      Array.isArray(cfg.quizDecks) && cfg.quizDecks.length > 0
+        ? cfg.quizDecks
+        : [];
+    const activeDeck =
+      decks.find((d) => d.id === cfg.activeQuizDeckId) || decks[0];
+    const sourceList =
+      activeDeck &&
+      Array.isArray(activeDeck.questions) &&
+      activeDeck.questions.length > 0
+        ? activeDeck.questions
+        : ENGLISH_QUIZ_QUESTIONS;
+    remaining = sourceList.map((q, i) => ({
+      ...q,
+      id: `en-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+    }));
+  }
+  return {
+    nextQuizList: remaining,
+    nextQuiz: remaining[0] || ENGLISH_QUIZ_QUESTIONS[0],
+  };
+}
+
 function getQuizRankPoints(rankOneBased: number): number {
   if (rankOneBased === 1) return 10;
   if (rankOneBased === 2) return 8;
@@ -219,43 +251,70 @@ const DOOR_CLUSTER_OFFSETS: Point2D[] = [
 ];
 
 function buildDoorCrowdPool(
-  count: number,
+  maxClusterCount: number,
   centerPos: Point2D,
   prevPool: PilgrimData[],
-  names: string[],
+  _names: string[],
   avatars: string[],
-  spread: number = 1
+  spread: number = 1,
+  queuedEntries: QueuedPilgrimRequest[] = []
 ): PilgrimData[] {
-  const safeCount = Math.max(0, Math.min(20, Math.round(count)));
-  const safeSpread = Math.max(0.1, Math.min(4.0, Number.isFinite(spread) ? spread : 1));
-  const safeNames = names.length > 0 ? names : SAMPLE_NAMES;
+  const safeMax = Math.max(0, Math.min(20, Math.round(maxClusterCount)));
+  // Đồng bộ số bạn đứng trong đám đông hàng chờ với danh sách hàng chờ thực tế, giới hạn bởi số lượng tối đa trong dev nhóm học sinh đứng chùm
+  const effectiveCount = Math.min(safeMax, queuedEntries.length);
+  if (effectiveCount <= 0) return [];
+
+  const safeSpread = Math.max(
+    0.1,
+    Math.min(4.0, Number.isFinite(spread) ? spread : 1)
+  );
   const safeAvatars = avatars.length > 0 ? avatars : DEFAULT_NPC_AVATARS;
   const nextPool: PilgrimData[] = [];
+  const usedIds = new Set<number>();
 
-  for (let i = 0; i < safeCount; i++) {
+  for (let i = 0; i < effectiveCount; i++) {
+    const qItem = queuedEntries[i];
+    const qName = (qItem?.username || `Học Sinh #${i + 1}`).trim();
+    const qLower = qName.toLowerCase();
     const off = DOOR_CLUSTER_OFFSETS[i % DOOR_CLUSTER_OFFSETS.length];
     const px = Math.round(centerPos.x + off.x * safeSpread);
     const py = Math.round(centerPos.y + off.y * safeSpread);
-    const existing = prevPool[i];
-    if (existing) {
+
+    const existingByName = prevPool.find(
+      (p) => p.username.trim().toLowerCase() === qLower && !usedIds.has(p.id)
+    );
+
+    if (existingByName) {
+      usedIds.add(existingByName.id);
       nextPool.push({
-        ...existing,
+        ...existingByName,
+        username: qName,
+        gender:
+          qItem?.gender ||
+          existingByName.gender ||
+          detectVietnameseGender(qName),
+        isBot: Boolean(qItem?.isBot),
+        avatarUrl: qItem?.avatarUrl ?? existingByName.avatarUrl,
         x: px,
         y: py,
+        laneX: px,
         slotX: px,
         slotY: py,
       });
     } else {
-      const negId = -(i + 1);
-      const defaultName = safeNames[i % safeNames.length] || `Học Sinh #${i + 1}`;
+      let negId = -(i + 1);
+      while (usedIds.has(negId)) {
+        negId -= 1;
+      }
+      usedIds.add(negId);
       nextPool.push({
         id: negId,
-        username: defaultName,
-        prayer: '',
-        gender: detectVietnameseGender(defaultName),
+        username: qName,
+        prayer: qItem?.prayer || '',
+        gender: qItem?.gender || detectVietnameseGender(qName),
         isVip: false,
-        isBot: true,
-        coins: 0,
+        isBot: Boolean(qItem?.isBot),
+        coins: qItem?.coins || 0,
         offeringType: 'incense',
         slotId: null,
         x: px,
@@ -271,7 +330,8 @@ function buildDoorCrowdPool(
         animTime: i * 0.7,
         facingLeft: false,
         avatarColor: AVATAR_COLORS[i % AVATAR_COLORS.length],
-        avatarUrl: safeAvatars[i % safeAvatars.length] || null,
+        avatarUrl:
+          qItem?.avatarUrl || safeAvatars[i % safeAvatars.length] || null,
         hairSeed: i + 1,
         hasComment: false,
         chatBubbleUntil: 0,
@@ -354,6 +414,7 @@ export function useClassroomEngine() {
             giftModelScales: {
               ...DEFAULT_GIFT_MODEL_SCALES,
               ...(parsed.config.giftModelScales || {}),
+              maxDeskCats: 1,
             },
             grid: { ...DEFAULT_CONFIG.grid, ...(parsed.config.grid || {}) },
             hudLayout: {
@@ -459,16 +520,7 @@ export function useClassroomEngine() {
   });
 
   const [pilgrims, setPilgrims] = useState<PilgrimData[]>([]);
-  const [doorCrowd, setDoorCrowd] = useState<PilgrimData[]>(() =>
-    buildDoorCrowdPool(
-      config.doorCrowdCount ?? 7,
-      config.doorCrowdPos || { x: 46, y: 506 },
-      [],
-      npcNames,
-      npcAvatars,
-      config.doorCrowdSpread ?? 1
-    )
-  );
+  const [doorCrowd, setDoorCrowd] = useState<PilgrimData[]>([]);
   const [controlledNpcRole, setControlledNpcRole] =
     useState<ControlledNpcRole>(null);
   const [monks, setMonks] = useState<TempleMonkData[]>(INITIAL_MONKS);
@@ -724,6 +776,8 @@ export function useClassroomEngine() {
     avatarColor?: string;
     previousTop1Username?: string;
   } | null>(null);
+  const flow5CameraLockTimerRef = useRef<number | null>(null);
+  const flow5LockedStudentIdRef = useRef<number | null>(null);
   const npcNamesRef = useRef(npcNames);
   npcNamesRef.current = npcNames;
   const npcPrayersRef = useRef(npcPrayers);
@@ -987,11 +1041,15 @@ export function useClassroomEngine() {
     [applyDoorCrowdChatItems]
   );
 
-  // Đồng bộ nhóm học sinh đứng chùm ở cửa lớp khi chỉnh vị trí, số lượng hoặc độ giãn cách trong Dev Map
+  // Đồng bộ nhóm học sinh đứng chùm ở cửa lớp với danh sách hàng chờ thực tế (tuân theo giới hạn tối đa doorCrowdCount)
   useEffect(() => {
     const count = config.doorCrowdCount ?? 7;
     const pos = config.doorCrowdPos || { x: 46, y: 506 };
     const spread = config.doorCrowdSpread ?? 1;
+    const queuedList =
+      waitingQueue.length >= Math.min(20, count)
+        ? waitingQueue
+        : Array.from(waitingPoolRef.current.values());
     setDoorCrowd((prev) => {
       const next = buildDoorCrowdPool(
         count,
@@ -999,7 +1057,8 @@ export function useClassroomEngine() {
         prev,
         npcNamesRef.current,
         npcAvatarsRef.current,
-        spread
+        spread,
+        queuedList
       );
       doorCrowdRef.current = next;
       return next;
@@ -1009,6 +1068,8 @@ export function useClassroomEngine() {
     config.doorCrowdPos?.x,
     config.doorCrowdPos?.y,
     config.doorCrowdSpread,
+    waitingQueue,
+    queueCount,
   ]);
 
   // Lắng nghe phím WASD khi đang bật chế độ điều khiển Cô Chủ Nhiệm hoặc Thầy Giám Thị (NPC học sinh không di chuyển WASD)
@@ -1158,8 +1219,8 @@ export function useClassroomEngine() {
       });
       waitingPoolRef.current = rebuiltMap;
 
-      // Chỉ bóc tách Top 15 người có Rank cao nhất để load vào bảng Hàng Chờ UI
-      const topSlice = allEntries.slice(0, 15).map((item) => ({ ...item }));
+      // Bóc tách Top 20 người có Rank cao nhất để load vào bảng Hàng Chờ UI và nhóm đứng chùm cửa lớp
+      const topSlice = allEntries.slice(0, 20).map((item) => ({ ...item }));
       waitingQueueRef.current = topSlice;
       setWaitingQueue(topSlice);
       setQueueCount(rebuiltMap.size);
@@ -1265,6 +1326,7 @@ export function useClassroomEngine() {
             ...DEFAULT_GIFT_MODEL_SCALES,
             ...(prev.giftModelScales || {}),
             ...(savedFull.config?.giftModelScales || {}),
+            maxDeskCats: 1,
           },
           grid: {
             ...prev.grid,
@@ -1559,6 +1621,14 @@ export function useClassroomEngine() {
         setCameraFocus((prev) => {
           const nowCheck = Date.now();
           if (prev.lockedUntil && nowCheck < prev.lockedUntil) return prev;
+          if (
+            classBoardStateRef.current.phase === 'result_summary' &&
+            flow5LockedStudentIdRef.current !== null &&
+            prev.pilgrimId === flow5LockedStudentIdRef.current &&
+            nowCheck < prev.until
+          ) {
+            return prev;
+          }
           if (prev.reason === 'manual' && nowCheck < prev.until) return prev;
           if (prev.focusRole && nowCheck < prev.until) return prev;
           return { pilgrimId: null, focusRole: null, until: 0 };
@@ -2266,11 +2336,9 @@ export function useClassroomEngine() {
       }
 
       // Nếu người chơi chưa ở trong lớp và cũng chưa ở trong Hàng Chờ nhưng trả lời ĐÚNG câu hỏi trong thời gian hỏi:
-      // Tự động thêm ngay vào Hàng Chờ kèm cộng điểm của câu trả lời đúng đó!
+      // Tự động thêm ngay vào Hàng Chờ (điểm của câu trả lời đúng sẽ được cộng đồng loạt vào lúc đọc câu trả lời ở Luồng 4!)
       if (!isSeated) {
         if (existingInWaitingQueue) {
-          existingInWaitingQueue.points =
-            (existingInWaitingQueue.points || 0) + rewardPoints;
           existingInWaitingQueue.answeredCorrectInRound = true;
           existingInWaitingQueue.lastElapsedSec = elapsedSec;
           existingInWaitingQueue.idleRounds = 0;
@@ -2290,7 +2358,7 @@ export function useClassroomEngine() {
             isBot: Boolean(isBot),
             avatarUrl: avatarUrl || null,
             addedAt: Date.now(),
-            points: rewardPoints,
+            points: 0,
             rank: nextRank,
             answeredCorrectInRound: true,
             lastElapsedSec: elapsedSec,
@@ -2299,17 +2367,31 @@ export function useClassroomEngine() {
           pool.set(lowerUser, newEntry);
           existingInWaitingQueue = newEntry;
           setQueueCount(pool.size);
-          if (waitingQueueRef.current.length < 15) {
+          if (waitingQueueRef.current.length < 20) {
             const nextTop = [...waitingQueueRef.current, { ...newEntry }];
             waitingQueueRef.current = nextTop;
             setWaitingQueue(nextTop);
           }
+          // Đồng bộ ngay đám đông cửa lớp (doorCrowdRef) để hiển thị nhân vật vừa vào hàng chờ
+          const maxCluster = configRef.current.doorCrowdCount ?? 7;
+          if (doorCrowdRef.current.length < maxCluster) {
+            const nextCrowd = buildDoorCrowdPool(
+              maxCluster,
+              configRef.current.doorCrowdPos || { x: 46, y: 506 },
+              doorCrowdRef.current,
+              npcNamesRef.current,
+              npcAvatarsRef.current,
+              configRef.current.doorCrowdSpread ?? 1,
+              Array.from(pool.values())
+            );
+            doorCrowdRef.current = nextCrowd;
+            setDoorCrowd(nextCrowd);
+          }
         }
       }
 
-      // Học sinh trong lớp trả lời đúng: không hiện bảng điểm và text cộng điểm ngay, đợi vào Luồng 5 (Bảng kết quả) mới hiển thị đồng loạt
-      addLotusPointsToDonor(username, rewardPoints, Boolean(existingInClass));
       // +1 điểm vào bảng "Kích hoạt sự kiện" tương ứng mỗi câu trả lời đúng từ học sinh trong lớp học và học sinh học ké + hoa bay tượng trưng
+      // (Điểm số của học sinh trả lời đúng sẽ được cộng vào lúc đọc câu trả lời ở Luồng 4!)
       const flowerOrigin: Point2D = existingInClass
         ? { x: existingInClass.x, y: existingInClass.y - 16 }
         : configRef.current.doorCrowdPos || LEFT_DOOR_POS;
@@ -2440,11 +2522,27 @@ export function useClassroomEngine() {
       pool.set(lower, newEntry);
       setQueueCount(pool.size);
 
-      // Nếu bảng UI Top 15 chưa đầy 15 người thì bổ sung nhẹ vào cuối danh sách hiển thị (không chạy sort mảng lớn)
-      if (waitingQueueRef.current.length < 15) {
+      // Nếu bảng UI chưa đầy 20 người thì bổ sung nhẹ vào cuối danh sách hiển thị (không chạy sort mảng lớn)
+      if (waitingQueueRef.current.length < 20) {
         const nextTop = [...waitingQueueRef.current, { ...newEntry }];
         waitingQueueRef.current = nextTop;
         setWaitingQueue(nextTop);
+      }
+
+      // Đồng bộ ngay đám đông cửa lớp (doorCrowdRef) để hiển thị nhân vật vừa vào hàng chờ kèm bong bóng chat
+      const maxCluster = configRef.current.doorCrowdCount ?? 7;
+      if (doorCrowdRef.current.length < maxCluster) {
+        const nextCrowd = buildDoorCrowdPool(
+          maxCluster,
+          configRef.current.doorCrowdPos || { x: 46, y: 506 },
+          doorCrowdRef.current,
+          npcNamesRef.current,
+          npcAvatarsRef.current,
+          configRef.current.doorCrowdSpread ?? 1,
+          Array.from(pool.values())
+        );
+        doorCrowdRef.current = nextCrowd;
+        setDoorCrowd(nextCrowd);
       }
 
       if (!req.isBot) {
@@ -2565,37 +2663,16 @@ export function useClassroomEngine() {
       if (giftId === 'cat') {
         const maxCats = Math.max(
           1,
-          Math.min(5, cfg.giftModelScales?.maxDeskCats ?? 5)
+          Math.min(1, cfg.giftModelScales?.maxDeskCats ?? 1)
         );
         const targetStudent = pilgrimsRef.current.find(
           (p) => p.id === targetPilgrimId
         );
-        const allDesks = [
-          ...groupSlotsIntoDoubleDesks(vipSlotsRef.current, 'vip'),
-          ...groupSlotsIntoDoubleDesks(normalSlotsRef.current, 'norm'),
-        ];
-        const studentDesk = targetStudent?.slotId
-          ? allDesks.find(
-              (d) =>
-                d.leftSlot.id === targetStudent.slotId ||
-                d.rightSlot?.id === targetStudent.slotId
-            )
-          : undefined;
-        const deskSlotIds = new Set<string>(
-          studentDesk
-            ? [
-                studentDesk.leftSlot.id,
-                ...(studentDesk.rightSlot ? [studentDesk.rightSlot.id] : []),
-              ]
-            : targetStudent?.slotId
-            ? [targetStudent.slotId]
-            : []
-        );
-        const currentCatsOnDesk = pilgrimsRef.current
-          .filter((p) => p.slotId && deskSlotIds.has(p.slotId) && p.hasDeskCat)
-          .reduce((sum, p) => sum + Math.max(1, p.deskCatCount || 1), 0);
+        const currentStudentCats = targetStudent?.hasDeskCat
+          ? Math.max(1, targetStudent.deskCatCount || 1)
+          : 0;
 
-        const isOverflowCat = currentCatsOnDesk >= maxCats;
+        const isOverflowCat = currentStudentCats >= maxCats;
 
         const nextPilgrims = pilgrimsRef.current.map((p) =>
           p.id === targetPilgrimId
@@ -2603,8 +2680,11 @@ export function useClassroomEngine() {
                 ...p,
                 hasDeskCat: true,
                 deskCatCount: isOverflowCat
-                  ? Math.max(1, p.deskCatCount || 1)
-                  : (p.hasDeskCat ? Math.max(1, p.deskCatCount || 1) : 0) + 1,
+                  ? Math.min(maxCats, Math.max(1, p.deskCatCount || 1))
+                  : Math.min(
+                      maxCats,
+                      (p.hasDeskCat ? Math.max(1, p.deskCatCount || 1) : 0) + 1
+                    ),
                 deskCatDropAt: now,
                 giftActionBusyUntil: now + actionBusyMs,
                 giftActionHighlightUntil: now + 5500,
@@ -3199,7 +3279,8 @@ export function useClassroomEngine() {
         const topList = getSortedZombieTopDamagers();
 
         if (nextHp <= 0) {
-          // ZOMBIE HẾT MÁU -> Chuyển sang pha gục ngã nằm ngang & tan biến (z_flow_5b_dying) + Khóa camera vào Zombie!
+          // ZOMBIE HẾT MÁU -> Dừng ngay nhạc nền sự kiện Zombie và chuyển sang pha gục ngã nằm ngang & tan biến (z_flow_5b_dying) + Khóa camera vào Zombie!
+          soundEngine.setZombieEventActive(false, cfgNow);
           const dyingDurMs = Math.max(
             1000,
             Math.round((cfgNow.zombieFlow5bDyingDurationSec ?? 3.2) * 1000)
@@ -4201,21 +4282,30 @@ export function useClassroomEngine() {
           const idx = prev.findIndex(
             (d) => d.username.trim().toLowerCase() === lowerUser
           );
+          let nextList: DonorEntry[];
           if (idx >= 0) {
             if (prev[idx].coins >= queuedPts) return prev;
             const updated = [...prev];
             updated[idx] = { ...updated[idx], coins: queuedPts };
-            return updated.sort((a, b) => b.coins - a.coins);
+            nextList = updated.sort((a, b) => b.coins - a.coins);
+          } else {
+            nextList = [...prev, { username: safeName, coins: queuedPts }].sort(
+              (a, b) => b.coins - a.coins
+            );
           }
-          return [...prev, { username: safeName, coins: queuedPts }].sort(
-            (a, b) => b.coins - a.coins
-          );
+          lotusDonorsRef.current = nextList;
+          return nextList;
         });
       }
+      const existingDonorScore =
+        lotusDonorsRef.current.find(
+          (d) => d.username.trim().toLowerCase() === lowerUser
+        )?.coins || 0;
 
       const newStudent: PilgrimData = {
         id,
         username: safeName,
+        currentScoreDisplay: Math.max(queuedPts, existingDonorScore),
         prayer: safeComment,
         gender: opts.isBot
           ? resolveBalancedNpcGender(safeName, 'class', genderCmd || opts.gender)
@@ -5907,11 +5997,11 @@ export function useClassroomEngine() {
 
     // Xóa luôn data và bảng xếp hạng (lotusDonors) của học sinh trả lời sai bị loại khỏi lớp
     if (evictedUsernamesSet.size > 0) {
-      setLotusDonors((prev) =>
-        prev.filter(
-          (d) => !evictedUsernamesSet.has(d.username.trim().toLowerCase())
-        )
+      const filteredDonors = lotusDonorsRef.current.filter(
+        (d) => !evictedUsernamesSet.has(d.username.trim().toLowerCase())
       );
+      lotusDonorsRef.current = filteredDonors;
+      setLotusDonors(filteredDonors);
       punishmentWaitingQueueRef.current =
         punishmentWaitingQueueRef.current.filter(
           (item) => !evictedUsernamesSet.has(item.username.trim().toLowerCase())
@@ -6849,14 +6939,40 @@ export function useClassroomEngine() {
       }
 
       // ============================================================================
-      // CHUYỂN TỪ LUỒNG 2 & 3 (asking) -> LUỒNG 4 (answer_flash - Đọc câu trả lời)
+      // CHUYỂN TỪ LUỒNG 2 & 3 (asking) -> LUỒNG 4 (answer_flash - Đọc câu trả lời & CỘNG ĐIỂM CHO HỌC SINH)
       // ============================================================================
       if (prev.phase === 'asking') {
         clearQuizNpcTimers();
 
-        // Lazy Calculation 1 lần cho Hàng Chờ & chấm kết quả cho Học Sinh Trong Lớp
+        const cWinners = prev.classWinners || [];
+        const oWinners = prev.outsideWinners || [];
+
+        // 1. Cộng điểm câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
+        oWinners.forEach((ow, idx) => {
+          if (!ow.username) return;
+          const pts = ow.points || getQuizRankPoints(idx + 1);
+          const lower = ow.username.trim().toLowerCase();
+          const qEntry = waitingPoolRef.current.get(lower);
+          if (qEntry) {
+            qEntry.points = (qEntry.points || 0) + pts;
+            qEntry.answeredCorrectInRound = true;
+            qEntry.idleRounds = 0;
+          }
+          addLotusPointsToDonor(ow.username, pts, true);
+        });
+
+        // 2. Lazy Calculation 1 lần cho Hàng Chờ (ai không trả lời đúng sẽ reset points = 0)
         const resetUsers = recomputeWaitingQueueLazy({
           finalizeQuizRound: true,
+        });
+
+        // 3. Cộng điểm câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
+        const classWinnerMap = new Map<string, number>();
+        cWinners.forEach((w, idx) => {
+          if (!w.username) return;
+          const pts = w.points || getQuizRankPoints(idx + 1);
+          classWinnerMap.set(w.username.trim().toLowerCase(), pts);
+          addLotusPointsToDonor(w.username, pts, true);
         });
 
         soundEngine.playAnswerRevealSfx(
@@ -6865,12 +6981,10 @@ export function useClassroomEngine() {
           cfg.answerRevealMp3Url
         );
 
-        const cWinners = prev.classWinners || [];
-        const classWinnerMap = new Map<string, number>();
-        cWinners.forEach((w) => {
-          classWinnerMap.set(w.username.trim().toLowerCase(), w.points || 5);
-        });
-        const badgeUntil = Date.now() + 4800;
+        const nowFlow4 = Date.now();
+        const badgeUntil = nowFlow4 + 4800;
+        const scoreCardDurMs =
+          Math.max(0.5, cfg.scoreTagDurationSec ?? 4) * 1000;
 
         const markedPilgrims = pilgrimsRef.current.map((p) => {
           const isSeatedInClass =
@@ -6885,11 +6999,14 @@ export function useClassroomEngine() {
             Boolean(p.answeredCurrentQuestion) || earnedPts !== undefined;
 
           if (isRight) {
+            const finalEarned = earnedPts || 5;
             const donorItem = lotusDonorsRef.current.find(
               (d) => d.username.trim().toLowerCase() === lowerName
             );
-            const totalScoreNow = donorItem ? donorItem.coins : earnedPts || 5;
-            // Không hiển thị thẻ điểm / text cộng điểm ở Luồng 4, đợi sang Luồng 5 (Bảng kết quả) mới hiển thị đồng loạt
+            const totalScoreNow = donorItem
+              ? donorItem.coins
+              : (p.currentScoreDisplay || 0) + finalEarned;
+            // Cộng điểm + Hiển thị ngay Thẻ Show Số Điểm, chữ +điểm và VFX Hoa Điểm 10 bung nổ ngay lúc đọc câu trả lời (Luồng 4)!
             return {
               ...p,
               correctStreak: (p.correctStreak || 0) + 1,
@@ -6897,8 +7014,11 @@ export function useClassroomEngine() {
               answeredCurrentQuestion: true,
               quizResultStatus: 'correct' as const,
               quizResultUntil: badgeUntil,
-              quizEarnedPoints: earnedPts || 5,
+              quizEarnedPoints: finalEarned,
               currentScoreDisplay: totalScoreNow,
+              scoreChangeDelta: finalEarned,
+              scoreCardUntil: nowFlow4 + scoreCardDurMs,
+              scoreCardKey: nowFlow4 + p.id,
             };
           }
 
@@ -6944,11 +7064,11 @@ export function useClassroomEngine() {
         setPilgrims(markedPilgrims);
 
         if (resetUsers.size > 0) {
-          setLotusDonors((prevDonors) =>
-            prevDonors.filter(
-              (d) => !resetUsers.has(d.username.trim().toLowerCase())
-            )
+          const nextDonors = lotusDonorsRef.current.filter(
+            (d) => !resetUsers.has(d.username.trim().toLowerCase())
           );
+          lotusDonorsRef.current = nextDonors;
+          setLotusDonors(nextDonors);
         }
 
         const flowToken4 = `flow_ans_${Date.now()}_${prev.questionIndex}`;
@@ -7006,6 +7126,7 @@ export function useClassroomEngine() {
 
       // ============================================================================
       // CHUYỂN TỪ LUỒNG 4 (answer_flash) -> LUỒNG 5 (result_summary: Đọc kết quả & Cập nhật chỗ ngồi ngay khi bắt đầu Luồng 5)
+      // (Điểm số của các học sinh đã được cộng và hiển thị ở Luồng 4)
       // ============================================================================
       if (prev.phase === 'answer_flash') {
         // CẬP NHẬT CHỖ NGỒI NGAY KHI BẮT ĐẦU LUỒNG SỐ 5:
@@ -7015,52 +7136,6 @@ export function useClassroomEngine() {
 
         const cWinners = prev.classWinners || [];
         const oWinners = prev.outsideWinners || [];
-
-        // HIỂN THỊ ĐỒNG LOẠT THẺ ĐIỂM + TEXT CỘNG ĐIỂM CHO CÁC HỌC SINH TRONG LỚP TRẢ LỜI ĐÚNG NGAY KHI VÀO LUỒNG 5 (BẢNG KẾT QUẢ)
-        if (cWinners.length > 0) {
-          const nowFlow5 = Date.now();
-          const scoreCardDurMs =
-            Math.max(0.5, cfg.scoreTagDurationSec ?? 4) * 1000;
-          const winnerPointsByLower = new Map<string, number>();
-          cWinners.forEach((w, idx) => {
-            if (w.username) {
-              winnerPointsByLower.set(
-                w.username.trim().toLowerCase(),
-                w.points || getQuizRankPoints(idx + 1)
-              );
-            }
-          });
-          const donorPtsMap5 = new Map<string, number>();
-          lotusDonorsRef.current.forEach((d) => {
-            if (d.username) {
-              donorPtsMap5.set(d.username.trim().toLowerCase(), d.coins || 0);
-            }
-          });
-
-          const popPilgrims = pilgrimsRef.current.map((p) => {
-            const lower = p.username.trim().toLowerCase();
-            const earned =
-              winnerPointsByLower.get(lower) ?? (p.quizEarnedPoints || 0);
-            if (
-              earned > 0 &&
-              p.state !== 'leave_side_to_aisle' &&
-              p.state !== 'leave_down_exit'
-            ) {
-              const totalNow =
-                donorPtsMap5.get(lower) ?? p.currentScoreDisplay ?? earned;
-              return {
-                ...p,
-                currentScoreDisplay: totalNow,
-                scoreChangeDelta: earned,
-                scoreCardUntil: nowFlow5 + scoreCardDurMs,
-                scoreCardKey: nowFlow5 + p.id,
-              };
-            }
-            return p;
-          });
-          pilgrimsRef.current = popPilgrims;
-          setPilgrims(popPilgrims);
-        }
 
         const classRightCount = cWinners.length;
         const outsideRightCount = oWinners.length;
@@ -7179,6 +7254,83 @@ export function useClassroomEngine() {
             : false;
 
         const fallbackDur5 = enqueued5 ? 15000 : 3800;
+
+        // Trong Luồng 5 (Đọc kết quả): Khi đọc đến tên của bạn Top 1 thì lock camera vào bạn Top 1,
+        // hết Luồng 5 thì bỏ lock. Camera này không gắn lockedUntil nên có thể bị cướp bởi các camera khác xuất hiện cùng lúc.
+        if (flow5CameraLockTimerRef.current !== null) {
+          window.clearTimeout(flow5CameraLockTimerRef.current);
+          flow5CameraLockTimerRef.current = null;
+        }
+        flow5LockedStudentIdRef.current = null;
+
+        if (fastestLower) {
+          const flow5EnteredAtMs = Date.now();
+          const nameCharIdx = summarySpeech.toLowerCase().indexOf(fastestLower);
+          const prefixChars =
+            nameCharIdx >= 0
+              ? nameCharIdx
+              : Math.floor(summarySpeech.length * 0.55);
+          const delayToTop1NameMs = enqueued5
+            ? Math.max(
+                0,
+                Math.min(
+                  4500,
+                  Math.round(
+                    (prefixChars / (16 * (cfg.ttsRate || 1.05))) * 1000
+                  )
+                )
+              )
+            : 250;
+
+          flow5CameraLockTimerRef.current = window.setTimeout(() => {
+            flow5CameraLockTimerRef.current = null;
+            if (
+              classBoardStateRef.current.phase !== 'result_summary' ||
+              zombieEventStateRef.current.isActive
+            ) {
+              return;
+            }
+            const top1Target =
+              pilgrimsRef.current.find(
+                (p) =>
+                  p.state !== 'leave_side_to_aisle' &&
+                  p.state !== 'leave_down_exit' &&
+                  p.username.trim().toLowerCase() === fastestLower
+              ) ||
+              doorCrowdRef.current.find(
+                (p) => p.username.trim().toLowerCase() === fastestLower
+              );
+            if (!top1Target) return;
+
+            const nowCam = Date.now();
+            flow5LockedStudentIdRef.current = top1Target.id;
+            setCameraFocus((prevCam) => {
+              // Cho phép các camera khác xuất hiện cùng lúc cướp quyền điều khiển camera
+              if (prevCam.lockedUntil && nowCam < prevCam.lockedUntil) {
+                return prevCam;
+              }
+              if (
+                prevCam.pilgrimId &&
+                prevCam.startedAt &&
+                prevCam.startedAt >= flow5EnteredAtMs &&
+                nowCam < prevCam.until
+              ) {
+                return prevCam;
+              }
+              return {
+                pilgrimId: top1Target.id,
+                focusRole: null,
+                username: top1Target.username,
+                reason: 'comment',
+                isBot: top1Target.isBot,
+                startedAt: nowCam,
+                until: nowCam + fallbackDur5,
+                lockedUntil: undefined,
+              };
+            });
+          }, delayToTop1NameMs);
+        }
+
         const resultSummaryState: ClassBoardRuntimeState = {
           ...prev,
           phase: 'result_summary',
@@ -7205,6 +7357,20 @@ export function useClassroomEngine() {
       // CHUYỂN TỪ LUỒNG 5 (result_summary) -> LUỒNG 6 (ranking_board: Đọc xếp hạng & Hiện BXH Trong Lớp)
       // ============================================================================
       if (prev.phase === 'result_summary') {
+        // Khi hết Luồng 5 -> bỏ lock camera Top 1 của Luồng 5 (nếu chưa bị camera khác cướp)
+        if (flow5CameraLockTimerRef.current !== null) {
+          window.clearTimeout(flow5CameraLockTimerRef.current);
+          flow5CameraLockTimerRef.current = null;
+        }
+        if (flow5LockedStudentIdRef.current !== null) {
+          const lockedTop1Id = flow5LockedStudentIdRef.current;
+          flow5LockedStudentIdRef.current = null;
+          setCameraFocus((prevCam) =>
+            prevCam.pilgrimId === lockedTop1Id && !prevCam.lockedUntil
+              ? { pilgrimId: null, focusRole: null, until: 0 }
+              : prevCam
+          );
+        }
         // Tính Top 1 Bảng Xếp Hạng Trong Lớp hiện tại
         const donorPtsMap = new Map<string, number>();
         lotusDonorsRef.current.forEach((d) => {
@@ -7637,8 +7803,20 @@ export function useClassroomEngine() {
         }
       }
 
-      const nextIdx = (prev.questionIndex + 1) % quizList.length;
-      const nextQuiz = quizList[nextIdx] || quizList[0];
+      // Qua câu hỏi mới: Xóa câu hỏi cũ vừa hỏi xong khỏi Danh sách hàng chờ câu hỏi
+      const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
+        cfg,
+        prev.questionIndex
+      );
+      const nextIdx = 0;
+      configRef.current = {
+        ...configRef.current,
+        customQuizQuestions: nextQuizList,
+      };
+      setConfig((prevCfg) => ({
+        ...prevCfg,
+        customQuizQuestions: nextQuizList,
+      }));
       const prepDurMs = Math.max(1, cfg.lessonPrepareDurationSec || 3) * 1000;
 
       const resetPilgrims = pilgrimsRef.current.map((p) => ({
@@ -7664,7 +7842,7 @@ export function useClassroomEngine() {
           ...prev,
           isRunning: false,
           questionIndex: nextIdx,
-          totalQuestions: quizList.length,
+          totalQuestions: nextQuizList.length,
           currentQuestion: nextQuiz,
           phase: 'preparing',
           lessonStepNumber: 1,
@@ -7704,7 +7882,7 @@ export function useClassroomEngine() {
       const nextPrepState: ClassBoardRuntimeState = {
         ...prev,
         questionIndex: nextIdx,
-        totalQuestions: quizList.length,
+        totalQuestions: nextQuizList.length,
         currentQuestion: nextQuiz,
         phase: 'preparing',
         lessonStepNumber: 1,
@@ -8459,11 +8637,18 @@ export function useClassroomEngine() {
     fireZombieAttackProjectile,
   ]);
 
-  // Đồng bộ Nhạc nền chiến đấu Sự Kiện Zombie (tự động chuyển sang nhạc chiến đấu khi Zombie xuất hiện và trả lại nhạc nền bình thường khi kết thúc)
+  // Đồng bộ Nhạc nền chiến đấu Sự Kiện Zombie (tự động chuyển sang nhạc chiến đấu khi Zombie xuất hiện và kết thúc ngay khi Zombie bị giết!)
   useEffect(() => {
-    soundEngine.setZombieEventActive(zombieEventState.isActive, configRef.current);
+    const isZombieBgmPlaying =
+      zombieEventState.isActive &&
+      zombieEventState.phase !== 'z_flow_5b_dying' &&
+      zombieEventState.phase !== 'z_flow_6_celebration' &&
+      zombieEventState.hp > 0;
+    soundEngine.setZombieEventActive(isZombieBgmPlaying, configRef.current);
   }, [
     zombieEventState.isActive,
+    zombieEventState.phase,
+    zombieEventState.hp,
     config.zombieBgmEnabled,
     config.zombieBgmMp3Url,
     config.zombieBgmVolume,
@@ -9323,17 +9508,40 @@ export function useClassroomEngine() {
     }
   }, [clearQuizNpcTimers, getActiveQuizList]);
 
-  // Chuyển nhanh sang câu hỏi tiếp theo trên Bảng Lớp (vào Luồng 1: Chuẩn Bị 3s + âm thanh "Chuẩn bị")
+  // Chuyển nhanh sang câu hỏi tiếp theo trên Bảng Lớp (xóa câu hỏi cũ khỏi hàng chờ câu hỏi + vào Luồng 1: Chuẩn Bị 3s)
   const handleNextClassBoardQuestion = useCallback(() => {
     const cfg = configRef.current;
     const prev = classBoardStateRef.current;
-    const quizList = getActiveQuizList(cfg);
-    const nextIdx = (prev.questionIndex + 1) % quizList.length;
+    const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
+      cfg,
+      prev.questionIndex
+    );
+    const nextIdx = 0;
+    configRef.current = {
+      ...configRef.current,
+      customQuizQuestions: nextQuizList,
+    };
+    setConfig((prevCfg) => ({
+      ...prevCfg,
+      customQuizQuestions: nextQuizList,
+    }));
     const askDurMs =
       Math.max(5, cfg.hudLayout.classBoardQuestionDurationSec || 12) * 1000;
-    const nextQuiz = quizList[nextIdx] || quizList[0];
 
     clearQuizNpcTimers();
+    if (flow5CameraLockTimerRef.current !== null) {
+      window.clearTimeout(flow5CameraLockTimerRef.current);
+      flow5CameraLockTimerRef.current = null;
+    }
+    if (flow5LockedStudentIdRef.current !== null) {
+      const lockedTop1Id = flow5LockedStudentIdRef.current;
+      flow5LockedStudentIdRef.current = null;
+      setCameraFocus((prevCam) =>
+        prevCam.pilgrimId === lockedTop1Id && !prevCam.lockedUntil
+          ? { pilgrimId: null, focusRole: null, until: 0 }
+          : prevCam
+      );
+    }
     setPilgrims((pList) => {
       const nextList = pList.map((p) => ({
         ...p,
@@ -9352,7 +9560,7 @@ export function useClassroomEngine() {
     const nextState: ClassBoardRuntimeState = {
       ...prev,
       questionIndex: nextIdx,
-      totalQuestions: quizList.length,
+      totalQuestions: nextQuizList.length,
       currentQuestion: nextQuiz,
       phase: isRunning ? 'preparing' : 'asking',
       lessonStepNumber: isRunning ? 1 : 2,
@@ -11005,6 +11213,7 @@ export function useClassroomEngine() {
     });
 
     const topList = getSortedZombieTopDamagers();
+    soundEngine.setZombieEventActive(false, configRef.current);
     const dyingState: ZombieEventRuntimeState = {
       ...curEv,
       phase: 'z_flow_5b_dying',

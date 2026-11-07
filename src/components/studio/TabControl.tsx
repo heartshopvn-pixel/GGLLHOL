@@ -514,7 +514,13 @@ export const TabControl: React.FC<TabControlProps> = ({
     activeQuizList[qIdx % activeQuizList.length] ||
     activeQuizList[0];
   const remSec = Math.ceil((classBoardState?.timeLeftMs ?? 12000) / 1000);
-  const letterMode: ClassBoardLetterMode = hud.classBoardLetterMode || 'hint';
+  const rawLetterMode = hud.classBoardLetterMode || 'default';
+  const letterMode: 'default' | 'hint_2' | 'hint_3' =
+    rawLetterMode === 'hint_2' || rawLetterMode === 'blank'
+      ? 'hint_2'
+      : rawLetterMode === 'hint_3' || rawLetterMode === 'full'
+      ? 'hint_3'
+      : 'default';
 
   const waitingTtsCount = eventTtsQueue?.waitingCount ?? 0;
   const isPlayingEventTts = eventTtsQueue?.isPlayingEvent ?? false;
@@ -746,7 +752,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               }
               className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs font-bold text-amber-200 focus:outline-none focus:border-emerald-400"
             >
-              <option value="english_quiz">🇬🇧 Tiết Tiếng Anh</option>
+              <option value="english_quiz">
+                🇬🇧 {hud.classBoardLessonTitle || 'Tiết Tiếng Anh'}
+              </option>
               <option value="result_board">🏆 Bảng Kết Quả</option>
               <option value="notice">📋 Bảng Thông Báo</option>
             </select>
@@ -796,22 +804,50 @@ export const TabControl: React.FC<TabControlProps> = ({
           </div>
         </div>
 
-        {/* Hàng 3: Ô chữ + NPC tham gia + Bộ câu hỏi .txt (Thời gian & Lời đọc Luồng 0->6 chỉnh tại tab Âm thanh -> Engine Tiết học Tiếng Anh) */}
+        {/* Hàng 3: Tên tiết học + Gợi ý ô chữ + NPC tham gia + Bộ câu hỏi .txt */}
         {activeEngine === 'english_quiz' && (
           <div className="space-y-1.5 pt-1 border-t border-stone-800/80 text-[10.5px]">
+            {/* Cho sửa tên tiết học */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-stone-400 shrink-0">Tên tiết học:</span>
+              <input
+                type="text"
+                value={hud.classBoardLessonTitle ?? 'Tiết Tiếng Anh'}
+                onChange={(e) =>
+                  onUpdateHudLayout({ classBoardLessonTitle: e.target.value })
+                }
+                placeholder="Tiết Tiếng Anh"
+                className="flex-1 px-2 py-1 rounded bg-stone-950 border border-stone-800 text-[11px] font-bold text-amber-200 focus:outline-none focus:border-emerald-400"
+              />
+            </div>
+
             <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <div className="flex items-center gap-1">
-                <span className="text-stone-400">Ô chữ:</span>
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-stone-400">Gợi ý:</span>
                 {(
                   [
-                    { id: 'hint', label: 'Gợi ý' },
-                    { id: 'blank', label: 'Trống' },
-                    { id: 'full', label: 'Hiện đủ' },
+                    {
+                      id: 'default',
+                      label: 'Mặc định',
+                      title:
+                        'Luôn gợi ý 1 chữ cái đầu; 5s sau thêm 1 chữ (6 ký tự), thêm 2 chữ (7-9 ký tự), thêm 3 chữ (10+ ký tự)',
+                    },
+                    {
+                      id: 'hint_2',
+                      label: 'Gợi ý 2',
+                      title: 'Gợi ý 2 chữ cái random',
+                    },
+                    {
+                      id: 'hint_3',
+                      label: 'Gợi ý 3',
+                      title: 'Gợi ý 2 chữ cái đầu cuối',
+                    },
                   ] as const
                 ).map((m) => (
                   <button
                     key={m.id}
                     type="button"
+                    title={m.title}
                     onClick={() =>
                       onUpdateHudLayout({ classBoardLetterMode: m.id })
                     }
@@ -841,6 +877,14 @@ export const TabControl: React.FC<TabControlProps> = ({
                   <span>NPC trả lời</span>
                 </label>
               </div>
+            </div>
+
+            <div className="text-[9.5px] text-stone-400 bg-stone-950/80 border border-stone-800/80 rounded px-2 py-1 leading-tight">
+              {letterMode === 'hint_2'
+                ? '💡 Gợi ý 2: Hiện 2 chữ cái ngẫu nhiên.'
+                : letterMode === 'hint_3'
+                ? '💡 Gợi ý 3: Hiện 2 chữ cái đầu & cuối.'
+                : '💡 Mặc định: Luôn gợi ý 1 chữ cái đầu; sau 5s thêm 1 chữ (6 ký tự), thêm 2 (7-9 ký tự), thêm 3 (10+ ký tự).'}
             </div>
 
             {/* QUẢN LÝ BỘ ĐỀ & HÀNG CHỜ CÂU HỎI TIẾNG ANH (THẺ CỐ ĐỊNH KÍCH THƯỚC) */}
@@ -2525,7 +2569,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="font-mono font-black text-orange-400">
-                      {rec.points.toLocaleString('vi-VN')}đ
+                      {rec.points.toLocaleString('vi-VN')}
                     </span>
                     <span className="px-1.5 py-0.2 rounded bg-orange-500/25 border border-orange-400/50 text-[9px] font-black text-orange-200">
                       Top {idx + 1}

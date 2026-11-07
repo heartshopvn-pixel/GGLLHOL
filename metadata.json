@@ -1,6 +1,6 @@
 {
-  "name": "Game Cô Thảo",
-  "description": "Game Cô Thảo - Lớp học tương tác TikTok Live tích hợp bảng điều khiển Dev Studio, giọng đọc TTS, bộ lọc từ cấm và đồng bộ Live.",
+  "name": "Aethelgard: Chronicles of the Iron Crown — Isometric RTS Engine",
+  "description": "Real-time medieval empire strategy simulation engine with procedural terrain, garrison pathfinding, and dynamic siege combat.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

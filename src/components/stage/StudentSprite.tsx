@@ -17,7 +17,31 @@ import {
   PilgrimData,
   PilgrimFrameIndex,
 } from '../../types/game';
-import { RoseBouquetModel, SchoolGiftArt } from './SchoolGiftArt';
+import {
+  Flower10BadgeIcon,
+  RoseBouquetModel,
+  SchoolGiftArt,
+} from './SchoolGiftArt';
+
+const FLOWER_10_BURST_VECTORS: Array<{
+  dx: number;
+  dy: number;
+  rot: number;
+  delayMs: number;
+  scale: number;
+}> = [
+  { dx: 0, dy: -36, rot: -18, delayMs: 0, scale: 1.15 },
+  { dx: 24, dy: -28, rot: 25, delayMs: 25, scale: 1.05 },
+  { dx: 36, dy: -6, rot: 42, delayMs: 45, scale: 1.1 },
+  { dx: 28, dy: 20, rot: 65, delayMs: 20, scale: 0.95 },
+  { dx: 11, dy: 30, rot: 30, delayMs: 60, scale: 0.9 },
+  { dx: -11, dy: 30, rot: -32, delayMs: 35, scale: 0.9 },
+  { dx: -28, dy: 20, rot: -60, delayMs: 55, scale: 0.95 },
+  { dx: -36, dy: -6, rot: -45, delayMs: 15, scale: 1.1 },
+  { dx: -24, dy: -28, rot: -22, delayMs: 40, scale: 1.05 },
+  { dx: 12, dy: -18, rot: 15, delayMs: 70, scale: 0.88 },
+  { dx: -12, dy: -18, rot: -15, delayMs: 80, scale: 0.88 },
+];
 
 interface StudentSpriteProps {
   pilgrim: PilgrimData;
@@ -28,9 +52,16 @@ interface StudentSpriteProps {
   nameTagScale: number;
   nameTagMaxChars?: number;
   nameTagOffsetY?: number;
+  streakTagFontFamily?: string;
+  streakTagScale?: number;
+  scoreTagScale?: number;
   scoreTagOffsetY?: number;
   scoreChangeFontSize?: number;
   scoreChangeStrokeWidth?: number;
+  vfxFlower10Enabled?: boolean;
+  vfxFlower10Scale?: number;
+  vfxFlower10OffsetX?: number;
+  vfxFlower10OffsetY?: number;
   chatBubbleFontFamily: string;
   chatBubbleScale: number;
   chatBubbleMaxChars?: number;
@@ -109,9 +140,16 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
   nameTagScale,
   nameTagMaxChars = 16,
   nameTagOffsetY = 0,
+  streakTagFontFamily,
+  streakTagScale = 1.0,
+  scoreTagScale = 1.0,
   scoreTagOffsetY = 0,
   scoreChangeFontSize = 14,
   scoreChangeStrokeWidth = 2.5,
+  vfxFlower10Enabled = true,
+  vfxFlower10Scale = 1.0,
+  vfxFlower10OffsetX = 0,
+  vfxFlower10OffsetY = 0,
   chatBubbleFontFamily,
   chatBubbleScale,
   chatBubbleMaxChars = 80,
@@ -274,10 +312,15 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
   // 2.5D Depth Y-Sorting: Thân nhân vật luôn giữ nguyên zIndex theo tọa độ độ sâu Y thực tế của bàn học (effectiveBaseY)
   // (bạn ngồi bàn sau Y lớn luôn đè lên bạn ngồi bàn trước Y nhỏ; hai bạn cùng bàn có cùng tầng sâu và luôn đứng trước mặt bàn của chính mình)
   const depthY = isRichKidDancing ? effectiveBaseY + 2 : effectiveBaseY;
-  const bodyZIndex = Math.max(
-    22,
-    Math.round(depthY) + (isSeated || isAtDeskSeat ? 0 : 2)
-  );
+  const isGiftingFlowerToTeacher =
+    pilgrim.state === 'walk_to_teacher_gift' ||
+    pilgrim.state === 'throw_flower_at_teacher';
+  const bodyZIndex = isGiftingFlowerToTeacher
+    ? Math.max(600, Math.round(depthY) + 12)
+    : Math.max(
+        22,
+        Math.round(depthY) + (isSeated || isAtDeskSeat ? 0 : 2)
+      );
 
   // Tầng giao diện nổi (Thẻ tên, Bong bóng chat, Thẻ điểm, Huy hiệu): tách độc lập khỏi thân nhân vật
   const baseUiZIndex = 2000 + Math.max(10, Math.round(effectiveBaseY));
@@ -889,11 +932,18 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
                 )}
 
                 {Boolean(pilgrim.slotId) && (pilgrim.correctStreak || 0) >= 2 && (
-                  <div className="inline-flex items-center rounded bg-slate-950/90 border border-amber-400/85 shadow-sm overflow-hidden">
+                  <div
+                    className="inline-flex items-center rounded bg-slate-950/90 border border-amber-400/85 shadow-sm overflow-hidden"
+                    style={{
+                      fontFamily: streakTagFontFamily || nameTagFontFamily,
+                      transform: `scale(${Math.max(0.4, Math.min(2.6, Number(streakTagScale ?? 1))).toFixed(2)})`,
+                      transformOrigin: '50% 100%',
+                    }}
+                  >
                     <span className="px-0.5 py-0.2 bg-amber-500/25 text-[8.5px] leading-none flex items-center justify-center">
                       🔥
                     </span>
-                    <span className="px-1 py-0.2 text-[7.5px] font-extrabold text-amber-200 font-mono leading-none tracking-tight">
+                    <span className="px-1 py-0.2 text-[7.5px] font-extrabold text-amber-200 leading-none tracking-tight">
                       x{pilgrim.correctStreak}
                     </span>
                   </div>
@@ -919,6 +969,16 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
               0.5,
               Math.min(8, Number(scoreChangeStrokeWidth ?? 2.5))
             );
+            const safeScoreCardScale = Math.max(
+              0.4,
+              Math.min(2.6, Number(scoreTagScale ?? 1))
+            );
+            const safeVfxScale = Math.max(
+              0.3,
+              Math.min(3.0, Number(vfxFlower10Scale ?? 1))
+            );
+            const vfxOffX = Number(vfxFlower10OffsetX ?? 0);
+            const vfxOffY = Number(vfxFlower10OffsetY ?? 0);
 
             return (
               <div
@@ -929,10 +989,82 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
                   transform: `translate(-50%, ${scoreTagOffsetY || 0}px)`,
                 }}
               >
+                {/* HIỆU ỨNG VFX: HOA ĐIỂM MƯỜI BUNG NỔ RA NHIỀU BÔNG HOA NGAY VỊ TRÍ CỘNG ĐIỂM */}
+                {delta > 0 && vfxFlower10Enabled !== false && (
+                  <div
+                    className="absolute pointer-events-none"
+                    style={{
+                      left: `calc(50% + ${vfxOffX}px)`,
+                      top: `calc(50% + ${vfxOffY}px)`,
+                      transform: `translate(-50%, -50%) scale(${safeVfxScale.toFixed(2)})`,
+                      zIndex: 60,
+                    }}
+                  >
+                    <style>{`
+                      @keyframes vfxFlower10ParticleBurst {
+                        0% {
+                          opacity: 0;
+                          transform: translate(-50%, -50%) translate(0px, 0px) scale(0.2) rotate(0deg);
+                        }
+                        18% {
+                          opacity: 1;
+                          transform: translate(-50%, -50%) translate(calc(var(--f10-dx) * 0.65), calc(var(--f10-dy) * 0.65)) scale(var(--f10-s)) rotate(calc(var(--f10-rot) * 0.5));
+                        }
+                        68% {
+                          opacity: 0.95;
+                          transform: translate(-50%, -50%) translate(var(--f10-dx), var(--f10-dy)) scale(calc(var(--f10-s) * 0.92)) rotate(var(--f10-rot));
+                        }
+                        100% {
+                          opacity: 0;
+                          transform: translate(-50%, -50%) translate(calc(var(--f10-dx) * 1.18), calc(var(--f10-dy) * 1.18 + 6px)) scale(0.35) rotate(calc(var(--f10-rot) * 1.35));
+                        }
+                      }
+                      @keyframes vfxFlower10CoreFlash {
+                        0% {
+                          opacity: 0.95;
+                          transform: translate(-50%, -50%) scale(0.3);
+                        }
+                        45% {
+                          opacity: 0.65;
+                          transform: translate(-50%, -50%) scale(1.45);
+                        }
+                        100% {
+                          opacity: 0;
+                          transform: translate(-50%, -50%) scale(2.1);
+                        }
+                      }
+                    `}</style>
+                    <div
+                      className="absolute left-0 top-0 w-9 h-9 rounded-full bg-amber-300/60 blur-[3px]"
+                      style={{
+                        animation: 'vfxFlower10CoreFlash 620ms ease-out forwards',
+                      }}
+                    />
+                    {FLOWER_10_BURST_VECTORS.map((vec, idx) => (
+                      <div
+                        key={idx}
+                        className="absolute left-0 top-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.65)]"
+                        style={
+                          {
+                            '--f10-dx': `${vec.dx}px`,
+                            '--f10-dy': `${vec.dy}px`,
+                            '--f10-rot': `${vec.rot}deg`,
+                            '--f10-s': vec.scale,
+                            animation: `vfxFlower10ParticleBurst 1120ms cubic-bezier(0.16, 1, 0.3, 1) ${vec.delayMs}ms forwards`,
+                            opacity: 0,
+                          } as React.CSSProperties
+                        }
+                      >
+                        <Flower10BadgeIcon className="w-4 h-4" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Số điểm thay đổi (+ / -): nằm cố định ngay phía trên Thẻ số điểm, không nền, chữ xanh lá / đỏ, viền đen đậm, hiệu ứng run nhẹ */}
                 {delta !== 0 && (
                   <div
-                    className="score-delta-vibrate font-mono font-black leading-none whitespace-nowrap mb-0.5"
+                    className="score-delta-vibrate font-mono font-black leading-none whitespace-nowrap mb-0.5 relative z-10"
                     style={{
                       fontSize: `${safeFontSize}px`,
                       color: isPositive ? '#4ade80' : '#f87171',
@@ -947,7 +1079,13 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
                 )}
 
                 {/* Thẻ Show số điểm hiện tại của học sinh */}
-                <div className="px-1.5 py-0.5 rounded-md bg-slate-950/95 border border-amber-400/90 text-amber-200 font-mono font-black text-[9.5px] leading-none whitespace-nowrap shadow-[0_2px_6px_rgba(0,0,0,0.85)] flex items-center gap-0.5">
+                <div
+                  className="px-1.5 py-0.5 rounded-md bg-slate-950/95 border border-amber-400/90 text-amber-200 font-mono font-black text-[9.5px] leading-none whitespace-nowrap shadow-[0_2px_6px_rgba(0,0,0,0.85)] flex items-center gap-0.5 relative z-10"
+                  style={{
+                    transform: `scale(${safeScoreCardScale.toFixed(2)})`,
+                    transformOrigin: '50% 100%',
+                  }}
+                >
                   <span className="text-[8.5px] leading-none">🌸</span>
                   <span>{totalScore}</span>
                 </div>

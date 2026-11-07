@@ -680,7 +680,20 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
               className="w-full px-2 py-1 rounded-lg bg-stone-950 border border-stone-800 text-xs text-stone-100 focus:outline-none focus:border-amber-500"
             />
           </div>
-          <div className="col-span-2">
+          <div>
+            <label className="text-[10.5px] text-stone-400 block mb-1">
+              Tên tiết học (Bảng lớp):
+            </label>
+            <input
+              type="text"
+              value={config.hudLayout.classBoardLessonTitle ?? 'Tiết Tiếng Anh'}
+              onChange={(e) =>
+                onUpdateHudLayout({ classBoardLessonTitle: e.target.value })
+              }
+              className="w-full px-2 py-1 rounded-lg bg-stone-950 border border-stone-800 text-xs text-amber-200 font-semibold focus:outline-none focus:border-amber-500"
+            />
+          </div>
+          <div>
             <label className="text-[10.5px] text-stone-400 block mb-1">
               Tiêu đề Nội Quy & Quà:
             </label>
@@ -1435,27 +1448,27 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
               <div className="p-2 rounded bg-amber-950/25 border border-amber-500/40 flex items-center justify-between gap-2 text-[10.5px]">
                 <div className="min-w-0">
                   <div className="font-bold text-amber-200">
-                    🐱 Số mèo nuôi tối đa trên bàn (1 - 5 con)
+                    🐱 Số mèo nuôi tối đa / học sinh (Mặc định: 1 con)
                   </div>
                   <div className="text-[9.5px] text-stone-400 leading-tight">
-                    Khi đã đủ số mèo tối đa, những con mèo tiếp theo sẽ nhảy xuống đất đi vòng vòng lớp rồi đi mất
+                    Mỗi học sinh nuôi tối đa 1 con mèo trên bàn, những con mèo tiếp theo sẽ nhảy xuống đất đi vòng vòng lớp rồi đi mất
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  {[1, 2, 3, 4, 5].map((num) => {
-                    const activeMax = gm.maxDeskCats ?? 5;
+                  {[1].map((num) => {
+                    const activeMax = gm.maxDeskCats ?? 1;
                     return (
                       <button
                         key={num}
                         type="button"
                         onClick={() => patchGm({ maxDeskCats: num })}
-                        className={`w-6 h-6 rounded font-mono font-extrabold text-[10.5px] cursor-pointer transition ${
+                        className={`px-2 h-6 rounded font-mono font-extrabold text-[10.5px] cursor-pointer transition ${
                           activeMax === num
                             ? 'bg-amber-400 text-stone-950 shadow'
                             : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700'
                         }`}
                       >
-                        {num}
+                        Tối đa {num} con
                       </button>
                     );
                   })}
@@ -1639,7 +1652,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           </div>
 
           <div className="flex items-center justify-between gap-2 text-[11px]">
-            <span className="text-stone-300">Số lượng đứng chờ:</span>
+            <span className="text-stone-300">Số lượng đứng chờ tối đa:</span>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -2043,6 +2056,97 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             </div>
           </div>
 
+          {/* THẺ COMBO TRẢ LỜI ĐÚNG LIÊN TIẾP (ĐẶT SÁT BÊN DEV THẺ TÊN): CHỈNH FONT + SIZE */}
+          <div className="pt-2 border-t border-amber-500/25 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-[10.5px]">
+              <span className="font-bold text-orange-300">
+                🔥 Thẻ Combo trả lời đúng liên tiếp (x2, x3...)
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-orange-300 font-mono font-bold">
+                  Size: {Math.round((config.streakTagScale ?? 1) * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      streakTagFontFamily:
+                        '"Be Vietnam Pro", system-ui, sans-serif',
+                      streakTagScale: 1.0,
+                    })
+                  }
+                  className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9px] font-semibold text-stone-300 cursor-pointer"
+                >
+                  Mặc định
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 items-center">
+              <select
+                value={
+                  config.streakTagFontFamily ||
+                  config.nameTagFontFamily ||
+                  '"Be Vietnam Pro", system-ui, sans-serif'
+                }
+                onChange={(e) =>
+                  onUpdateConfig({ streakTagFontFamily: e.target.value })
+                }
+                className="px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-200 focus:outline-none"
+              >
+                {FONT_FAMILY_OPTIONS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      streakTagScale: Math.max(
+                        0.5,
+                        Number(((config.streakTagScale ?? 1) - 0.05).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer shrink-0"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.2}
+                  step={0.05}
+                  value={config.streakTagScale ?? 1}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      streakTagScale: parseFloat(e.target.value) || 1,
+                    })
+                  }
+                  className="w-full accent-orange-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      streakTagScale: Math.min(
+                        2.2,
+                        Number(((config.streakTagScale ?? 1) + 0.05).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500/40 flex items-center justify-center text-orange-300 cursor-pointer shrink-0"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* THẺ SHOW SỐ ĐIỂM & HIỆU ỨNG CHỮ SỐ CỘNG/TRỪ TRÊN BẢNG TÊN */}
           <div className="pt-2 border-t border-amber-500/25 space-y-2">
             <div className="flex items-center justify-between gap-2 text-[10.5px]">
@@ -2053,6 +2157,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 type="button"
                 onClick={() =>
                   onUpdateConfig({
+                    scoreTagScale: 1.0,
                     scoreTagOffsetY: 0,
                     scoreTagDurationSec: 4,
                     scoreChangeFontSize: 14,
@@ -2060,10 +2165,61 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                   })
                 }
                 className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9px] font-semibold text-stone-300 cursor-pointer"
-                title="Đặt về mặc định (Vị trí 0px, tồn tại 4s, chữ 14px, viền 2.5px)"
+                title="Đặt về mặc định (Kích thước 100%, Vị trí 0px, tồn tại 4s, chữ 14px, viền 2.5px)"
               >
                 Mặc định (4s)
               </button>
+            </div>
+
+            {/* Điều chỉnh kích thước Thẻ Show Điểm Số học sinh (🌸 Điểm) */}
+            <div className="flex items-center justify-between gap-2 text-[10.5px]">
+              <span className="text-stone-300">Kích thước Thẻ điểm (🌸):</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      scoreTagScale: Math.max(
+                        0.5,
+                        Number(((config.scoreTagScale ?? 1) - 0.05).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.2}
+                  step={0.05}
+                  value={config.scoreTagScale ?? 1}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      scoreTagScale: parseFloat(e.target.value) || 1,
+                    })
+                  }
+                  className="w-20 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      scoreTagScale: Math.min(
+                        2.2,
+                        Number(((config.scoreTagScale ?? 1) + 0.05).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 flex items-center justify-center text-amber-300 cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+                <span className="w-11 text-right font-mono font-bold text-amber-300 tabular-nums">
+                  {Math.round((config.scoreTagScale ?? 1) * 100)}%
+                </span>
+              </div>
             </div>
 
             {/* Vị trí dọc của Thẻ Show Số Điểm so với bảng tên */}

@@ -1450,9 +1450,16 @@ export const GameStage: React.FC<GameStageProps> = ({
               nameTagScale={config.nameTagScale ?? 1}
               nameTagMaxChars={config.nameTagMaxChars ?? 16}
               nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
+              streakTagScale={config.streakTagScale ?? 1}
+              scoreTagScale={config.scoreTagScale ?? 1}
               scoreTagOffsetY={config.scoreTagOffsetY ?? 0}
               scoreChangeFontSize={config.scoreChangeFontSize ?? 14}
               scoreChangeStrokeWidth={config.scoreChangeStrokeWidth ?? 2.5}
+              vfxFlower10Enabled={config.vfxFlower10Enabled !== false}
+              vfxFlower10Scale={config.vfxFlower10Scale ?? 1}
+              vfxFlower10OffsetX={config.vfxFlower10OffsetX ?? 0}
+              vfxFlower10OffsetY={config.vfxFlower10OffsetY ?? 0}
               chatBubbleFontFamily={config.chatBubbleFontFamily}
               chatBubbleScale={config.chatBubbleScale ?? 1}
               chatBubbleMaxChars={config.chatBubbleMaxChars ?? 80}
@@ -1479,9 +1486,16 @@ export const GameStage: React.FC<GameStageProps> = ({
               nameTagScale={config.nameTagScale ?? 1}
               nameTagMaxChars={config.nameTagMaxChars ?? 16}
               nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
+              streakTagScale={config.streakTagScale ?? 1}
+              scoreTagScale={config.scoreTagScale ?? 1}
               scoreTagOffsetY={config.scoreTagOffsetY ?? 0}
               scoreChangeFontSize={config.scoreChangeFontSize ?? 14}
               scoreChangeStrokeWidth={config.scoreChangeStrokeWidth ?? 2.5}
+              vfxFlower10Enabled={config.vfxFlower10Enabled !== false}
+              vfxFlower10Scale={config.vfxFlower10Scale ?? 1}
+              vfxFlower10OffsetX={config.vfxFlower10OffsetX ?? 0}
+              vfxFlower10OffsetY={config.vfxFlower10OffsetY ?? 0}
               chatBubbleFontFamily={config.chatBubbleFontFamily}
               chatBubbleScale={config.chatBubbleScale ?? 1}
               chatBubbleMaxChars={config.chatBubbleMaxChars ?? 80}
@@ -1525,9 +1539,16 @@ export const GameStage: React.FC<GameStageProps> = ({
                 nameTagScale={config.nameTagScale ?? 1}
                 nameTagMaxChars={config.nameTagMaxChars ?? 16}
                 nameTagOffsetY={config.nameTagOffsetY ?? 0}
+                streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
+                streakTagScale={config.streakTagScale ?? 1}
+                scoreTagScale={config.scoreTagScale ?? 1}
                 scoreTagOffsetY={config.scoreTagOffsetY ?? 0}
                 scoreChangeFontSize={config.scoreChangeFontSize ?? 14}
                 scoreChangeStrokeWidth={config.scoreChangeStrokeWidth ?? 2.5}
+                vfxFlower10Enabled={config.vfxFlower10Enabled !== false}
+                vfxFlower10Scale={config.vfxFlower10Scale ?? 1}
+                vfxFlower10OffsetX={config.vfxFlower10OffsetX ?? 0}
+                vfxFlower10OffsetY={config.vfxFlower10OffsetY ?? 0}
                 chatBubbleFontFamily={config.chatBubbleFontFamily}
                 chatBubbleScale={config.chatBubbleScale ?? 1}
                 chatBubbleMaxChars={config.chatBubbleMaxChars ?? 80}
@@ -1603,18 +1624,19 @@ export const GameStage: React.FC<GameStageProps> = ({
             );
           })}
 
-          {/* Layer 3.2: Hoa hồng bay từ vị trí học sinh sang vị trí Cô Giáo / Thầy Giám Thị */}
+          {/* Layer 3.2: Hoa hồng bay từ vị trí học sinh sang vị trí Cô Giáo / Thầy Giám Thị (nằm trên layer Cô & Thầy) */}
           {flyingFlowers.map((ff) => {
             const dx = ff.targetX - ff.startX;
             const dy = ff.targetY - ff.startY;
             return (
               <div
                 key={ff.id}
-                className="flying-lotus-projectile absolute pointer-events-none z-90"
+                className="flying-lotus-projectile absolute pointer-events-none"
                 style={
                   {
                     left: `${ff.startX}px`,
                     top: `${ff.startY}px`,
+                    zIndex: 1500,
                     '--dx': `${dx}px`,
                     '--dy': `${dy}px`,
                   } as React.CSSProperties
@@ -1628,14 +1650,15 @@ export const GameStage: React.FC<GameStageProps> = ({
             );
           })}
 
-          {/* Layer 3.3: Hiệu ứng nổ hoa & nổ heo */}
+          {/* Layer 3.3: Hiệu ứng nổ hoa & nổ heo (nằm trên layer Cô & Thầy) */}
           {simpleExplosions.map((exp) => (
             <div
               key={exp.id}
-              className="absolute pointer-events-none z-95"
+              className="absolute pointer-events-none"
               style={{
                 left: `${exp.x}px`,
                 top: `${exp.y}px`,
+                zIndex: 1550,
               }}
             >
               {exp.kind === 'flower' ? (
@@ -2133,7 +2156,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                       top: `${crowdPos.y}px`,
                     }}
                   >
-                    🚪 Nhóm Cửa ({config.doorCrowdCount ?? 7})
+                    🚪 Nhóm Cửa ({doorCrowd.length}/{config.doorCrowdCount ?? 7})
                   </div>
                 );
               })()}
