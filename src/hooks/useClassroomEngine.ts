@@ -1363,9 +1363,34 @@ export function useClassroomEngine() {
     }>('classroom_full_studio_state_v1').then((savedFull) => {
       if (!savedFull) return;
       if (savedFull.config) {
+        const hasSyncLocalConfig = Boolean(localStorage.getItem(STORAGE_KEY));
         setConfig((prev) => ({
           ...prev,
-          ...savedFull.config,
+          ...(hasSyncLocalConfig
+            ? {
+                // Nếu localStorage đã nạp tức thì cấu hình mới nhất, chỉ khôi phục các trường âm thanh MP3 Base64 dung lượng lớn từ IndexedDB (tránh ghi đè ngược hàng chờ câu hỏi customQuizQuestions)
+                bellMp3Url: prev.bellMp3Url || savedFull.config?.bellMp3Url || null,
+                woodenFishMp3Url:
+                  prev.woodenFishMp3Url || savedFull.config?.woodenFishMp3Url || null,
+                answerRevealMp3Url:
+                  prev.answerRevealMp3Url ||
+                  savedFull.config?.answerRevealMp3Url ||
+                  null,
+                zombieGrowlMp3Url:
+                  prev.zombieGrowlMp3Url ||
+                  savedFull.config?.zombieGrowlMp3Url ||
+                  null,
+                giftSoundMp3Urls:
+                  Object.keys(prev.giftSoundMp3Urls || {}).length > 0
+                    ? prev.giftSoundMp3Urls
+                    : savedFull.config?.giftSoundMp3Urls || {},
+                bgmTracks:
+                  Array.isArray(savedFull.config?.bgmTracks) &&
+                  savedFull.config!.bgmTracks!.length > 0
+                    ? savedFull.config!.bgmTracks!
+                    : prev.bgmTracks,
+              }
+            : savedFull.config),
           spawnPoint: LEFT_DOOR_POS,
           exitPoint: LEFT_DOOR_POS,
           npcSpeechCategories: {
@@ -1387,11 +1412,11 @@ export function useClassroomEngine() {
           },
           grid: {
             ...prev.grid,
-            ...(savedFull.config?.grid || {}),
+            ...(hasSyncLocalConfig ? {} : savedFull.config?.grid || {}),
           },
           hudLayout: {
             ...prev.hudLayout,
-            ...(savedFull.config?.hudLayout || {}),
+            ...(hasSyncLocalConfig ? {} : savedFull.config?.hudLayout || {}),
           },
         }));
       }
@@ -6432,8 +6457,7 @@ export function useClassroomEngine() {
           }
 
           const quizList = getActiveQuizList(curCfg);
-          const quizItem =
-            quizList[bState.questionIndex % quizList.length] || quizList[0];
+          const quizItem = bState.currentQuestion || quizList[0];
           const correctRate =
             typeof curCfg.npcCorrectAnswerPercent === 'number'
               ? curCfg.npcCorrectAnswerPercent
@@ -6803,19 +6827,15 @@ export function useClassroomEngine() {
   ]);
 
   // Đồng bộ cấu hình engine, bộ câu hỏi & thời gian câu hỏi (mặc định 12s cho Luồng 2 & 3) vào classBoardState khi người dùng chỉnh trong Studio
+  // Quy tắc nguồn chuẩn duy nhất: Câu hỏi trên Bảng Lớp (currentQuestion) LUÔN LUÔN là câu đầu tiên (#1 Đang phát: quizList[0]) trong Hàng Chờ Câu Hỏi!
   useEffect(() => {
     const nextEngine = config.hudLayout.classBoardEngine || 'english_quiz';
     const nextDurMs =
       Math.max(5, config.hudLayout.classBoardQuestionDurationSec || 12) * 1000;
     const quizList = getActiveQuizList(config);
     setClassBoardState((prev) => {
-      const safeIdx = prev.questionIndex % quizList.length;
-      // Khi tiết học đang chạy (isRunning) và đã có currentQuestion của vòng hiện tại, giữ nguyên currentQuestion
-      // để tránh việc đồng bộ config từ Tab Điều Khiển ghi đè lại câu đầu hàng chờ lên câu đang hỏi!
-      const curQ =
-        prev.isRunning && prev.currentQuestion
-          ? prev.currentQuestion
-          : quizList[safeIdx] || quizList[0];
+      const safeIdx = 0;
+      const curQ = quizList[0];
       const nextTotalDurationMs =
         prev.phase === 'asking' ? nextDurMs : prev.totalDurationMs;
       const nextTimeLeftMs =
@@ -6825,14 +6845,20 @@ export function useClassroomEngine() {
         prev.engine === nextEngine &&
         prev.questionIndex === safeIdx &&
         prev.totalQuestions === quizList.length &&
+        prev.currentQuestion?.id === curQ.id &&
         prev.currentQuestion?.vi === curQ.vi &&
         prev.currentQuestion?.en === curQ.en &&
+        (prev.currentQuestion?.luckyStars || 0) === (curQ.luckyStars || 0) &&
         prev.totalDurationMs === nextTotalDurationMs &&
         prev.timeLeftMs === nextTimeLeftMs &&
         prev.lessonStartText === config.lessonStartTtsText
       ) {
         return prev;
       }
+
+      const questionWordChanged =
+        prev.currentQuestion?.en?.trim().toLowerCase() !==
+        curQ.en.trim().toLowerCase();
 
       const nextState: ClassBoardRuntimeState = {
         ...prev,
@@ -6848,6 +6874,10 @@ export function useClassroomEngine() {
         timeLeftMs: nextTimeLeftMs,
       };
       classBoardStateRef.current = nextState;
+
+      if (questionWordChanged && prev.isRunning && prev.phase === 'asking') {
+        scheduleQuizNpcAnswers(0, nextTimeLeftMs);
+      }
       return nextState;
     });
   }, [
@@ -6856,6 +6886,7 @@ export function useClassroomEngine() {
     config.lessonStartTtsText,
     config.customQuizQuestions,
     getActiveQuizList,
+    scheduleQuizNpcAnswers,
   ]);
 
   // Vòng lặp điều phối Luồng Tiết Học 0 -> 6 tự động & đồng bộ giọng đọc TTS của Cô Giáo:
@@ -7014,10 +7045,7 @@ export function useClassroomEngine() {
       }
 
       const quizList = getActiveQuizList(cfg);
-      const curQuiz =
-        prev.currentQuestion ||
-        quizList[prev.questionIndex % quizList.length] ||
-        quizList[0];
+      const curQuiz = quizList[0];
 
       // ============================================================================
       // CHUYỂN TỪ LUỒNG 0 (lesson_start) -> LUỒNG 1 (preparing - mặc định 3s "Chuẩn bị")
@@ -7040,6 +7068,9 @@ export function useClassroomEngine() {
 
         const prepState: ClassBoardRuntimeState = {
           ...prev,
+          questionIndex: 0,
+          totalQuestions: quizList.length,
+          currentQuestion: curQuiz,
           phase: 'preparing',
           lessonStepNumber: 1,
           activeFlowToken: undefined,
@@ -9874,8 +9905,7 @@ export function useClassroomEngine() {
       const cfg = configRef.current;
       const bState = classBoardStateRef.current;
       const quizList = getActiveQuizList(cfg);
-      const curQuiz =
-        quizList[bState.questionIndex % quizList.length] || quizList[0];
+      const curQuiz = bState.currentQuestion || quizList[0];
 
       // Ưu tiên chọn ngẫu nhiên 1 học sinh đang ngồi trong lớp hoặc ngoài lớp để test cả 2 cột
       const seatedList = pilgrimsRef.current.filter(
