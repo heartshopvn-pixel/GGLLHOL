@@ -1707,16 +1707,23 @@ let activeTiktok = null;
 let reconnectTimer = null;
 
 async function loadTikTokConnectorClass() {
-  try {
-    const legacyPkg = require('tiktok-live-connector/legacy');
-    if (legacyPkg?.WebcastPushConnection) return legacyPkg.WebcastPushConnection;
-  } catch (e) {}
+  // QUAN TRỌNG: Dùng trực tiếp TikTokLiveConnection (TUYỆT ĐỐI KHÔNG dùng 'tiktok-live-connector/legacy' vì bản legacy bị lỗi .map() trên undefined khi nhận gói tin RoomUser/Chat mới của TikTok!)
   try {
     const pkg = require('tiktok-live-connector');
-    return pkg.TikTokLiveConnection || pkg.WebcastPushConnection || pkg.default?.TikTokLiveConnection;
+    return (
+      pkg.TikTokLiveConnection ||
+      pkg.WebcastPushConnection ||
+      pkg.default?.TikTokLiveConnection ||
+      pkg.default?.WebcastPushConnection
+    );
   } catch (e) {
     const pkg = await import('tiktok-live-connector');
-    return pkg.TikTokLiveConnection || pkg.WebcastPushConnection || pkg.default?.TikTokLiveConnection;
+    return (
+      pkg.TikTokLiveConnection ||
+      pkg.WebcastPushConnection ||
+      pkg.default?.TikTokLiveConnection ||
+      pkg.default?.WebcastPushConnection
+    );
   }
 }
 
@@ -1744,9 +1751,9 @@ async function connectTikTok(customUser) {
   try {
     const TikTokConnector = await loadTikTokConnectorClass();
     console.log(\`⏳ [ĐANG KẾT NỐI] Đang vào phòng Live TikTok: @\${TIKTOK_USERNAME}...\`);
-    // QUAN TRỌNG: Tắt enableExtendedGiftInfo & fetchRoomInfoOnConnect để KHÔNG gọi endpoint signTikTokUrl trả phí (Business plan) của EulerStream!
+    // Tắt processInitialData, enableExtendedGiftInfo & fetchRoomInfoOnConnect để tránh lỗi .map() trên gói tin cũ và tránh gọi endpoint trả phí EulerStream
     const tiktok = new TikTokConnector(TIKTOK_USERNAME, {
-      processInitialData: true,
+      processInitialData: false,
       enableExtendedGiftInfo: false,
       fetchRoomInfoOnConnect: false,
     });
@@ -1766,67 +1773,80 @@ async function connectTikTok(customUser) {
     };
 
     tiktok.on('chat', data => {
-      const username = getUserName(data);
-      const comment = String(getCommentText(data) || '').trim();
-      if (!comment) return;
-      console.log(\`💬 [COMMENT] \${username}: \${comment}\`);
-      broadcast({ type: 'chat', username, avatarUrl: getUserAvatar(data), comment });
+      try {
+        const username = getUserName(data);
+        const comment = String(getCommentText(data) || '').trim();
+        if (!comment) return;
+        console.log(\`💬 [COMMENT] \${username}: \${comment}\`);
+        broadcast({ type: 'chat', username, avatarUrl: getUserAvatar(data), comment });
+      } catch (e) {}
     });
 
     tiktok.on('gift', data => {
-      const giftType = data?.giftType ?? data?.gift?.giftType ?? data?.giftDetails?.giftType;
-      const repeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
-      if (giftType === 1 && !repeatEnd) return;
-      const username = getUserName(data);
-      const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
-      const diamondCount = Number(
-        data?.giftDetails?.diamondCount ??
-        data?.gift?.diamondCount ??
-        data?.extendedGiftInfo?.diamond_count ??
-        data?.diamondCount ??
-        fallbackGift?.coins ??
-        1
-      ) || 1;
-      const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1);
-      const giftName =
-        data?.giftDetails?.giftName ||
-        data?.gift?.name ||
-        data?.extendedGiftInfo?.name ||
-        data?.giftName ||
-        fallbackGift?.name ||
-        (typeof data?.describe === 'string' ? data.describe.replace(/^sent\\s+/i, '').trim() : '') ||
-        'Quà tặng';
-      const coins = Math.max(1, diamondCount * repeatCount);
-      console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);
-      broadcast({ type: 'gift', username, avatarUrl: getUserAvatar(data), giftName, coins, repeatCount });
+      try {
+        const giftType = data?.giftType ?? data?.gift?.giftType ?? data?.giftDetails?.giftType;
+        const repeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
+        if (giftType === 1 && !repeatEnd) return;
+        const username = getUserName(data);
+        const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
+        const diamondCount = Number(
+          data?.giftDetails?.diamondCount ??
+          data?.gift?.diamondCount ??
+          data?.extendedGiftInfo?.diamond_count ??
+          data?.diamondCount ??
+          fallbackGift?.coins ??
+          1
+        ) || 1;
+        const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1);
+        const giftName =
+          data?.giftDetails?.giftName ||
+          data?.gift?.name ||
+          data?.extendedGiftInfo?.name ||
+          data?.giftName ||
+          fallbackGift?.name ||
+          (typeof data?.describe === 'string' ? data.describe.replace(/^sent\\s+/i, '').trim() : '') ||
+          'Quà tặng';
+        const coins = Math.max(1, diamondCount * repeatCount);
+        console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);
+        broadcast({ type: 'gift', username, avatarUrl: getUserAvatar(data), giftName, coins, repeatCount });
+      } catch (e) {}
     });
 
     tiktok.on('like', data => {
-      const username = getUserName(data);
-      const likeCount = Math.max(1, Number(data?.likeCount ?? data?.count ?? data?.unmergedLikeCount ?? 1) || 1);
-      console.log(\`❤️ [THẢ TIM] \${username} thả \${likeCount} tim\`);
-      broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount });
+      try {
+        const username = getUserName(data);
+        const likeCount = Math.max(1, Number(data?.likeCount ?? data?.count ?? data?.unmergedLikeCount ?? 1) || 1);
+        console.log(\`❤️ [THẢ TIM] \${username} thả \${likeCount} tim\`);
+        broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount });
+      } catch (e) {}
     });
 
     const handleFollow = data => {
-      const username = getUserName(data);
-      console.log(\`➕ [FOLLOW] \${username} vừa follow kênh\`);
-      broadcast({ type: 'follow', username, avatarUrl: getUserAvatar(data) });
+      try {
+        const username = getUserName(data);
+        console.log(\`➕ [FOLLOW] \${username} vừa follow kênh\`);
+        broadcast({ type: 'follow', username, avatarUrl: getUserAvatar(data) });
+      } catch (e) {}
     };
 
     tiktok.on('follow', handleFollow);
     tiktok.on('social', data => {
-      const key = String(data?.displayType || data?.common?.displayText?.key || '').toLowerCase();
-      if (key.includes('follow')) handleFollow(data);
+      try {
+        const key = String(data?.displayType || data?.common?.displayText?.key || '').toLowerCase();
+        if (key.includes('follow')) handleFollow(data);
+      } catch (e) {}
     });
 
     tiktok.on('member', data => {
-      const username = getUserName(data);
-      console.log(\`👋 [VÀO PHÒNG] \${username} vừa vào xem Live\`);
+      try {
+        const username = getUserName(data);
+        console.log(\`👋 [VÀO PHÒNG] \${username} vừa vào xem Live\`);
+      } catch (e) {}
     });
 
     tiktok.on('error', err => {
-      console.warn('⚠️ [CẢNH BÁO TIKTOK]:', err?.message || err?.info || err);
+      const msg = err?.exception?.message || err?.message || err?.info || String(err);
+      console.warn('⚠️ [CẢNH BÁO TIKTOK]:', msg);
     });
 
     tiktok.on('disconnected', () => {

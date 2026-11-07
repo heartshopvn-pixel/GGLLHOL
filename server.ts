@@ -267,7 +267,7 @@ async function startServer() {
         tiktokPkg.default?.WebcastPushConnection;
 
       const conn = new ConnectorClass(rawUser, {
-        processInitialData: true,
+        processInitialData: false,
         enableExtendedGiftInfo: false,
         fetchRoomInfoOnConnect: false,
       });
