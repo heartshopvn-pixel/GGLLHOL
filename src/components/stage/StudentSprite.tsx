@@ -592,7 +592,7 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
         )}
 
         {/* HÌNH NHÂN VẬT HỌC SINH CẤP 3 */}
-        {customFrameSrc ? (
+        {customFrameSrc && !(isSeated && useDefaultPngModels) ? (
           <img
             src={customFrameSrc}
             alt={pilgrim.username}

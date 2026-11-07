@@ -1273,21 +1273,29 @@ export function useClassroomEngine() {
   useEffect(() => {
     idbGet<Partial<CustomAssetsConfig>>('classroom_custom_assets_v1').then((saved) => {
       if (saved) {
-        const isCustomDataBg =
-          typeof saved.customBgUrl === 'string' &&
-          saved.customBgUrl.startsWith('data:');
-        const isCustomDataDesk =
-          typeof saved.deskModelUrl === 'string' &&
-          saved.deskModelUrl.startsWith('data:');
+        const isDataUrl = (val: unknown): val is string =>
+          typeof val === 'string' && val.startsWith('data:');
         setCustomAssets((prev) => ({
           ...prev,
           ...saved,
-          customBgUrl: isCustomDataBg
-            ? saved.customBgUrl!
+          customBgUrl: isDataUrl(saved.customBgUrl)
+            ? saved.customBgUrl
             : DEFAULT_SPRITESHEETS.customBgUrl,
-          deskModelUrl: isCustomDataDesk
-            ? saved.deskModelUrl!
+          deskModelUrl: isDataUrl(saved.deskModelUrl)
+            ? saved.deskModelUrl
             : DEFAULT_SPRITESHEETS.deskModelUrl,
+          pilgrimFemaleSpritesheetUrl: isDataUrl(saved.pilgrimFemaleSpritesheetUrl)
+            ? saved.pilgrimFemaleSpritesheetUrl
+            : null,
+          pilgrimMaleSpritesheetUrl: isDataUrl(saved.pilgrimMaleSpritesheetUrl)
+            ? saved.pilgrimMaleSpritesheetUrl
+            : null,
+          abbotSpritesheetUrl: isDataUrl(saved.abbotSpritesheetUrl)
+            ? saved.abbotSpritesheetUrl
+            : null,
+          seniorNoviceSpritesheetUrl: isDataUrl(saved.seniorNoviceSpritesheetUrl)
+            ? saved.seniorNoviceSpritesheetUrl
+            : null,
         }));
       }
     });
@@ -2218,6 +2226,7 @@ export function useClassroomEngine() {
         const nextZombie: ZombieEventRuntimeState = {
           ...curZombie,
           ttsFinishedForPhase: true,
+          ttsFinishedAtElapsedMs: curZombie.elapsedPhaseMs || 0,
         };
         zombieEventStateRef.current = nextZombie;
         setZombieEventState(nextZombie);
@@ -2644,6 +2653,7 @@ export function useClassroomEngine() {
       if (giftId === 'heart' || giftId === 'pig' || giftId === 'vip') {
         registerStudentForPunishment(safeName, giftId);
         if (!zombieEventStateRef.current.isActive) {
+          const lockDurMs = giftId === 'vip' ? 5000 : 3000;
           const gifterStudent = pilgrimsRef.current.find(
             (p) => p.id === targetPilgrimId
           );
@@ -2651,11 +2661,11 @@ export function useClassroomEngine() {
             pilgrimId: targetPilgrimId,
             focusRole: null,
             username: gifterStudent?.username || safeName,
-            reason: 'gift',
+            reason: giftId === 'vip' ? 'special_gift' : 'gift',
             isBot: gifterStudent?.isBot,
             startedAt: now,
-            until: now + 3000,
-            lockedUntil: now + 3000,
+            until: now + lockDurMs,
+            lockedUntil: now + lockDurMs,
           });
         }
       }
@@ -3086,7 +3096,13 @@ export function useClassroomEngine() {
       const zEnt = zombieEntityRef.current;
       const targetX = zEnt.x + (Math.random() - 0.5) * 18;
       const targetY = zEnt.y - 42 + (Math.random() - 0.5) * 16;
-      const durationMs = opts.kind === 'desk_mate' ? 920 : opts.kind === 'chair' ? 430 : 380;
+      // Giảm tốc độ bay của tất cả các loại đạn bắn Zombie đi 20% (thời gian bay tăng x1.25)
+      const durationMs =
+        opts.kind === 'desk_mate'
+          ? 1150
+          : opts.kind === 'chair'
+          ? 690
+          : 475;
       const now = Date.now();
 
       // Khi ném "Đứa bàn bên" (desk_mate): Tìm bạn ngồi cùng bàn đôi (hoặc bạn kế bên) để copy Thẻ Tên gắn dính vào model đạn xoay theo đạn
@@ -3228,7 +3244,11 @@ export function useClassroomEngine() {
         if (!curEv.isActive || curEv.phase !== 'z_flow_5_combat') return;
 
         const cfgNow = configRef.current;
-        soundEngine.playZombieHitSfx(opts.kind, cfgNow.ttsVolume || 1);
+        const hitVol = Math.max(
+          0.65,
+          cfgNow.giftSoundVolume ?? cfgNow.ttsVolume ?? 1
+        );
+        soundEngine.playZombieHitSfx(opts.kind, hitVol);
 
         // 1. Giật lùi (recoil) cực nhanh rồi trở về vị trí đứng ngay trong vòng lặp 60FPS
         const recoilStrength =
@@ -8468,7 +8488,9 @@ export function useClassroomEngine() {
           ],
           cfg
         );
-        const dur6 = enqueued6 ? Math.max(24000, minDur6Ms + 8000) : Math.max(4500, minDur6Ms + 2500);
+        const dur6 = enqueued6
+          ? Math.max(60000, minDur6Ms + 45000)
+          : Math.max(5500, minDur6Ms + 2500);
 
         const state6: ZombieEventRuntimeState = {
           ...prev,
@@ -8476,6 +8498,7 @@ export function useClassroomEngine() {
           topDamagers: topList,
           activeFlowToken: flowToken6,
           ttsFinishedForPhase: !enqueued6,
+          ttsFinishedAtElapsedMs: !enqueued6 ? 0 : undefined,
           elapsedPhaseMs: 0,
           timeLeftMs: dur6,
           totalDurationMs: dur6,
@@ -8498,8 +8521,19 @@ export function useClassroomEngine() {
           1000,
           Math.round((cfg.zombieFlow6MinDurationSec ?? 4.5) * 1000)
         );
+        const stillPendingTts6 =
+          Boolean(prev.activeFlowToken) &&
+          soundEngine.hasPendingFlowToken(prev.activeFlowToken);
+        const postTtsElapsed6 =
+          prev.ttsFinishedForPhase &&
+          typeof prev.ttsFinishedAtElapsedMs === 'number'
+            ? nextElapsed - prev.ttsFinishedAtElapsedMs
+            : 9999;
         const done6 =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= minDur6Ms) ||
+          (!stillPendingTts6 &&
+            Boolean(prev.ttsFinishedForPhase) &&
+            nextElapsed >= minDur6Ms &&
+            postTtsElapsed6 >= 1200) ||
           nextLeft <= 0;
         if (!done6) {
           const tick6: ZombieEventRuntimeState = {

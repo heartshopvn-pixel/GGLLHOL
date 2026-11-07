@@ -26,7 +26,7 @@ export const DEFAULT_GIRL_STUDENT_STANDING_IMG =
   './assets/aistudio/girl_student_2281d561.png';
 
 export const DEFAULT_GIRL_STUDENT_SEATED_IMG =
-  './assets/aistudio/girl_student_Seated_on_Wooden_Chair.png_b39dabf8.png';
+  './assets/aistudio/girl_student_seated_wooden_chair.png?v=2';
 
 export const DEFAULT_BOY_STUDENT_STANDING_IMG =
   './assets/aistudio/boy_student_3dde846e.png';

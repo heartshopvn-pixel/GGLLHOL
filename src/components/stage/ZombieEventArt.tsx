@@ -233,7 +233,8 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
   // Quỹ đạo bay vòng cung parabol
   const curX = proj.startX + (proj.targetX - proj.startX) * progress;
   const linearY = proj.startY + (proj.targetY - proj.startY) * progress;
-  const arcHeight = proj.kind === 'desk_mate' ? 95 : proj.kind === 'chair' ? 75 : 50;
+  const arcHeight =
+    proj.kind === 'desk_mate' || proj.kind === 'chair' ? 95 : 50;
   const arcOffset = -Math.sin(progress * Math.PI) * arcHeight;
   const curY = linearY + arcOffset;
 
@@ -248,13 +249,14 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
   const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
   const tailLen = Math.min(58, Math.hypot(dx, dy) * 1.35);
 
-  const spinDeg = progress * (proj.kind === 'desk_mate' ? 1080 : 720);
+  const spinDeg =
+    progress * (proj.kind === 'desk_mate' || proj.kind === 'chair' ? 1080 : 720);
 
   const tailColor =
     proj.kind === 'desk_mate'
       ? 'from-fuchsia-500/85 via-amber-300/60 to-transparent'
       : proj.kind === 'chair'
-      ? 'from-orange-500/85 via-amber-300/50 to-transparent'
+      ? 'from-orange-500/90 via-amber-300/65 to-transparent'
       : proj.kind === 'book'
       ? 'from-sky-400/80 via-cyan-200/40 to-transparent'
       : 'from-yellow-300/80 via-amber-200/40 to-transparent';
@@ -314,18 +316,114 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
         return (
           <img
             src={customAssets.projChairUrl}
-            alt="Đạn quà 5 xu"
-            className="w-11 h-11 object-contain"
+            alt="Đạn ghế gỗ 5 xu"
+            className="w-15 h-15 object-contain"
           />
         );
       }
+      // Đạn hình Cái Ghế Gỗ học sinh kích thước lớn (60x60px) xoay vòng mạnh mẽ như ném đứa bàn bên
       return (
-        <SchoolGiftArt
-          type={(proj.giftId || 'heart') as OfferingGiftType}
-          customAssets={customAssets}
-          size="md"
-          className="w-11 h-11 object-contain"
-        />
+        <div className="relative w-15 h-15 flex items-center justify-center">
+          <svg
+            width="58"
+            height="58"
+            viewBox="0 0 64 64"
+            fill="none"
+            className="drop-shadow-[0_4px_10px_rgba(249,115,22,0.65)]"
+          >
+            {/* Hai chân sau kiêm trụ tựa lưng ghế gỗ */}
+            <rect
+              x="14"
+              y="6"
+              width="6"
+              height="52"
+              rx="2"
+              fill="#B45309"
+              stroke="#451A03"
+              strokeWidth="2.4"
+            />
+            <rect
+              x="44"
+              y="6"
+              width="6"
+              height="52"
+              rx="2"
+              fill="#B45309"
+              stroke="#451A03"
+              strokeWidth="2.4"
+            />
+            {/* Nan tựa lưng trên & giữa */}
+            <rect
+              x="16"
+              y="10"
+              width="32"
+              height="8"
+              rx="2"
+              fill="#D97706"
+              stroke="#451A03"
+              strokeWidth="2.4"
+            />
+            <rect
+              x="16"
+              y="22"
+              width="32"
+              height="6"
+              rx="1.5"
+              fill="#F59E0B"
+              stroke="#451A03"
+              strokeWidth="2.2"
+            />
+            {/* Mặt ghế gỗ dày bản rộng */}
+            <polygon
+              points="10,34 54,34 58,42 6,42"
+              fill="#F59E0B"
+              stroke="#451A03"
+              strokeWidth="2.6"
+              strokeLinejoin="round"
+            />
+            <rect
+              x="8"
+              y="41"
+              width="48"
+              height="5"
+              rx="1.5"
+              fill="#92400E"
+              stroke="#451A03"
+              strokeWidth="2.2"
+            />
+            {/* Hai chân ghế phía trước + thanh giằng ngang */}
+            <rect
+              x="10"
+              y="45"
+              width="6.5"
+              height="15"
+              rx="2"
+              fill="#D97706"
+              stroke="#451A03"
+              strokeWidth="2.4"
+            />
+            <rect
+              x="47.5"
+              y="45"
+              width="6.5"
+              height="15"
+              rx="2"
+              fill="#D97706"
+              stroke="#451A03"
+              strokeWidth="2.4"
+            />
+            <rect
+              x="15"
+              y="51"
+              width="34"
+              height="4"
+              rx="1"
+              fill="#92400E"
+              stroke="#451A03"
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
       );
     }
 
@@ -414,7 +512,8 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
           right: 0,
           top: 0,
           width: `${tailLen}px`,
-          height: proj.kind === 'desk_mate' ? '12px' : proj.kind === 'chair' ? '9px' : '6px',
+          height:
+            proj.kind === 'desk_mate' || proj.kind === 'chair' ? '12px' : '6px',
           transformOrigin: '100% 50%',
           transform: `translateY(-50%) rotate(${angleDeg}deg)`,
         }}

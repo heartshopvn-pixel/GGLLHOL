@@ -1078,6 +1078,79 @@ class TempleSoundService {
   }
 
   /**
+   * Âm thanh Chiến Thắng Lớn (Grand Victory Fanfare) mở màn hoành tráng trước khi phát âm thanh VIP 10+
+   * Trả về tổng thời lượng fanfare (ms) để nối tiếp mượt mà sang file âm thanh người dùng upload.
+   */
+  public playGrandVictoryFanfare(volume: number): number {
+    try {
+      this.initCtx();
+      if (!this.ctx) return 0;
+      const now = this.ctx.currentTime;
+      const safeVol = Math.max(0.01, Math.min(1, volume));
+
+      // Hợp âm kèn đồng & chuông chiến thắng lớn (C5 - E5 - G5 - C6 - E6 + Hòa âm quãng 5)
+      const victoryNotes: Array<{
+        freq: number;
+        harmony: number;
+        offset: number;
+        dur: number;
+        gainScale: number;
+      }> = [
+        { freq: 523.25, harmony: 392.0, offset: 0.0, dur: 0.14, gainScale: 0.28 },
+        { freq: 523.25, harmony: 392.0, offset: 0.13, dur: 0.14, gainScale: 0.3 },
+        { freq: 523.25, harmony: 392.0, offset: 0.26, dur: 0.14, gainScale: 0.32 },
+        { freq: 659.25, harmony: 523.25, offset: 0.4, dur: 0.26, gainScale: 0.35 },
+        { freq: 783.99, harmony: 587.33, offset: 0.64, dur: 0.24, gainScale: 0.36 },
+        { freq: 1046.5, harmony: 783.99, offset: 0.86, dur: 0.55, gainScale: 0.42 },
+      ];
+
+      victoryNotes.forEach((n) => {
+        if (!this.ctx) return;
+        const start = now + n.offset;
+        const lead = this.ctx.createOscillator();
+        const brass = this.ctx.createOscillator();
+        const shimmer = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        lead.type = 'triangle';
+        brass.type = 'sawtooth';
+        shimmer.type = 'sine';
+
+        lead.frequency.setValueAtTime(n.freq, start);
+        brass.frequency.setValueAtTime(n.harmony, start);
+        shimmer.frequency.setValueAtTime(n.freq * 2, start);
+
+        const brassGain = this.ctx.createGain();
+        brassGain.gain.setValueAtTime(0.35, start);
+        const shimmerGain = this.ctx.createGain();
+        shimmerGain.gain.setValueAtTime(0.22, start);
+
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.linearRampToValueAtTime(n.gainScale * safeVol, start + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0008, start + n.dur);
+
+        lead.connect(gain);
+        brass.connect(brassGain);
+        brassGain.connect(gain);
+        shimmer.connect(shimmerGain);
+        shimmerGain.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        lead.start(start);
+        brass.start(start);
+        shimmer.start(start);
+        lead.stop(start + n.dur + 0.03);
+        brass.stop(start + n.dur + 0.03);
+        shimmer.stop(start + n.dur + 0.03);
+      });
+
+      return 1180;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
    * Phát âm thanh tương ứng với từng món quà trong lớp học (hỗ trợ chèn file MP3 riêng hoặc dùng synth mặc định hợp lý)
    */
   public playGiftEventSound(
@@ -1098,6 +1171,25 @@ class TempleSoundService {
     if (volume <= 0.005) return;
 
     const customMp3 = cfg?.giftSoundMp3Urls?.[giftId];
+
+    // Riêng quà VIP 10+: Luôn phát âm thanh Chiến Thắng Lớn mở màn trước, sau đó mới phát âm thanh người dùng upload (nếu có)
+    if (giftId === 'vip') {
+      const fanfareDurationMs = this.playGrandVictoryFanfare(volume);
+      if (customMp3) {
+        window.setTimeout(() => {
+          if (this.localTabMuted) return;
+          try {
+            const audio = new Audio(customMp3);
+            audio.volume = volume;
+            audio.play().catch(() => {});
+          } catch {
+            // Ignore audio playback errors
+          }
+        }, Math.max(0, fanfareDurationMs));
+      }
+      return;
+    }
+
     if (customMp3) {
       try {
         const audio = new Audio(customMp3);
@@ -1221,31 +1313,6 @@ class TempleSoundService {
         });
         return;
       }
-
-      // Mặc định cho 'vip' (Tôi là Rich Kid): Kèn Fanfare + Tiếng mưa tiền leng keng
-      const fanfare = [523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98];
-      fanfare.forEach((freq, idx) => {
-        if (!this.ctx) return;
-        const start = now + idx * 0.07;
-        const dur = idx === fanfare.length - 1 ? 0.65 : 0.22;
-        const osc = this.ctx.createOscillator();
-        const sub = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'triangle';
-        sub.type = 'sine';
-        osc.frequency.setValueAtTime(freq, start);
-        sub.frequency.setValueAtTime(freq * 1.5, start);
-        gain.gain.setValueAtTime(0.001, start);
-        gain.gain.linearRampToValueAtTime(0.28 * volume, start + 0.015);
-        gain.gain.exponentialRampToValueAtTime(0.0008, start + dur);
-        osc.connect(gain);
-        sub.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start(start);
-        sub.start(start);
-        osc.stop(start + dur + 0.02);
-        sub.stop(start + dur + 0.02);
-      });
     } catch {
       // Ignore audio unlock errors
     }
@@ -1411,6 +1478,9 @@ class TempleSoundService {
   /**
    * Phát hiệu ứng âm thanh gọn nhẹ khi đạn (Hộp bút, Sách, Ghế, Đứa bàn bên) đập trúng Zombie
    */
+  /**
+   * Âm thanh khi Zombie bị trúng đạn: Tiếng va chạm mạnh (Impact Thud/Crunch) kết hợp tiếng Zombie rên/gầm đau đớn
+   */
   public playZombieHitSfx(
     kind: 'pencil_case' | 'book' | 'chair' | 'desk_mate',
     volume = 1.0
@@ -1420,74 +1490,120 @@ class TempleSoundService {
       this.initCtx();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
-      const safeVol = Math.max(0.04, Math.min(1, volume));
+      const safeVol = Math.max(0.08, Math.min(1, volume));
 
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      // 1. Tiếng va đập vật lý (Impact Thud) theo độ nặng của từng loại đạn
+      const impactOsc = this.ctx.createOscillator();
+      const impactGain = this.ctx.createGain();
+      const crunchOsc = this.ctx.createOscillator();
+      const crunchGain = this.ctx.createGain();
 
       if (kind === 'pencil_case') {
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(520, now);
-        osc.frequency.exponentialRampToValueAtTime(160, now + 0.065);
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(0.16 * safeVol, now + 0.006);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.08);
-        return;
+        impactOsc.type = 'triangle';
+        impactOsc.frequency.setValueAtTime(420, now);
+        impactOsc.frequency.exponentialRampToValueAtTime(95, now + 0.11);
+        impactGain.gain.setValueAtTime(0.001, now);
+        impactGain.gain.linearRampToValueAtTime(0.32 * safeVol, now + 0.006);
+        impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+        crunchOsc.type = 'square';
+        crunchOsc.frequency.setValueAtTime(780, now);
+        crunchOsc.frequency.exponentialRampToValueAtTime(180, now + 0.065);
+        crunchGain.gain.setValueAtTime(0.001, now);
+        crunchGain.gain.linearRampToValueAtTime(0.16 * safeVol, now + 0.005);
+        crunchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+      } else if (kind === 'book') {
+        impactOsc.type = 'square';
+        impactOsc.frequency.setValueAtTime(310, now);
+        impactOsc.frequency.exponentialRampToValueAtTime(75, now + 0.14);
+        impactGain.gain.setValueAtTime(0.001, now);
+        impactGain.gain.linearRampToValueAtTime(0.38 * safeVol, now + 0.008);
+        impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+        crunchOsc.type = 'sawtooth';
+        crunchOsc.frequency.setValueAtTime(520, now);
+        crunchOsc.frequency.exponentialRampToValueAtTime(120, now + 0.09);
+        crunchGain.gain.setValueAtTime(0.001, now);
+        crunchGain.gain.linearRampToValueAtTime(0.22 * safeVol, now + 0.006);
+        crunchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      } else if (kind === 'chair') {
+        // Đạn cái ghế gỗ (5 xu): Tiếng đập gỗ trầm nặng + rung chấn mạnh
+        impactOsc.type = 'sawtooth';
+        impactOsc.frequency.setValueAtTime(260, now);
+        impactOsc.frequency.exponentialRampToValueAtTime(52, now + 0.2);
+        impactGain.gain.setValueAtTime(0.001, now);
+        impactGain.gain.linearRampToValueAtTime(0.46 * safeVol, now + 0.01);
+        impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.21);
+
+        crunchOsc.type = 'square';
+        crunchOsc.frequency.setValueAtTime(480, now);
+        crunchOsc.frequency.exponentialRampToValueAtTime(88, now + 0.15);
+        crunchGain.gain.setValueAtTime(0.001, now);
+        crunchGain.gain.linearRampToValueAtTime(0.28 * safeVol, now + 0.008);
+        crunchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      } else {
+        // 'desk_mate' (Ném đứa bàn bên): Cú nổ va chạm cực mạnh + âm bồi vui nhộn
+        impactOsc.type = 'sawtooth';
+        impactOsc.frequency.setValueAtTime(320, now);
+        impactOsc.frequency.exponentialRampToValueAtTime(45, now + 0.24);
+        impactGain.gain.setValueAtTime(0.001, now);
+        impactGain.gain.linearRampToValueAtTime(0.52 * safeVol, now + 0.012);
+        impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+        crunchOsc.type = 'sine';
+        crunchOsc.frequency.setValueAtTime(680, now);
+        crunchOsc.frequency.linearRampToValueAtTime(980, now + 0.09);
+        crunchOsc.frequency.exponentialRampToValueAtTime(210, now + 0.22);
+        crunchGain.gain.setValueAtTime(0.001, now);
+        crunchGain.gain.linearRampToValueAtTime(0.32 * safeVol, now + 0.01);
+        crunchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
       }
 
-      if (kind === 'book') {
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(340, now);
-        osc.frequency.exponentialRampToValueAtTime(110, now + 0.09);
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(0.22 * safeVol, now + 0.008);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.11);
-        return;
-      }
+      impactOsc.connect(impactGain);
+      impactGain.connect(this.ctx.destination);
+      crunchOsc.connect(crunchGain);
+      crunchGain.connect(this.ctx.destination);
 
-      if (kind === 'chair') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(240, now);
-        osc.frequency.exponentialRampToValueAtTime(65, now + 0.14);
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(0.28 * safeVol, now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.16);
-        return;
-      }
+      impactOsc.start(now);
+      crunchOsc.start(now);
+      impactOsc.stop(now + 0.26);
+      crunchOsc.stop(now + 0.26);
 
-      // 'desk_mate' (Ném đứa bàn bên - meme): Bốp + chuông vui nhộn
-      const sub = this.ctx.createOscillator();
-      osc.type = 'sawtooth';
-      sub.type = 'sine';
-      osc.frequency.setValueAtTime(310, now);
-      osc.frequency.exponentialRampToValueAtTime(55, now + 0.18);
-      sub.frequency.setValueAtTime(680, now);
-      sub.frequency.linearRampToValueAtTime(980, now + 0.09);
-      sub.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+      // 2. Tiếng Zombie gầm nhẹ / trúng đòn ("Ughh!") trầm khàn nối tiếp ngay sau cú va chạm (trễ 25ms)
+      const groanStart = now + 0.025;
+      const groanDur = kind === 'desk_mate' || kind === 'chair' ? 0.22 : 0.15;
+      const groanOsc = this.ctx.createOscillator();
+      const groanSub = this.ctx.createOscillator();
+      const groanFilter = this.ctx.createBiquadFilter();
+      const groanGain = this.ctx.createGain();
 
-      gain.gain.setValueAtTime(0.001, now);
-      gain.gain.linearRampToValueAtTime(0.32 * safeVol, now + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.21);
+      groanOsc.type = 'sawtooth';
+      groanSub.type = 'triangle';
+      const basePitch = 148 + ((Math.random() - 0.5) * 24);
+      groanOsc.frequency.setValueAtTime(basePitch, groanStart);
+      groanOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.52, groanStart + groanDur);
+      groanSub.frequency.setValueAtTime(basePitch * 0.5, groanStart);
+      groanSub.frequency.exponentialRampToValueAtTime(basePitch * 0.28, groanStart + groanDur);
 
-      osc.connect(gain);
-      sub.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(now);
-      sub.start(now);
-      osc.stop(now + 0.22);
-      sub.stop(now + 0.22);
+      groanFilter.type = 'bandpass';
+      groanFilter.frequency.setValueAtTime(340, groanStart);
+      groanFilter.Q.setValueAtTime(2.2, groanStart);
+
+      const groanScale =
+        kind === 'desk_mate' ? 0.38 : kind === 'chair' ? 0.32 : 0.24;
+      groanGain.gain.setValueAtTime(0.001, groanStart);
+      groanGain.gain.linearRampToValueAtTime(groanScale * safeVol, groanStart + 0.02);
+      groanGain.gain.exponentialRampToValueAtTime(0.001, groanStart + groanDur);
+
+      groanOsc.connect(groanFilter);
+      groanSub.connect(groanFilter);
+      groanFilter.connect(groanGain);
+      groanGain.connect(this.ctx.destination);
+
+      groanOsc.start(groanStart);
+      groanSub.start(groanStart);
+      groanOsc.stop(groanStart + groanDur + 0.02);
+      groanSub.stop(groanStart + groanDur + 0.02);
     } catch {
       // Ignore
     }
@@ -1637,20 +1753,27 @@ class TempleSoundService {
       meta,
     };
 
-    // Khi hàng chờ đạt giới hạn (mặc định 30) thì xóa các bình luận thường cũ (giữ lại các lượt Chủ Phòng & dâng lễ ưu tiên đang chờ)
+    // Khi hàng chờ đạt giới hạn (mặc định 30) thì xóa các bình luận thường cũ (giữ lại các lượt Chủ Phòng, Luồng Tiết Học/Sự Kiện & dâng lễ ưu tiên đang chờ)
     const maxQueueSize = Math.max(1, Math.min(200, config.maxTtsQueueSize ?? 30));
     if (this.ttsQueue.length >= maxQueueSize) {
       this.ttsQueue = this.ttsQueue.filter(
         (item) =>
           item.isHostLive ||
+          Boolean(item.meta?.lessonFlowToken) ||
+          Boolean(item.meta?.lessonStepLabel) ||
           item.meta?.reason === 'gift' ||
           item.meta?.reason === 'special_gift'
       );
     }
 
     if (isPriority) {
-      // Đẩy lên đầu hàng chờ nhưng đứng sau các câu Live Text của Chủ Phòng và xếp theo thứ tự giữa các câu ưu tiên
-      const firstNonPriorityIdx = this.ttsQueue.findIndex((q) => !q.isPriority);
+      // Đẩy lên đầu hàng chờ nhưng đứng sau các câu Live Text của Chủ Phòng, các câu Luồng Tiết Học/Sự Kiện và xếp theo thứ tự giữa các câu ưu tiên
+      const firstNonPriorityIdx = this.ttsQueue.findIndex(
+        (q) =>
+          !q.isPriority &&
+          !q.meta?.lessonFlowToken &&
+          !q.meta?.lessonStepLabel
+      );
       if (firstNonPriorityIdx === -1) {
         this.ttsQueue.push(queueItem);
       } else {
@@ -1676,9 +1799,66 @@ class TempleSoundService {
   }
 
   /**
+   * Kiểm tra xem một lessonFlowToken còn đang nằm trong câu đang đọc hoặc trong hàng đợi TTS hay không
+   */
+  public hasPendingFlowToken(token?: string): boolean {
+    if (!token) return false;
+    if (this.activeEventItem?.meta?.lessonFlowToken === token) {
+      return true;
+    }
+    return this.ttsQueue.some((q) => q.meta?.lessonFlowToken === token);
+  }
+
+  /**
+   * Tách câu dài (> 175 ký tự) theo dấu câu hoặc khoảng trắng để không bao giờ bị cắt cụt ở giới hạn 195 ký tự của stream TTS
+   */
+  private splitLongLessonText(rawText: string, maxLen = 175): string[] {
+    const clean = (rawText || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+    if (clean.length <= maxLen) return [clean];
+
+    const clauses = clean
+      .split(/(?<=[.!?।,;:])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const chunks: string[] = [];
+    let current = '';
+
+    const pushWords = (segment: string) => {
+      const words = segment.split(/\s+/).filter(Boolean);
+      for (const w of words) {
+        const candidate = current ? `${current} ${w}` : w;
+        if (candidate.length <= maxLen) {
+          current = candidate;
+        } else {
+          if (current) chunks.push(current);
+          current = w;
+        }
+      }
+    };
+
+    for (const clause of clauses) {
+      if (clause.length > maxLen) {
+        pushWords(clause);
+        continue;
+      }
+      const candidate = current ? `${current} ${clause}` : clause;
+      if (candidate.length <= maxLen) {
+        current = candidate;
+      } else {
+        if (current) chunks.push(current);
+        current = clause;
+      }
+    }
+    if (current) chunks.push(current);
+    return chunks.length > 0 ? chunks : [clean];
+  }
+
+  /**
    * Đưa câu đọc của Cô Giáo thuộc Luồng Tiết Học (Luồng 0 -> 6) vào đầu Hàng Chờ Đọc Sự Kiện:
    * - Xóa các câu luồng tiết học cũ chưa kịp đọc (nếu có) để không bao giờ bị trễ pha.
-   * - Đặt ngay đầu hàng chờ (chỉ sau Live Text của Chủ Phòng) và nếu đang đọc dở bình luận thường của học sinh thì ngắt nhẹ để Cô Giáo đọc ngay đúng nhịp bảng lớp.
+   * - Tự động tách câu dài (> 175 ký tự) thành các vế nối tiếp và gắn lessonFlowToken vào vế cuối cùng để Cô Giáo đọc trọn vẹn 100% câu vinh danh dài trước khi chuyển luồng.
    */
   public enqueueLessonFlowItems(
     items: Array<{
@@ -1693,13 +1873,28 @@ class TempleSoundService {
     this.latestConfig = config;
     if (!config.ttsEnabled) return false;
 
-    const validItems = items
-      .map((it) => ({
-        ...it,
-        text: (it.text || '').replace(/\s+/g, ' ').trim(),
-      }))
-      .filter((it) => Boolean(it.text));
-    if (validItems.length === 0) return false;
+    const expandedItems: Array<{
+      text: string;
+      lang?: 'vi' | 'en';
+      lessonFlowToken?: string;
+      lessonStepLabel?: string;
+      speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
+    }> = [];
+
+    for (const rawIt of items) {
+      const chunks = this.splitLongLessonText(rawIt.text, 175);
+      chunks.forEach((chunkText, chunkIdx) => {
+        const isLastChunk = chunkIdx === chunks.length - 1;
+        expandedItems.push({
+          ...rawIt,
+          text: chunkText,
+          // Chỉ gắn lessonFlowToken ở đúng vế cuối cùng để chỉ báo hoàn tất sau khi đọc hết toàn bộ câu
+          lessonFlowToken: isLastChunk ? rawIt.lessonFlowToken : undefined,
+        });
+      });
+    }
+
+    if (expandedItems.length === 0) return false;
 
     // Dọn các câu thuộc luồng tiết học cũ còn tồn trong hàng chờ
     this.ttsQueue = this.ttsQueue.filter(
@@ -1707,7 +1902,7 @@ class TempleSoundService {
     );
 
     const now = Date.now();
-    const queueEntries: TTSQueueItem[] = validItems.map((it, idx) => ({
+    const queueEntries: TTSQueueItem[] = expandedItems.map((it, idx) => ({
       id: `lesson_tts_${now}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
       text: it.text,
       isPriority: true,
@@ -1737,14 +1932,18 @@ class TempleSoundService {
       this.dharmaNextTimer = null;
     }
 
-    // Nếu đang đọc thuyết pháp hoặc đang đọc bình luận thường của học sinh (không phải quà tặng / Host Live) -> ngắt để Cô Giáo điều khiển luồng bảng lớp ngay lập tức
+    const isZombieFlow6 = expandedItems.some((it) =>
+      (it.lessonStepLabel || '').includes('Luồng 6')
+    );
+
+    // Nếu đang đọc thuyết pháp hoặc đang đọc bình luận thường của học sinh (hoặc khi vào Luồng 6 vinh danh Zombie cần đọc ngay) -> ngắt để Cô Giáo điều khiển luồng bảng lớp ngay lập tức
     const activeReason = this.activeEventItem?.meta?.reason;
     const isInterruptibleActive =
       this.isSpeakingDharma ||
       (this.isSpeaking &&
         !this.activeEventItem?.isHostLive &&
-        activeReason !== 'gift' &&
-        activeReason !== 'special_gift');
+        (isZombieFlow6 ||
+          (activeReason !== 'gift' && activeReason !== 'special_gift')));
 
     if (isInterruptibleActive) {
       const interruptedItem = this.activeEventItem;

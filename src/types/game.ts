@@ -157,6 +157,7 @@ export interface ZombieEventRuntimeState {
   topDamagers: ZombieDamageEntry[];
   activeFlowToken?: string;
   ttsFinishedForPhase?: boolean;
+  ttsFinishedAtElapsedMs?: number;
   elapsedPhaseMs?: number;
   timeLeftMs: number;
   totalDurationMs: number;

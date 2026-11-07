@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const CACHE_VERSION = 'v6_baked_male_back_walk';
+const CACHE_VERSION = 'v7_girl_student_seated_chair';
 const processedCache = new Map<string, string[]>();
 const pendingPromises = new Map<string, Promise<string[]>>();
 
@@ -13,21 +13,33 @@ const BAKED_STATIC_FRAMES: Record<string, string[]> = {
   // Khách Nữ (10 frames: 0..9)
   './assets/aistudio/baked/pilgrim_female_strip.png': Array.from(
     { length: 10 },
-    (_, i) => `./assets/aistudio/baked/pilgrim_female_f${i}.png`
+    (_, i) =>
+      i === 5 || i === 6
+        ? './assets/aistudio/girl_student_seated_wooden_chair.png?v=2'
+        : `./assets/aistudio/baked/pilgrim_female_f${i}.png?v=2`
   ),
   '/assets/aistudio/baked/pilgrim_female_strip.png': Array.from(
     { length: 10 },
-    (_, i) => `./assets/aistudio/baked/pilgrim_female_f${i}.png`
+    (_, i) =>
+      i === 5 || i === 6
+        ? './assets/aistudio/girl_student_seated_wooden_chair.png?v=2'
+        : `./assets/aistudio/baked/pilgrim_female_f${i}.png?v=2`
   ),
   './assets/aistudio/Sprite_sheet_nh_n_v_t_n__-_ng__i_v_o_ch_a_6dcec4d1.png':
     Array.from(
       { length: 10 },
-      (_, i) => `./assets/aistudio/baked/pilgrim_female_f${i}.png`
+      (_, i) =>
+        i === 5 || i === 6
+          ? './assets/aistudio/girl_student_seated_wooden_chair.png?v=2'
+          : `./assets/aistudio/baked/pilgrim_female_f${i}.png?v=2`
     ),
   '/assets/aistudio/Sprite_sheet_nh_n_v_t_n__-_ng__i_v_o_ch_a_6dcec4d1.png':
     Array.from(
       { length: 10 },
-      (_, i) => `./assets/aistudio/baked/pilgrim_female_f${i}.png`
+      (_, i) =>
+        i === 5 || i === 6
+          ? './assets/aistudio/girl_student_seated_wooden_chair.png?v=2'
+          : `./assets/aistudio/baked/pilgrim_female_f${i}.png?v=2`
     ),
 
   // Khách Nam (10 frames: 0..9)

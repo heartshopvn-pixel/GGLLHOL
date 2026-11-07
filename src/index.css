@@ -457,3 +457,31 @@
   will-change: opacity;
 }
 
+/* Hiệu ứng ánh sáng môi trường Battle khi chiến đấu Zombie: tối dần rồi sáng lên nhịp nhàng tạo cảm giác kịch tính */
+@keyframes zombieBattleAtmospherePulse {
+  0%, 100% {
+    opacity: 0.16;
+    background: radial-gradient(
+      circle at 50% 54%,
+      rgba(16, 185, 129, 0.06) 0%,
+      rgba(15, 23, 42, 0.42) 56%,
+      rgba(2, 6, 23, 0.78) 100%
+    );
+  }
+  50% {
+    opacity: 0.78;
+    background: radial-gradient(
+      circle at 50% 54%,
+      rgba(220, 38, 38, 0.18) 0%,
+      rgba(15, 23, 42, 0.72) 52%,
+      rgba(2, 6, 23, 0.94) 100%
+    );
+  }
+}
+
+.zombie-battle-lighting {
+  animation: zombieBattleAtmospherePulse 3.2s ease-in-out infinite;
+  will-change: opacity;
+}
+
+

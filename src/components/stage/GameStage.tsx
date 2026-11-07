@@ -462,7 +462,11 @@ export const GameStage: React.FC<GameStageProps> = ({
     lastCamStepMsRef.current = now;
 
     const st = fxStateRef.current;
-    const isFocusTimeValid = Date.now() < st.cameraFocus.until;
+    const focusEndMs = Math.max(
+      st.cameraFocus.until || 0,
+      st.cameraFocus.lockedUntil || 0
+    );
+    const isFocusTimeValid = Date.now() < focusEndMs;
     const focusRole = isFocusTimeValid ? st.cameraFocus.focusRole : null;
     const isPilgrimFocusValid =
       Boolean(st.cameraFocus.pilgrimId) && isFocusTimeValid;
@@ -1395,10 +1399,11 @@ export const GameStage: React.FC<GameStageProps> = ({
         {/* Lớp Bàn Học, Học Sinh & Giáo Viên chung một mặt phẳng xếp lớp 2.5D Depth Y-Sorting (z-25 > classBoardBox z-20) */}
         <div
           ref={worldCameraTeacherOverlayRef}
-          className="absolute inset-0 pointer-events-none z-25 will-change-transform"
+          className="absolute inset-0 pointer-events-none will-change-transform"
           style={{
             transformOrigin: '270px 480px',
             transform: 'scale(1) translate(0px, 0px)',
+            zIndex: 25,
           }}
         >
           <ClassroomArt
@@ -1747,6 +1752,22 @@ export const GameStage: React.FC<GameStageProps> = ({
             />
           ))}
         </div>
+
+        {/* Hiệu ứng ánh sáng môi trường Battle (tối dần rồi sáng lên nhịp nhàng + chớp đỏ khi Zombie trúng đạn) */}
+        {zombieEventState?.isActive &&
+          zombieEventState.phase !== 'idle' &&
+          zombieEventState.phase !== 'z_flow_6_celebration' && (
+            <div
+              className="absolute inset-0 pointer-events-none zombie-battle-lighting"
+              style={{
+                zIndex: 27,
+                boxShadow:
+                  zombieEntity && Date.now() < (zombieEntity.hitFlashUntil || 0)
+                    ? 'inset 0 0 65px rgba(239, 68, 68, 0.55)'
+                    : 'inset 0 0 48px rgba(0, 0, 0, 0.65)',
+              }}
+            />
+          )}
 
         {/* Hiệu ứng khung viền khi đang khóa Camera Zoom vào học sinh */}
         {focusedPilgrim && cameraFocus.reason === 'special_gift' && (
@@ -2301,6 +2322,7 @@ export const GameStage: React.FC<GameStageProps> = ({
           hudLayout={config.hudLayout}
           classBoardState={classBoardState}
           zombieEventState={zombieEventState}
+          cameraFocus={cameraFocus}
           customAssets={customAssets}
           lotusDonors={lotusDonors}
           dailyRecords={dailyRecords}

@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  CameraFocusState,
   ClassBoardQuizWinner,
   ClassBoardRuntimeState,
   CustomAssetsConfig,
@@ -50,6 +51,7 @@ interface StageHudProps {
   hudLayout: HudLayoutConfig;
   classBoardState?: ClassBoardRuntimeState;
   zombieEventState?: ZombieEventRuntimeState;
+  cameraFocus?: CameraFocusState;
   pilgrims?: PilgrimData[];
   waitingQueue?: Array<QueuedPilgrimRequest | WaitingQueueItem>;
   queueCount?: number;
@@ -292,6 +294,7 @@ export const StageHud: React.FC<StageHudProps> = ({
   hudLayout,
   classBoardState,
   zombieEventState,
+  cameraFocus,
   pilgrims = [],
   waitingQueue = [],
   queueCount,
@@ -840,6 +843,37 @@ export const StageHud: React.FC<StageHudProps> = ({
   const isZombieEventActive = Boolean(
     zombieEventState?.isActive && zombieEventState.phase !== 'idle'
   );
+
+  const [, setCameraTick] = useState(0);
+  const cameraLockEndMs = cameraFocus
+    ? Math.max(cameraFocus.until || 0, cameraFocus.lockedUntil || 0)
+    : 0;
+
+  useEffect(() => {
+    if (!cameraLockEndMs) return;
+    const remainingMs = cameraLockEndMs - Date.now();
+    if (remainingMs <= 0) return;
+    const timer = window.setTimeout(() => {
+      setCameraTick((t) => t + 1);
+    }, remainingMs + 25);
+    return () => window.clearTimeout(timer);
+  }, [cameraLockEndMs]);
+
+  const isCameraLocked =
+    !editLayoutMode &&
+    Boolean(
+      cameraFocus &&
+        (cameraFocus.pilgrimId || cameraFocus.focusRole) &&
+        Date.now() < cameraLockEndMs
+    );
+
+  // Khi có học sinh đang đi lên hoặc đứng chịu phạt trên lớp -> tạm ẩn Bảng Tin Lớp cho tới khi hàng phạt trống hoàn toàn
+  const hasPunishedStudentsOnStage =
+    !editLayoutMode &&
+    pilgrims.some(
+      (p) =>
+        p.state === 'stand_punishment' || p.state === 'walk_to_punishment_spot'
+    );
 
   // Key định danh luồng hiển thị bên trong Bảng Lớp: chỉ kích hoạt fade nhẹ (0 -> 1 trong 0.25s) cho phần chữ/nội dung bên trong khi chuyển luồng, giữ nguyên khung nền bảng đen đứng yên
   const boardPhaseFadeKey = zombieEventState?.isActive
@@ -2023,17 +2057,21 @@ export const StageHud: React.FC<StageHudProps> = ({
         </div>
       )}
 
-      {/* 4. BẢNG TIN LỚP HỌC (Tạm ẩn trong khi sự kiện Zombie xảy ra, kết thúc hiện lại) */}
-      {showNoticeBoardBox && !isZombieEventActive && (
+      {/* 4. BẢNG TIN LỚP HỌC (Tạm ẩn khi sự kiện Zombie, khi khóa Camera, hoặc khi có người đứng chịu phạt trên lớp) */}
+      {showNoticeBoardBox &&
+        !isZombieEventActive &&
+        !isCameraLocked &&
+        !hasPunishedStudentsOnStage && (
         <div
           onMouseDown={(e) => editLayoutMode && onStartDragHudBox('noticeBoardBox', e)}
           onTouchStart={(e) => editLayoutMode && onStartDragHudBox('noticeBoardBox', e)}
-          className={`absolute z-30 rounded-lg border px-2.5 py-1.5 flex flex-col ${dragringClass}`}
+          className={`absolute rounded-lg border px-2.5 py-1.5 flex flex-col ${dragringClass}`}
           style={{
             left: `${safeNoticeBoardBox.x}px`,
             top: `${safeNoticeBoardBox.y}px`,
             width: `${safeNoticeBoardBox.width}px`,
             height: `${safeNoticeBoardBox.height}px`,
+            zIndex: editLayoutMode ? 55 : 45,
             ...buildBoxSurfaceStyle(opNotice),
             ...noticeBoardCycleStyle,
           }}
@@ -2076,8 +2114,8 @@ export const StageHud: React.FC<StageHudProps> = ({
         </div>
       )}
 
-      {/* 6. BẢNG HƯỚNG DẪN TƯƠNG TÁC LỚP HỌC (Tạm ẩn trong khi sự kiện Zombie xảy ra, kết thúc hiện lại) */}
-      {showGuideBox && !isZombieEventActive && (
+      {/* 6. BẢNG HƯỚNG DẪN TƯƠNG TÁC LỚP HỌC / QUÀ TẶNG (Tạm ẩn khi sự kiện Zombie hoặc khi khóa Camera) */}
+      {showGuideBox && !isZombieEventActive && !isCameraLocked && (
         <div
           onMouseDown={(e) => editLayoutMode && onStartDragHudBox('guideBox', e)}
           onTouchStart={(e) => editLayoutMode && onStartDragHudBox('guideBox', e)}
