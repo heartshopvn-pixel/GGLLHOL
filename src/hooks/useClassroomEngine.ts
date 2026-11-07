@@ -94,14 +94,52 @@ function getActiveQuizList(cfg?: GameConfig): EnglishQuizItem[] {
   return ENGLISH_QUIZ_QUESTIONS;
 }
 
+function getLessonPhaseOrder(phase: ClassBoardRuntimeState['phase']): number {
+  switch (phase) {
+    case 'lesson_start':
+      return 0;
+    case 'preparing':
+      return 1;
+    case 'asking':
+      return 2;
+    case 'answer_flash':
+      return 3;
+    case 'result_summary':
+      return 4;
+    case 'ranking_board':
+    case 'reveal':
+      return 5;
+    case 'record_notice':
+      return 6;
+    case 'punishment_notice':
+      return 7;
+    default:
+      return 0;
+  }
+}
+
 function consumeCurrentAndGetNextQuizQueue(
   cfg: GameConfig,
-  currentIdx: number
+  currentIdx: number,
+  currentQuestion?: EnglishQuizItem | null
 ): { nextQuizList: EnglishQuizItem[]; nextQuiz: EnglishQuizItem } {
   const currentList = getActiveQuizList(cfg);
   const safeIdx =
     currentList.length > 0 ? Math.max(0, currentIdx % currentList.length) : 0;
   let remaining = currentList.slice(safeIdx + 1);
+
+  const curEnLower = currentQuestion?.en?.trim().toLowerCase() || '';
+  const curId = currentQuestion?.id || '';
+  if (curEnLower || curId) {
+    while (
+      remaining.length > 0 &&
+      ((curId && remaining[0].id === curId) ||
+        (curEnLower && remaining[0].en.trim().toLowerCase() === curEnLower))
+    ) {
+      remaining = remaining.slice(1);
+    }
+  }
+
   if (remaining.length === 0) {
     const decks =
       Array.isArray(cfg.quizDecks) && cfg.quizDecks.length > 0
@@ -119,6 +157,14 @@ function consumeCurrentAndGetNextQuizQueue(
       ...q,
       id: `en-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
     }));
+    if (remaining.length > 1 && curEnLower) {
+      const filtered = remaining.filter(
+        (q) => q.en.trim().toLowerCase() !== curEnLower
+      );
+      if (filtered.length > 0) {
+        remaining = filtered;
+      }
+    }
   }
   return {
     nextQuizList: remaining,
@@ -569,6 +615,7 @@ export function useClassroomEngine() {
     return {
       engine: config.hudLayout.classBoardEngine || 'english_quiz',
       isRunning: true,
+      roundSeq: 1,
       questionIndex: 0,
       totalQuestions: quizList.length,
       currentQuestion: quizList[0],
@@ -707,6 +754,8 @@ export function useClassroomEngine() {
 
   const configRef = useRef(config);
   configRef.current = config;
+  const peerCountsRef = useRef(peerCounts);
+  peerCountsRef.current = peerCounts;
   const classBoardStateRef = useRef(classBoardState);
   classBoardStateRef.current = classBoardState;
   const zombieEventStateRef = useRef(zombieEventState);
@@ -6761,7 +6810,12 @@ export function useClassroomEngine() {
     const quizList = getActiveQuizList(config);
     setClassBoardState((prev) => {
       const safeIdx = prev.questionIndex % quizList.length;
-      const curQ = quizList[safeIdx] || quizList[0];
+      // Khi tiết học đang chạy (isRunning) và đã có currentQuestion của vòng hiện tại, giữ nguyên currentQuestion
+      // để tránh việc đồng bộ config từ Tab Điều Khiển ghi đè lại câu đầu hàng chờ lên câu đang hỏi!
+      const curQ =
+        prev.isRunning && prev.currentQuestion
+          ? prev.currentQuestion
+          : quizList[safeIdx] || quizList[0];
       const nextTotalDurationMs =
         prev.phase === 'asking' ? nextDurMs : prev.totalDurationMs;
       const nextTimeLeftMs =
@@ -6879,7 +6933,23 @@ export function useClassroomEngine() {
           nextLeft <= 0;
       }
 
-      if (!shouldAdvance) {
+      // Nếu đang mở song song Tab Điều Khiển và Màn hình Live (?obs=1 / ?view=live),
+      // hoặc tab hiện tại đang bị ẩn ở nền / tắt tiếng khi có nhiều tab kết nối:
+      // Không cho tab phụ / tab điều khiển bị trễ tự ý chuyển luồng và bắn SYNC_CLASS_BOARD_STATE đè ngược lên màn hình Live!
+      const isPureLiveTab =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('view') === 'live' ||
+          new URLSearchParams(window.location.search).get('mode') === 'live' ||
+          new URLSearchParams(window.location.search).get('obs') === '1');
+      const peersNow = peerCountsRef.current;
+      const isPassiveFollowerTab =
+        (peersNow.obsPeers > 0 && !isPureLiveTab) ||
+        (peersNow.totalPeers > 1 &&
+          ((typeof document !== 'undefined' &&
+            document.visibilityState === 'hidden') ||
+            soundEngine.isTabMuted()));
+
+      if (!shouldAdvance || isPassiveFollowerTab) {
         // Trong Luồng 2 & 3: sau 2.8s đầu đọc đề, tự động chuyển nhãn sang Luồng 3 (Đợi trả lời / Gợi ý) nếu chưa chuyển
         const nextStepNum =
           prev.phase === 'asking' &&
@@ -6896,6 +6966,7 @@ export function useClassroomEngine() {
         const idleDelayMs =
           Math.max(1, Number(cfg.lessonIdleChatDelaySec ?? 4)) * 1000;
         if (
+          !isPassiveFollowerTab &&
           prev.phase === 'asking' &&
           !prev.idleChatTriggered &&
           cfg.lessonIdleChatEnabled !== false &&
@@ -6944,7 +7015,9 @@ export function useClassroomEngine() {
 
       const quizList = getActiveQuizList(cfg);
       const curQuiz =
-        quizList[prev.questionIndex % quizList.length] || quizList[0];
+        prev.currentQuestion ||
+        quizList[prev.questionIndex % quizList.length] ||
+        quizList[0];
 
       // ============================================================================
       // CHUYỂN TỪ LUỒNG 0 (lesson_start) -> LUỒNG 1 (preparing - mặc định 3s "Chuẩn bị")
@@ -7929,12 +8002,14 @@ export function useClassroomEngine() {
         }
       }
 
-      // Qua câu hỏi mới: Xóa câu hỏi cũ vừa hỏi xong khỏi Danh sách hàng chờ câu hỏi
+      // Qua câu hỏi mới: Xóa câu hỏi cũ vừa hỏi xong khỏi Danh sách hàng chờ câu hỏi và đồng bộ sang toàn bộ các Tab
       const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
         cfg,
-        prev.questionIndex
+        prev.questionIndex,
+        prev.currentQuestion
       );
       const nextIdx = 0;
+      const nextRoundSeq = (prev.roundSeq || 1) + 1;
       configRef.current = {
         ...configRef.current,
         customQuizQuestions: nextQuizList,
@@ -7967,6 +8042,7 @@ export function useClassroomEngine() {
         const pausedForEventState: ClassBoardRuntimeState = {
           ...prev,
           isRunning: false,
+          roundSeq: nextRoundSeq,
           questionIndex: nextIdx,
           totalQuestions: nextQuizList.length,
           currentQuestion: nextQuiz,
@@ -7987,6 +8063,7 @@ export function useClassroomEngine() {
         setClassBoardState(pausedForEventState);
         syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
           state: pausedForEventState,
+          customQuizQuestions: nextQuizList,
         });
         startZombieEventFlowNow(true);
         return;
@@ -8007,6 +8084,7 @@ export function useClassroomEngine() {
 
       const nextPrepState: ClassBoardRuntimeState = {
         ...prev,
+        roundSeq: nextRoundSeq,
         questionIndex: nextIdx,
         totalQuestions: nextQuizList.length,
         currentQuestion: nextQuiz,
@@ -8028,6 +8106,7 @@ export function useClassroomEngine() {
       setClassBoardState(nextPrepState);
       syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
         state: nextPrepState,
+        customQuizQuestions: nextQuizList,
       });
     }, 100);
 
@@ -9196,15 +9275,20 @@ export function useClassroomEngine() {
           break;
         case 'UPDATE_CONFIG':
           if (p.patch) {
+            configRef.current = { ...configRef.current, ...p.patch };
             setConfig((prev) => ({ ...prev, ...p.patch }));
             if (
               Array.isArray(p.patch.customQuizQuestions) &&
               p.patch.customQuizQuestions.length > 0
             ) {
-              setClassBoardState((prev) => ({
-                ...prev,
-                totalQuestions: p.patch.customQuizQuestions.length,
-              }));
+              setClassBoardState((prev) => {
+                const updated = {
+                  ...prev,
+                  totalQuestions: p.patch.customQuizQuestions.length,
+                };
+                classBoardStateRef.current = updated;
+                return updated;
+              });
             }
           }
           break;
@@ -9328,7 +9412,35 @@ export function useClassroomEngine() {
           break;
         case 'SYNC_CLASS_BOARD_STATE':
           if (p.state) {
-            setClassBoardState(p.state);
+            const incoming = p.state as ClassBoardRuntimeState;
+            const current = classBoardStateRef.current;
+            const incRound = incoming.roundSeq ?? 1;
+            const curRound = current.roundSeq ?? 1;
+            const incOrder = getLessonPhaseOrder(incoming.phase);
+            const curOrder = getLessonPhaseOrder(current.phase);
+
+            // Chặn gói đồng bộ trễ từ tab phụ / tab nền có số vòng (roundSeq) nhỏ hơn hoặc luồng cũ hơn trong cùng vòng
+            if (
+              !p.force &&
+              (incRound < curRound ||
+                (incRound === curRound && incOrder < curOrder))
+            ) {
+              break;
+            }
+
+            if (Array.isArray(p.customQuizQuestions)) {
+              configRef.current = {
+                ...configRef.current,
+                customQuizQuestions: p.customQuizQuestions,
+              };
+              setConfig((prevCfg) => ({
+                ...prevCfg,
+                customQuizQuestions: p.customQuizQuestions,
+              }));
+            }
+
+            classBoardStateRef.current = incoming;
+            setClassBoardState(incoming);
           }
           break;
         case 'SYNC_ZOMBIE_EVENT_STATE':
@@ -9612,10 +9724,12 @@ export function useClassroomEngine() {
       );
 
       const dur0 = enqueued0 ? 14000 : 3200;
+      const nextRoundSeq = (prev.roundSeq || 1) + 1;
       const nextState: ClassBoardRuntimeState = {
         ...prev,
         engine: cfg.hudLayout.classBoardEngine || 'english_quiz',
         isRunning: true,
+        roundSeq: nextRoundSeq,
         questionIndex: safeIdx,
         totalQuestions: quizList.length,
         currentQuestion: curQuiz,
@@ -9635,7 +9749,10 @@ export function useClassroomEngine() {
       };
       classBoardStateRef.current = nextState;
       setClassBoardState(nextState);
-      syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+      syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
+        state: nextState,
+        force: true,
+      });
     } else {
       clearQuizNpcTimers();
       const stoppedState: ClassBoardRuntimeState = {
@@ -9644,7 +9761,10 @@ export function useClassroomEngine() {
       };
       classBoardStateRef.current = stoppedState;
       setClassBoardState(stoppedState);
-      syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: stoppedState });
+      syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
+        state: stoppedState,
+        force: true,
+      });
     }
   }, [clearQuizNpcTimers, getActiveQuizList]);
 
@@ -9654,9 +9774,11 @@ export function useClassroomEngine() {
     const prev = classBoardStateRef.current;
     const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
       cfg,
-      prev.questionIndex
+      prev.questionIndex,
+      prev.currentQuestion
     );
     const nextIdx = 0;
+    const nextRoundSeq = (prev.roundSeq || 1) + 1;
     configRef.current = {
       ...configRef.current,
       customQuizQuestions: nextQuizList,
@@ -9699,6 +9821,7 @@ export function useClassroomEngine() {
     const prepDurMs = 3000;
     const nextState: ClassBoardRuntimeState = {
       ...prev,
+      roundSeq: nextRoundSeq,
       questionIndex: nextIdx,
       totalQuestions: nextQuizList.length,
       currentQuestion: nextQuiz,
@@ -9717,7 +9840,11 @@ export function useClassroomEngine() {
     };
     classBoardStateRef.current = nextState;
     setClassBoardState(nextState);
-    syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+    syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
+      state: nextState,
+      customQuizQuestions: nextQuizList,
+      force: true,
+    });
 
     enqueueBatchNpcsAfterQuestion();
 
@@ -10957,7 +11084,11 @@ export function useClassroomEngine() {
   );
 
   const handlePushFullSyncToLive = useCallback(() => {
-    syncService.sendCommand('UPDATE_CONFIG', { patch: configRef.current });
+    const patchToSend = { ...configRef.current };
+    if (classBoardStateRef.current.isRunning) {
+      delete patchToSend.customQuizQuestions;
+    }
+    syncService.sendCommand('UPDATE_CONFIG', { patch: patchToSend });
     syncService.sendCommand('UPDATE_HUD_LAYOUT', {
       patch: configRef.current.hudLayout,
     });

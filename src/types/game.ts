@@ -286,6 +286,7 @@ export interface DailyRecordEntry {
 export interface ClassBoardRuntimeState {
   engine: ClassBoardEngineId;
   isRunning: boolean;
+  roundSeq?: number;
   questionIndex: number;
   totalQuestions?: number;
   currentQuestion?: EnglishQuizItem;
