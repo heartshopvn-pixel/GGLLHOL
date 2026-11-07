@@ -1,0 +1,2443 @@
+import { CameraFocusReason, ClassroomGiftEventId, GameConfig } from '../types/game';
+
+export type TTSStatusListener = (
+  statusText: string,
+  active: boolean,
+  spokenText?: string
+) => void;
+
+export interface TTSQueueItemMeta {
+  pilgrimId?: number;
+  username?: string;
+  reason?: CameraFocusReason;
+  isBot?: boolean;
+  isHostLive?: boolean;
+  speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
+  lang?: 'vi' | 'en';
+  lessonFlowToken?: string;
+  lessonStepLabel?: string;
+}
+
+export interface TTSQueueItem {
+  id: string;
+  text: string;
+  isPriority: boolean;
+  isHostLive?: boolean;
+  lang?: 'vi' | 'en';
+  addedAt: number;
+  meta?: TTSQueueItemMeta;
+}
+
+export interface EventTtsQueueSnapshot {
+  waitingCount: number;
+  isPlayingEvent: boolean;
+  currentEventText: string;
+  queueItems: string[];
+  activeItem: TTSQueueItem | null;
+  detailedQueue: TTSQueueItem[];
+}
+
+export type EventTtsQueueListener = (snapshot: EventTtsQueueSnapshot) => void;
+
+export type DharmaArticleChangeListener = (nextArticleId: string) => void;
+
+/**
+ * Làm sạch comment trước khi đưa vào TTS:
+ * 1. Loại bỏ toàn bộ icon / emoji / ký tự biểu tượng để tránh TTS đọc tên icon dài dòng gây trễ camera.
+ * 2. Thu gọn các từ/cụm từ bị spam lặp lại liên tiếp trong cùng 1 câu.
+ * 3. Giới hạn tối đa maxWords chữ trong câu đọc.
+ */
+export function sanitizeAndLimitSpeechText(
+  rawText: string,
+  maxWords = 25
+): string {
+  if (!rawText) return '';
+  // Bỏ emoji, pictographs, dingbats, variation selectors
+  let cleaned = String(rawText)
+    .replace(
+      /[\p{Extended_Pictographic}\p{Emoji_Presentation}\u2600-\u27BF\uFE00-\uFE0F\u200D]/gu,
+      ' '
+    )
+    .replace(/[~`!@#$%^&*()_+={}[\]|\\:;"'<>/]+/g, ' ')
+    .replace(/([.,?-])\1+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+
+  // Thu gọn từ hoặc cụm 2-3 từ lặp lại liên tiếp (VD: "xin lộc xin lộc xin lộc" -> "xin lộc")
+  const rawWords = cleaned.split(/\s+/).filter(Boolean);
+  const dedupedWords: string[] = [];
+  for (let i = 0; i < rawWords.length; i++) {
+    const w = rawWords[i];
+    const prev1 = dedupedWords[dedupedWords.length - 1];
+    const prev2 = dedupedWords[dedupedWords.length - 2];
+    if (
+      prev1 &&
+      prev2 &&
+      w.toLowerCase() === prev1.toLowerCase() &&
+      w.toLowerCase() === prev2.toLowerCase()
+    ) {
+      continue;
+    }
+    dedupedWords.push(w);
+  }
+
+  // Kiểm tra lặp cụm nửa câu (VD copy-paste 2-3 lần cùng 1 mệnh đề trong 1 comment)
+  let collapsed = dedupedWords.join(' ');
+  collapsed = collapsed.replace(
+    /\b(\S+(?:\s+\S+){1,5})(?:\s+\1\b)+/gi,
+    '$1'
+  );
+
+  const finalWords = collapsed.split(/\s+/).filter(Boolean);
+  const limit = Math.max(3, Math.min(100, Number(maxWords) || 25));
+  if (finalWords.length > limit) {
+    return finalWords.slice(0, limit).join(' ');
+  }
+  return finalWords.join(' ');
+}
+
+function splitDharmaIntoSentences(rawText: string): string[] {
+  if (!rawText || !rawText.trim()) return [];
+  const parts = rawText
+    .split(/(?<=[.!?;\n])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return [rawText.trim()];
+
+  // Chia nhỏ thêm nếu có câu quá dài (>180 ký tự) để đọc tự nhiên và hiện bong bóng chat Trụ trì vừa vặn
+  const result: string[] = [];
+  for (const p of parts) {
+    if (p.length <= 180) {
+      result.push(p);
+    } else {
+      const sub = p
+        .split(/(?<=[,，])\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      let acc = '';
+      for (const chunk of sub) {
+        if ((acc + ' ' + chunk).trim().length <= 160) {
+          acc = (acc ? acc + ', ' : '') + chunk;
+        } else {
+          if (acc) result.push(acc);
+          acc = chunk;
+        }
+      }
+      if (acc) result.push(acc);
+    }
+  }
+  return result.length > 0 ? result : [rawText.trim()];
+}
+
+class TempleSoundService {
+  private ctx: AudioContext | null = null;
+  private ttsQueue: TTSQueueItem[] = [];
+  private activeEventItem: TTSQueueItem | null = null;
+  private isSpeaking = false;
+  private isSpeakingDharma = false;
+  private currentEventText = '';
+  private currentAudio: HTMLAudioElement | null = null;
+  private speechTokenSeq = 0;
+  private mutedSimTimer: ReturnType<typeof setTimeout> | null = null;
+  private recentSpokenMap = new Map<string, number>();
+  private statusListeners = new Set<TTSStatusListener>();
+  private queueListeners = new Set<EventTtsQueueListener>();
+  private dharmaChangeListeners = new Set<DharmaArticleChangeListener>();
+  private onStartEventItemCallback: ((item: TTSQueueItem) => void) | null = null;
+  private onFinishEventItemCallback: ((item: TTSQueueItem) => void) | null = null;
+
+  public setOnStartEventItem(cb: ((item: TTSQueueItem) => void) | null) {
+    this.onStartEventItemCallback = cb;
+  }
+
+  public setOnFinishEventItem(cb: ((item: TTSQueueItem) => void) | null) {
+    this.onFinishEventItemCallback = cb;
+  }
+
+  private notifyItemFinished(item: TTSQueueItem | null) {
+    if (!item || !this.onFinishEventItemCallback) return;
+    try {
+      this.onFinishEventItemCallback(item);
+    } catch {
+      // Ignore callback error
+    }
+  }
+
+  // Nhạc nền (BGM) state
+  private bgmAudio: HTMLAudioElement | null = null;
+  private currentBgmUrl: string | null = null;
+  private synthBgmInterval: ReturnType<typeof setInterval> | null = null;
+  private activeSynthPreset: string | null = null;
+  private isZombieEventActive = false;
+  private previewZombieBgmAudio: HTMLAudioElement | null = null;
+
+  // Chế độ kể chuyện / thuyết pháp state
+  private dharmaIndex = 0;
+  private lastDharmaArticleId = '';
+  private lastDharmaContent = '';
+  private dharmaNextTimer: ReturnType<typeof setTimeout> | null = null;
+  private latestConfig: GameConfig | null = null;
+
+  private localTabMuted = (() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('obs') === '1' || p.get('view') === 'live') {
+        return false; // OBS Live screen always has audio enabled
+      }
+    }
+    return sessionStorage.getItem('chua_silent_admin_tab') === 'true';
+  })();
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      const unlockAudio = () => {
+        try {
+          if (this.ctx && this.ctx.state === 'suspended') {
+            void this.ctx.resume();
+          }
+          if (this.bgmAudio && this.bgmAudio.paused && this.latestConfig?.bgmEnabled && !this.localTabMuted) {
+            void this.bgmAudio.play().catch(() => {});
+          }
+        } catch {
+          // Ignore
+        }
+      };
+      window.addEventListener('pointerdown', unlockAudio, { passive: true });
+      window.addEventListener('keydown', unlockAudio, { passive: true });
+      window.addEventListener('touchstart', unlockAudio, { passive: true });
+    }
+  }
+
+  private initCtx() {
+    if (!this.ctx) {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      this.ctx = new AudioCtx();
+    }
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
+
+  private audioBlobCache = new Map<string, string>();
+  private inFlightPrefetches = new Map<string, Promise<string | null>>();
+  private readonly MAX_BLOB_CACHE = 45;
+
+  private getOrFetchAudioBlobUrl(url: string, timeoutMs = 2400): Promise<string | null> {
+    const cached = this.audioBlobCache.get(url);
+    if (cached) {
+      this.audioBlobCache.delete(url);
+      this.audioBlobCache.set(url, cached);
+      return Promise.resolve(cached);
+    }
+    const existingPromise = this.inFlightPrefetches.get(url);
+    if (existingPromise) return existingPromise;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    const p = fetch(url, { signal: controller.signal })
+      .then(async (res) => {
+        clearTimeout(timer);
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        if (!blob || blob.size < 128) return null;
+        const blobUrl = URL.createObjectURL(blob);
+        if (this.audioBlobCache.size >= this.MAX_BLOB_CACHE) {
+          const oldestKey = this.audioBlobCache.keys().next().value;
+          if (oldestKey) {
+            const oldBlobUrl = this.audioBlobCache.get(oldestKey);
+            if (oldBlobUrl) {
+              try {
+                URL.revokeObjectURL(oldBlobUrl);
+              } catch {
+                // Ignore
+              }
+            }
+            this.audioBlobCache.delete(oldestKey);
+          }
+        }
+        this.audioBlobCache.set(url, blobUrl);
+        return blobUrl;
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        return null;
+      })
+      .finally(() => {
+        this.inFlightPrefetches.delete(url);
+      });
+
+    this.inFlightPrefetches.set(url, p);
+    return p;
+  }
+
+  private buildEffectiveItemConfig(
+    config: GameConfig,
+    isHostLive?: boolean,
+    speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
+  ): GameConfig {
+    if (isHostLive) {
+      return {
+        ...config,
+        ttsEnabled: true,
+        ttsEngine: config.hostTtsEngine || 'google_stream',
+        nodeVoice: config.hostNodeVoice || 'google-vi-male-deep',
+        selectedSystemVoiceURI:
+          config.hostSystemVoiceURI !== undefined
+            ? config.hostSystemVoiceURI
+            : config.selectedSystemVoiceURI,
+        ttsRate: config.hostTtsRate ?? 0.96,
+        ttsPitch: config.hostTtsPitch ?? 0.82,
+        ttsVolume: config.hostTtsVolume ?? config.ttsVolume ?? 1.0,
+        ttsReverb: 0,
+      };
+    }
+    if (speakerRole === 'senior_novice') {
+      // Giọng Nam cho Thầy Giám Thị (Luồng 4 Sự kiện Zombie)
+      return {
+        ...config,
+        ttsEnabled: true,
+        nodeVoice: 'google-vi-male-deep',
+        ttsPitch: 0.82,
+      };
+    }
+    return config;
+  }
+
+  private buildStreamUrlForEngine(
+    text: string,
+    config: GameConfig,
+    isHostLive = false,
+    lang: 'vi' | 'en' = 'vi'
+  ): string | null {
+    const eff = this.buildEffectiveItemConfig(config, isHostLive);
+    const shortText = text.slice(0, 195);
+    if (lang === 'en') {
+      return `/api/tts?lang=en&voice=google-en-gtx&text=${encodeURIComponent(shortText)}`;
+    }
+    const voice = eff.nodeVoice || 'google-vi-gtx';
+    if (eff.ttsEngine === 'google_stream') {
+      return `/api/tts?lang=vi&voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(shortText)}`;
+    }
+    if (eff.ttsEngine === 'node_edge') {
+      const endpoint = eff.nodeTtsEndpoint || 'http://localhost:3000/tts';
+      return `${endpoint}?voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(shortText)}`;
+    }
+    return null;
+  }
+
+  private prefetchNextQueueItems(config: GameConfig) {
+    if (this.localTabMuted) return;
+    const upcoming = this.ttsQueue.slice(0, 2);
+    for (const item of upcoming) {
+      const streamUrl = this.buildStreamUrlForEngine(
+        item.text,
+        config,
+        Boolean(item.isHostLive),
+        item.lang || item.meta?.lang || 'vi'
+      );
+      if (streamUrl) {
+        void this.getOrFetchAudioBlobUrl(streamUrl, 3000);
+      }
+    }
+  }
+
+  public isTabMuted(): boolean {
+    return this.localTabMuted;
+  }
+
+  public setTabMuted(muted: boolean) {
+    this.localTabMuted = muted;
+    sessionStorage.setItem('chua_silent_admin_tab', muted ? 'true' : 'false');
+    if (muted) {
+      this.stopBgmInternal();
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (this.currentAudio) {
+        try {
+          this.currentAudio.onended = null;
+          this.currentAudio.onerror = null;
+          this.currentAudio.pause();
+          this.currentAudio.removeAttribute('src');
+          this.currentAudio = null;
+        } catch {
+          // Ignore
+        }
+      }
+    } else if (this.latestConfig) {
+      this.syncConfig(this.latestConfig);
+    }
+  }
+
+  public subscribeStatus(fn: TTSStatusListener) {
+    this.statusListeners.add(fn);
+    return () => this.statusListeners.delete(fn);
+  }
+
+  public subscribeEventQueue(fn: EventTtsQueueListener) {
+    this.queueListeners.add(fn);
+    fn(this.getEventQueueSnapshot());
+    return () => this.queueListeners.delete(fn);
+  }
+
+  public getEventQueueSnapshot(): EventTtsQueueSnapshot {
+    const isPlayingEvent = this.isSpeaking && !this.isSpeakingDharma;
+    return {
+      waitingCount: this.ttsQueue.length,
+      isPlayingEvent,
+      currentEventText: isPlayingEvent ? this.currentEventText : '',
+      queueItems: this.ttsQueue.map((item) => item.text),
+      activeItem: isPlayingEvent ? this.activeEventItem : null,
+      detailedQueue: [...this.ttsQueue],
+    };
+  }
+
+  private emitEventQueue() {
+    const snap = this.getEventQueueSnapshot();
+    this.queueListeners.forEach((fn) => fn(snap));
+  }
+
+  public clearEventQueue() {
+    const oldQueue = [...this.ttsQueue];
+    const oldActive = this.activeEventItem;
+    this.ttsQueue = [];
+    if (this.isSpeaking && !this.isSpeakingDharma) {
+      this.stopCurrentUtteranceOnly();
+      if (this.latestConfig?.dharmaEnabled) {
+        this.scheduleNextDharmaStep(250);
+      }
+    }
+    this.emitEventQueue();
+    if (oldActive) this.notifyItemFinished(oldActive);
+    oldQueue.forEach((it) => this.notifyItemFinished(it));
+  }
+
+  public skipCurrentEvent(config?: GameConfig) {
+    const cfg = config || this.latestConfig;
+    const oldActive = this.activeEventItem;
+    if (this.isSpeaking && !this.isSpeakingDharma) {
+      this.stopCurrentUtteranceOnly();
+      if (oldActive) this.notifyItemFinished(oldActive);
+      if (cfg) {
+        this.processQueue(cfg);
+      }
+    } else if (this.ttsQueue.length > 0 && cfg) {
+      this.processQueue(cfg);
+    } else {
+      this.emitEventQueue();
+    }
+  }
+
+  public removeEventQueueItemById(id: string) {
+    const removed = this.ttsQueue.filter((item) => item.id === id);
+    this.ttsQueue = this.ttsQueue.filter((item) => item.id !== id);
+    this.emitEventQueue();
+    removed.forEach((it) => this.notifyItemFinished(it));
+  }
+
+  public subscribeDharmaArticleChange(fn: DharmaArticleChangeListener) {
+    this.dharmaChangeListeners.add(fn);
+    return () => this.dharmaChangeListeners.delete(fn);
+  }
+
+  private emitStatus(text: string, active: boolean, spokenText?: string) {
+    this.statusListeners.forEach((fn) => fn(text, active, spokenText));
+  }
+
+  private emitDharmaArticleChange(nextArticleId: string) {
+    this.dharmaChangeListeners.forEach((fn) => fn(nextArticleId));
+  }
+
+  public getBusyState(): boolean {
+    return this.isSpeaking || this.ttsQueue.length > 0;
+  }
+
+  /**
+   * Đồng bộ cấu hình Nhạc nền & Thuyết pháp khi config thay đổi
+   */
+  public syncConfig(config: GameConfig) {
+    const prevDharmaEnabled = this.latestConfig?.dharmaEnabled;
+    const prevActiveDharmaId = this.latestConfig?.activeDharmaId;
+    this.latestConfig = config;
+
+    // Cập nhật tức thì tốc độ & âm lượng nếu đang phát HTMLAudioElement (Nguồn 2 & 3)
+    if (this.currentAudio) {
+      try {
+        const isHost = Boolean(
+          this.activeEventItem?.isHostLive ||
+            this.activeEventItem?.meta?.isHostLive
+        );
+        const isEn =
+          this.activeEventItem?.lang === 'en' ||
+          this.activeEventItem?.meta?.lang === 'en';
+        const effCfg = this.buildEffectiveItemConfig(
+          config,
+          isHost,
+          this.activeEventItem?.meta?.speakerRole
+        );
+        const voice = isEn
+          ? 'google-en-gtx'
+          : effCfg.nodeVoice || 'google-vi-gtx';
+        const { effectiveRate, preservePitch } = isEn
+          ? {
+              effectiveRate: Math.max(
+                0.5,
+                Math.min(2.0, config.englishTtsRate ?? 0.95)
+              ),
+              preservePitch: true,
+            }
+          : this.computeStreamPlaybackRateAndPitch(voice, effCfg);
+        this.applyAudioPlaybackParams(
+          this.currentAudio,
+          effectiveRate,
+          preservePitch,
+          effCfg.ttsVolume
+        );
+      } catch {
+        // Ignore live audio update error
+      }
+    }
+
+    this.syncBgm(config);
+
+    // Nếu tắt chế độ thuyết pháp khi đang đọc thuyết pháp -> ngắt câu thuyết pháp hiện tại ngay
+    if (prevDharmaEnabled && !config.dharmaEnabled) {
+      if (this.dharmaNextTimer) {
+        clearTimeout(this.dharmaNextTimer);
+        this.dharmaNextTimer = null;
+      }
+      if (this.isSpeakingDharma) {
+        this.stopCurrentUtteranceOnly();
+      }
+    } else if (config.dharmaEnabled) {
+      if (prevActiveDharmaId && prevActiveDharmaId !== config.activeDharmaId) {
+        this.dharmaIndex = 0;
+        if (this.isSpeakingDharma) {
+          this.stopCurrentUtteranceOnly();
+        }
+      }
+      if (!this.isSpeaking && this.ttsQueue.length === 0) {
+        this.scheduleNextDharmaStep(200);
+      }
+    }
+  }
+
+  private stopCurrentUtteranceOnly() {
+    this.speechTokenSeq++;
+    this.isSpeaking = false;
+    this.isSpeakingDharma = false;
+    this.currentEventText = '';
+    this.activeEventItem = null;
+    if (this.mutedSimTimer) {
+      clearTimeout(this.mutedSimTimer);
+      this.mutedSimTimer = null;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.onended = null;
+        this.currentAudio.onerror = null;
+        this.currentAudio.pause();
+        this.currentAudio.removeAttribute('src');
+        this.currentAudio.load();
+        this.currentAudio = null;
+      } catch {
+        // Ignore
+      }
+    }
+    this.emitStatus('Sẵn sàng', false, '');
+    this.emitEventQueue();
+  }
+
+  private stopBgmInternal() {
+    if (this.bgmAudio) {
+      try {
+        this.bgmAudio.pause();
+        this.bgmAudio = null;
+      } catch {
+        // Ignore
+      }
+    }
+    this.currentBgmUrl = null;
+    if (this.synthBgmInterval) {
+      clearInterval(this.synthBgmInterval);
+      this.synthBgmInterval = null;
+    }
+    this.activeSynthPreset = null;
+  }
+
+  public setZombieEventActive(active: boolean, config?: GameConfig) {
+    const next = Boolean(active);
+    if (this.isZombieEventActive === next && !config) return;
+    this.isZombieEventActive = next;
+    const cfg = config || this.latestConfig;
+    if (cfg) {
+      this.syncBgm(cfg);
+    } else if (!next) {
+      this.stopBgmInternal();
+    }
+  }
+
+  public previewZombieBgm(config: GameConfig) {
+    if (this.localTabMuted) return;
+    if (this.previewZombieBgmAudio) {
+      try {
+        this.previewZombieBgmAudio.pause();
+      } catch {
+        // Ignore
+      }
+      this.previewZombieBgmAudio = null;
+      return;
+    }
+    const vol = Math.max(0.05, Math.min(1, config.zombieBgmVolume ?? 0.55));
+    if (config.zombieBgmMp3Url) {
+      try {
+        const audio = new Audio(config.zombieBgmMp3Url);
+        audio.volume = vol;
+        this.previewZombieBgmAudio = audio;
+        audio.onended = () => {
+          if (this.previewZombieBgmAudio === audio) {
+            this.previewZombieBgmAudio = null;
+          }
+        };
+        audio.play().catch(() => {});
+        setTimeout(() => {
+          if (this.previewZombieBgmAudio === audio) {
+            try {
+              audio.pause();
+            } catch {
+              // Ignore
+            }
+            this.previewZombieBgmAudio = null;
+          }
+        }, 6000);
+        return;
+      } catch {
+        // Fallback to synth preview
+      }
+    }
+    this.playZombieBattleAmbientNote(vol);
+    setTimeout(() => this.playZombieBattleAmbientNote(vol), 480);
+    setTimeout(() => this.playZombieBattleAmbientNote(vol), 960);
+  }
+
+  public syncBgm(config: GameConfig) {
+    if (this.localTabMuted) {
+      this.stopBgmInternal();
+      return;
+    }
+
+    // Ưu tiên phát Nhạc nền Sự Kiện Zombie khi sự kiện Zombie đang diễn ra
+    if (this.isZombieEventActive) {
+      if (config.zombieBgmEnabled === false) {
+        this.stopBgmInternal();
+        return;
+      }
+      const zVol = Math.max(0.05, Math.min(1, config.zombieBgmVolume ?? 0.55));
+      if (config.zombieBgmMp3Url) {
+        if (this.synthBgmInterval) {
+          clearInterval(this.synthBgmInterval);
+          this.synthBgmInterval = null;
+          this.activeSynthPreset = null;
+        }
+        if (this.currentBgmUrl !== config.zombieBgmMp3Url || !this.bgmAudio) {
+          if (this.bgmAudio) {
+            try {
+              this.bgmAudio.pause();
+            } catch {
+              // Ignore
+            }
+          }
+          const audio = new Audio(config.zombieBgmMp3Url);
+          audio.loop = true;
+          audio.volume = zVol;
+          this.bgmAudio = audio;
+          this.currentBgmUrl = config.zombieBgmMp3Url;
+          audio.play().catch(() => {});
+        } else {
+          this.bgmAudio.volume = zVol;
+          if (this.bgmAudio.paused) {
+            this.bgmAudio.play().catch(() => {});
+          }
+        }
+      } else {
+        if (this.bgmAudio) {
+          try {
+            this.bgmAudio.pause();
+            this.bgmAudio = null;
+          } catch {
+            // Ignore
+          }
+          this.currentBgmUrl = null;
+        }
+        const zPreset = 'zombie_battle_synth';
+        if (this.activeSynthPreset !== zPreset || !this.synthBgmInterval) {
+          if (this.synthBgmInterval) clearInterval(this.synthBgmInterval);
+          this.activeSynthPreset = zPreset;
+          this.playZombieBattleAmbientNote(zVol);
+          this.synthBgmInterval = setInterval(() => {
+            if (
+              !this.isZombieEventActive ||
+              this.latestConfig?.zombieBgmEnabled === false ||
+              this.localTabMuted
+            ) {
+              return;
+            }
+            const curVol = Math.max(
+              0.05,
+              Math.min(1, this.latestConfig?.zombieBgmVolume ?? 0.55)
+            );
+            this.playZombieBattleAmbientNote(curVol);
+          }, 560);
+        }
+      }
+      return;
+    }
+
+    if (!config.bgmEnabled) {
+      this.stopBgmInternal();
+      return;
+    }
+
+    const tracks = config.bgmTracks || [];
+    const activeTrack =
+      tracks.find((t) => t.id === config.activeBgmTrackId) || tracks[0];
+    if (!activeTrack) {
+      this.stopBgmInternal();
+      return;
+    }
+
+    const vol = Math.max(0.05, Math.min(1, config.bgmVolume ?? 0.4));
+
+    if (activeTrack.url) {
+      // Phát file MP3 người dùng chọn
+      if (this.synthBgmInterval) {
+        clearInterval(this.synthBgmInterval);
+        this.synthBgmInterval = null;
+        this.activeSynthPreset = null;
+      }
+      if (this.currentBgmUrl !== activeTrack.url || !this.bgmAudio) {
+        if (this.bgmAudio) {
+          try {
+            this.bgmAudio.pause();
+          } catch {
+            // Ignore
+          }
+        }
+        const audio = new Audio(activeTrack.url);
+        audio.loop = true;
+        audio.volume = vol;
+        this.bgmAudio = audio;
+        this.currentBgmUrl = activeTrack.url;
+        audio.play().catch(() => {
+          // Chờ tương tác người dùng đầu tiên
+        });
+      } else {
+        this.bgmAudio.volume = vol;
+        if (this.bgmAudio.paused) {
+          this.bgmAudio.play().catch(() => {});
+        }
+      }
+    } else {
+      // Phát nhạc thiền định mặc định bằng WebAudio (khi chưa nạp file MP3 ngoài)
+      if (this.bgmAudio) {
+        try {
+          this.bgmAudio.pause();
+          this.bgmAudio = null;
+        } catch {
+          // Ignore
+        }
+        this.currentBgmUrl = null;
+      }
+      const preset = activeTrack.presetType || 'zen_bowl';
+      if (this.activeSynthPreset !== preset || !this.synthBgmInterval) {
+        if (this.synthBgmInterval) clearInterval(this.synthBgmInterval);
+        this.activeSynthPreset = preset;
+        this.playZenAmbientNote(preset, vol);
+        this.synthBgmInterval = setInterval(() => {
+          if (!this.latestConfig?.bgmEnabled || this.localTabMuted) return;
+          const latestVol = Math.max(
+            0.05,
+            Math.min(1, this.latestConfig?.bgmVolume ?? 0.4)
+          );
+          this.playZenAmbientNote(preset, latestVol);
+        }, 2800);
+      }
+    }
+  }
+
+  private zombieBeatStep = 0;
+
+  public playZombieBattleAmbientNote(volume: number) {
+    if (this.localTabMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const bassNotes = [82.41, 82.41, 98.0, 110.0, 82.41, 123.47, 110.0, 98.0];
+      const leadNotes = [164.81, 196.0, 220.0, 246.94, 196.0, 293.66, 246.94, 220.0];
+      const step = this.zombieBeatStep++ % bassNotes.length;
+      const bassFreq = bassNotes[step];
+      const leadFreq = leadNotes[step];
+
+      const bassOsc = this.ctx.createOscillator();
+      const leadOsc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      bassOsc.type = 'sawtooth';
+      leadOsc.type = 'triangle';
+      bassOsc.frequency.setValueAtTime(bassFreq, now);
+      leadOsc.frequency.setValueAtTime(leadFreq, now);
+
+      const peak = 0.085 * volume;
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(peak, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.48);
+
+      bassOsc.connect(gain);
+      leadOsc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      bassOsc.start(now);
+      leadOsc.start(now);
+      bassOsc.stop(now + 0.5);
+      leadOsc.stop(now + 0.5);
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  private playZenAmbientNote(preset: string, volume: number) {
+    if (this.localTabMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const pentatonic =
+        preset === 'lotus_flute'
+          ? [293.66, 329.63, 392.0, 440.0, 523.25, 587.33]
+          : [196.0, 220.0, 261.63, 293.66, 329.63, 392.0];
+      const baseFreq = pentatonic[Math.floor(Math.random() * pentatonic.length)];
+
+      const osc = this.ctx.createOscillator();
+      const subOsc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = 'sine';
+      subOsc.type = 'triangle';
+      osc.frequency.setValueAtTime(baseFreq, now);
+      subOsc.frequency.setValueAtTime(baseFreq * 1.5, now);
+
+      const peak = 0.08 * volume;
+      gain.gain.setValueAtTime(0.0005, now);
+      gain.gain.linearRampToValueAtTime(peak, now + 0.8);
+      gain.gain.exponentialRampToValueAtTime(0.0005, now + 3.4);
+
+      osc.connect(gain);
+      subOsc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      osc.start(now);
+      subOsc.start(now);
+      osc.stop(now + 3.5);
+      subOsc.stop(now + 3.5);
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  public playBell(volume = 1.0, customMp3Url?: string | null, forcePlay = false) {
+    if (this.localTabMuted) return;
+    const cfg = this.latestConfig;
+    if (!forcePlay && cfg && !cfg.bellEnabled) return;
+
+    const mp3Url = customMp3Url !== undefined ? customMp3Url : cfg?.bellMp3Url;
+    if (mp3Url) {
+      try {
+        const audio = new Audio(mp3Url);
+        audio.volume = Math.max(0.05, Math.min(1, volume));
+        audio.play().catch(() => {});
+        return;
+      } catch {
+        // Fallback to synth school drum
+      }
+    }
+
+    // Tiếng Trống Trường "Tùng! Tùng!" ấm vang
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const hits = [0, 0.28];
+      hits.forEach((offset, idx) => {
+        if (!this.ctx) return;
+        const start = now + offset;
+        const osc = this.ctx.createOscillator();
+        const sub = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'sine';
+        sub.type = 'triangle';
+        osc.frequency.setValueAtTime(145, start);
+        osc.frequency.exponentialRampToValueAtTime(62, start + 0.38);
+        sub.frequency.setValueAtTime(92, start);
+        sub.frequency.exponentialRampToValueAtTime(48, start + 0.42);
+
+        const peak = (idx === 0 ? 0.36 : 0.44) * volume;
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.linearRampToValueAtTime(peak, start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0005, start + 0.65);
+
+        osc.connect(gain);
+        sub.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(start);
+        sub.start(start);
+        osc.stop(start + 0.68);
+        sub.stop(start + 0.68);
+      });
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  public playWoodenFish(volume = 1.0, customMp3Url?: string | null, forcePlay = false) {
+    if (this.localTabMuted) return;
+    const cfg = this.latestConfig;
+    if (!forcePlay && cfg && !cfg.woodenFishEnabled) return;
+
+    const mp3Url =
+      customMp3Url !== undefined ? customMp3Url : cfg?.woodenFishMp3Url;
+    if (mp3Url) {
+      try {
+        const audio = new Audio(mp3Url);
+        audio.volume = Math.max(0.05, Math.min(1, volume));
+        audio.play().catch(() => {});
+        return;
+      } catch {
+        // Fallback to synth ruler tap
+      }
+    }
+
+    // Tiếng gõ thước gỗ lên bảng / bàn giáo viên ("Cốc cốc")
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(760, now);
+      osc.frequency.exponentialRampToValueAtTime(380, now + 0.065);
+
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.32 * volume, now + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  public playAnswerRevealSfx(
+    volume = 1.0,
+    presetOverride?: 'chime_sparkle' | 'victory_fanfare' | 'retro_levelup',
+    customMp3Url?: string | null,
+    forcePlay = false
+  ) {
+    if (this.localTabMuted) return;
+    const cfg = this.latestConfig;
+    if (!forcePlay && cfg && cfg.answerRevealSfxEnabled === false) return;
+
+    const mp3Url =
+      customMp3Url !== undefined ? customMp3Url : cfg?.answerRevealMp3Url;
+    if (mp3Url) {
+      try {
+        const audio = new Audio(mp3Url);
+        audio.volume = Math.max(0.05, Math.min(1, volume));
+        audio.play().catch(() => {});
+        return;
+      } catch {
+        // Fallback to synth preset
+      }
+    }
+
+    const preset =
+      presetOverride || cfg?.answerRevealSfxPreset || 'chime_sparkle';
+
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const safeVol = Math.max(0.05, Math.min(1, volume));
+
+      if (preset === 'victory_fanfare') {
+        // Hiệu ứng 2: Kèn Chiến Thắng (Bright Fanfare Arpeggio + Chord)
+        const notes = [
+          { freq: 392.0, start: 0, dur: 0.13 },
+          { freq: 523.25, start: 0.11, dur: 0.13 },
+          { freq: 659.25, start: 0.22, dur: 0.14 },
+          { freq: 783.99, start: 0.34, dur: 0.55 },
+          { freq: 523.25, start: 0.34, dur: 0.55 },
+        ];
+        notes.forEach((n) => {
+          if (!this.ctx) return;
+          const osc = this.ctx.createOscillator();
+          const sub = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'triangle';
+          sub.type = 'sine';
+          osc.frequency.setValueAtTime(n.freq, now + n.start);
+          sub.frequency.setValueAtTime(n.freq * 2, now + n.start);
+
+          gain.gain.setValueAtTime(0.001, now + n.start);
+          gain.gain.linearRampToValueAtTime(0.28 * safeVol, now + n.start + 0.02);
+          gain.gain.exponentialRampToValueAtTime(
+            0.0008,
+            now + n.start + n.dur
+          );
+
+          osc.connect(gain);
+          sub.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now + n.start);
+          sub.start(now + n.start);
+          osc.stop(now + n.start + n.dur + 0.02);
+          sub.stop(now + n.start + n.dur + 0.02);
+        });
+        return;
+      }
+
+      if (preset === 'retro_levelup') {
+        // Hiệu ứng 3: Pixel Level-Up 8-Bit (Năng động kiểu game Arcade)
+        const steps = [440, 554.37, 659.25, 880, 1108.73, 1318.51];
+        steps.forEach((freq, idx) => {
+          if (!this.ctx) return;
+          const start = now + idx * 0.065;
+          const dur = idx === steps.length - 1 ? 0.36 : 0.085;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, start);
+
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.18 * safeVol, start + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0008, start + dur);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + dur + 0.01);
+        });
+        return;
+      }
+
+      // Mặc định - Hiệu ứng 1: Chuông Sao Lấp Lánh (Crystal Chime Sparkle)
+      const sparkleNotes = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+      sparkleNotes.forEach((freq, idx) => {
+        if (!this.ctx) return;
+        const start = now + idx * 0.075;
+        const dur = idx === sparkleNotes.length - 1 ? 0.65 : 0.28;
+        const osc = this.ctx.createOscillator();
+        const overtone = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'sine';
+        overtone.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, start);
+        overtone.frequency.setValueAtTime(freq * 2, start);
+
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.linearRampToValueAtTime(0.26 * safeVol, start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0006, start + dur);
+
+        osc.connect(gain);
+        overtone.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(start);
+        overtone.start(start);
+        osc.stop(start + dur + 0.02);
+        overtone.stop(start + dur + 0.02);
+      });
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  /**
+   * Phát âm thanh tương ứng với từng món quà trong lớp học (hỗ trợ chèn file MP3 riêng hoặc dùng synth mặc định hợp lý)
+   */
+  public playGiftEventSound(
+    giftId: ClassroomGiftEventId,
+    config?: GameConfig,
+    forcePlay = false
+  ) {
+    if (this.localTabMuted) return;
+    const cfg = config || this.latestConfig;
+    if (!forcePlay && cfg && cfg.giftSoundEnabled === false) return;
+
+    const masterVol = Math.max(0, Math.min(1, cfg?.giftSoundVolume ?? 1.0));
+    const itemVol = Math.max(
+      0,
+      Math.min(1, cfg?.giftSoundVolumes?.[giftId] ?? 1.0)
+    );
+    const volume = masterVol * itemVol;
+    if (volume <= 0.005) return;
+
+    const customMp3 = cfg?.giftSoundMp3Urls?.[giftId];
+    if (customMp3) {
+      try {
+        const audio = new Audio(customMp3);
+        audio.volume = volume;
+        audio.play().catch(() => {});
+        return;
+      } catch {
+        // Fallback to synth
+      }
+    }
+
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      if (giftId === 'rose' || giftId === 'icecream') {
+        // Tiếng chuông harp lãng mạn khi tặng hoa cho Cô / Thầy
+        const notes =
+          giftId === 'rose'
+            ? [523.25, 659.25, 783.99, 1046.5]
+            : [587.33, 739.99, 880.0, 1174.66];
+        notes.forEach((freq, idx) => {
+          if (!this.ctx) return;
+          const start = now + idx * 0.065;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, start);
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.24 * volume, start + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.0008, start + 0.36);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.38);
+        });
+        return;
+      }
+
+      if (giftId === 'cat') {
+        // Tiếng "Meow~" dễ thương khi thả mèo lên bàn
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.linearRampToValueAtTime(860, now + 0.14);
+        osc.frequency.exponentialRampToValueAtTime(480, now + 0.42);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.28 * volume, now + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.46);
+        return;
+      }
+
+      if (giftId === 'gg') {
+        // Tiếng "Rộp rộp / Pop" giòn tan khi ăn vụng bịch snack
+        const pops = [0, 0.09, 0.19];
+        pops.forEach((offset, idx) => {
+          if (!this.ctx) return;
+          const start = now + offset;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(320 + idx * 140, start);
+          osc.frequency.exponentialRampToValueAtTime(140, start + 0.07);
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.2 * volume, start + 0.008);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + 0.08);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.09);
+        });
+        return;
+      }
+
+      if (giftId === 'heart') {
+        // Tiếng chuông điện thoại reo + lên đời dàn PC Gaming RGB
+        const ringNotes = [880, 1174.66, 880, 1174.66, 1318.51, 1760];
+        ringNotes.forEach((freq, idx) => {
+          if (!this.ctx) return;
+          const start = now + idx * 0.055;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, start);
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.18 * volume, start + 0.008);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + 0.09);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.1);
+        });
+        return;
+      }
+
+      if (giftId === 'pig') {
+        // Tiếng heo kêu "Éc éc / Oink oink" vui nhộn khi thả 5 con heo hù dọa
+        const oinks = [0, 0.18, 0.36];
+        oinks.forEach((offset, idx) => {
+          if (!this.ctx) return;
+          const start = now + offset;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(180 + idx * 25, start);
+          osc.frequency.linearRampToValueAtTime(340 + idx * 30, start + 0.07);
+          osc.frequency.exponentialRampToValueAtTime(150, start + 0.15);
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.24 * volume, start + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + 0.16);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.17);
+        });
+        return;
+      }
+
+      // Mặc định cho 'vip' (Tôi là Rich Kid): Kèn Fanfare + Tiếng mưa tiền leng keng
+      const fanfare = [523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98];
+      fanfare.forEach((freq, idx) => {
+        if (!this.ctx) return;
+        const start = now + idx * 0.07;
+        const dur = idx === fanfare.length - 1 ? 0.65 : 0.22;
+        const osc = this.ctx.createOscillator();
+        const sub = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        sub.type = 'sine';
+        osc.frequency.setValueAtTime(freq, start);
+        sub.frequency.setValueAtTime(freq * 1.5, start);
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.linearRampToValueAtTime(0.28 * volume, start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0008, start + dur);
+        osc.connect(gain);
+        sub.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(start);
+        sub.start(start);
+        osc.stop(start + dur + 0.02);
+        sub.stop(start + dur + 0.02);
+      });
+    } catch {
+      // Ignore audio unlock errors
+    }
+  }
+
+  /**
+   * Phát hiệu ứng nổ hoa (khi hoa bay tới Cô/Thầy) hoặc nổ heo (khi heo đụng Top 5)
+   */
+  public playSimpleExplosionSfx(kind: 'flower' | 'pig', volume = 1.0) {
+    if (this.localTabMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const safeVol = Math.max(0.05, Math.min(1, volume));
+
+      if (kind === 'flower') {
+        const sparkle = [659.25, 880, 1174.66, 1567.98];
+        sparkle.forEach((freq, idx) => {
+          if (!this.ctx) return;
+          const start = now + idx * 0.045;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, start);
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.22 * safeVol, start + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0008, start + 0.25);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.26);
+        });
+        return;
+      }
+
+      // Tiếng nổ "Bùm!" vui nhộn khi heo chạm học sinh Top 5
+      const osc = this.ctx.createOscillator();
+      const sub = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      sub.type = 'triangle';
+      osc.frequency.setValueAtTime(160, now);
+      osc.frequency.exponentialRampToValueAtTime(38, now + 0.28);
+      sub.frequency.setValueAtTime(95, now);
+      sub.frequency.exponentialRampToValueAtTime(28, now + 0.32);
+
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.32 * safeVol, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.34);
+
+      osc.connect(gain);
+      sub.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(now);
+      sub.start(now);
+      osc.stop(now + 0.35);
+      sub.stop(now + 0.35);
+    } catch {
+      // Ignore
+    }
+  }
+
+  /**
+   * Phát âm thanh Zombie gầm gừ (Luồng 2 sự kiện Zombie tấn công):
+   * Ưu tiên phát file MP3 đã upload trong Dev Âm Thanh, nếu chưa có thì phát synth gầm gừ trầm hùng rùng rợn.
+   */
+  public playZombieGrowlSfx(
+    volumeOrConfig: number | GameConfig = 1.0,
+    customMp3UrlOrForce?: string | null | boolean,
+    forcePlay = false
+  ) {
+    if (this.localTabMuted) return;
+    const isCfgObj =
+      typeof volumeOrConfig === 'object' && volumeOrConfig !== null;
+    const cfg = isCfgObj ? volumeOrConfig : this.latestConfig;
+    const rawVol = isCfgObj ? cfg?.ttsVolume ?? 1.0 : volumeOrConfig;
+    const mp3Url =
+      typeof customMp3UrlOrForce === 'string' || customMp3UrlOrForce === null
+        ? customMp3UrlOrForce
+        : cfg?.zombieGrowlMp3Url;
+    const effectiveForce =
+      typeof customMp3UrlOrForce === 'boolean' ? customMp3UrlOrForce : forcePlay;
+    const safeVol = Math.max(0.08, Math.min(1, rawVol));
+
+    if (mp3Url) {
+      try {
+        const audio = new Audio(mp3Url);
+        audio.volume = safeVol;
+        audio.play().catch(() => {});
+        return;
+      } catch {
+        // Fallback to synth monster growl
+      }
+    }
+
+    if (!effectiveForce && cfg && !cfg.ttsEnabled && !cfg.bellEnabled) {
+      // Vẫn cho phát nhẹ khi sự kiện diễn ra
+    }
+
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      // 2 đợt gầm trầm khàn (Sawtooth + Square + Lowpass modulation) kéo dài ~2.4s
+      const bursts = [
+        { start: 0, dur: 1.05, fStart: 92, fPeak: 128, fEnd: 54 },
+        { start: 1.12, dur: 1.25, fStart: 108, fPeak: 146, fEnd: 46 },
+      ];
+      bursts.forEach((b) => {
+        if (!this.ctx) return;
+        const t0 = now + b.start;
+        const osc1 = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const lfo = this.ctx.createOscillator();
+        const lfoGain = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+        const gain = this.ctx.createGain();
+
+        osc1.type = 'sawtooth';
+        osc2.type = 'square';
+        osc1.frequency.setValueAtTime(b.fStart, t0);
+        osc1.frequency.linearRampToValueAtTime(b.fPeak, t0 + b.dur * 0.35);
+        osc1.frequency.exponentialRampToValueAtTime(b.fEnd, t0 + b.dur);
+
+        osc2.frequency.setValueAtTime(b.fStart * 0.51, t0);
+        osc2.frequency.linearRampToValueAtTime(b.fPeak * 0.49, t0 + b.dur * 0.4);
+        osc2.frequency.exponentialRampToValueAtTime(b.fEnd * 0.5, t0 + b.dur);
+
+        // Rung cổ họng gầm gừ (growl guttural tremolo)
+        lfo.type = 'sine';
+        lfo.frequency.setValueAtTime(24, t0);
+        lfoGain.gain.setValueAtTime(18, t0);
+        lfo.connect(osc1.frequency);
+
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(380, t0);
+        filter.frequency.linearRampToValueAtTime(620, t0 + b.dur * 0.35);
+        filter.frequency.exponentialRampToValueAtTime(190, t0 + b.dur);
+
+        gain.gain.setValueAtTime(0.001, t0);
+        gain.gain.linearRampToValueAtTime(0.34 * safeVol, t0 + 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + b.dur);
+
+        osc1.connect(filter);
+        osc2.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc1.start(t0);
+        osc2.start(t0);
+        lfo.start(t0);
+        osc1.stop(t0 + b.dur + 0.03);
+        osc2.stop(t0 + b.dur + 0.03);
+        lfo.stop(t0 + b.dur + 0.03);
+      });
+    } catch {
+      // Ignore
+    }
+  }
+
+  /**
+   * Phát hiệu ứng âm thanh gọn nhẹ khi đạn (Hộp bút, Sách, Ghế, Đứa bàn bên) đập trúng Zombie
+   */
+  public playZombieHitSfx(
+    kind: 'pencil_case' | 'book' | 'chair' | 'desk_mate',
+    volume = 1.0
+  ) {
+    if (this.localTabMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const safeVol = Math.max(0.04, Math.min(1, volume));
+
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      if (kind === 'pencil_case') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(160, now + 0.065);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.16 * safeVol, now + 0.006);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.08);
+        return;
+      }
+
+      if (kind === 'book') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(340, now);
+        osc.frequency.exponentialRampToValueAtTime(110, now + 0.09);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.22 * safeVol, now + 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.11);
+        return;
+      }
+
+      if (kind === 'chair') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(240, now);
+        osc.frequency.exponentialRampToValueAtTime(65, now + 0.14);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.28 * safeVol, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.16);
+        return;
+      }
+
+      // 'desk_mate' (Ném đứa bàn bên - meme): Bốp + chuông vui nhộn
+      const sub = this.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      sub.type = 'sine';
+      osc.frequency.setValueAtTime(310, now);
+      osc.frequency.exponentialRampToValueAtTime(55, now + 0.18);
+      sub.frequency.setValueAtTime(680, now);
+      sub.frequency.linearRampToValueAtTime(980, now + 0.09);
+      sub.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.32 * safeVol, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.21);
+
+      osc.connect(gain);
+      sub.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(now);
+      sub.start(now);
+      osc.stop(now + 0.22);
+      sub.stop(now + 0.22);
+    } catch {
+      // Ignore
+    }
+  }
+
+  public stopImmediate() {
+    const oldQueue = [...this.ttsQueue];
+    const oldActive = this.activeEventItem;
+    this.speechTokenSeq++;
+    this.ttsQueue = [];
+    this.activeEventItem = null;
+    this.isSpeaking = false;
+    this.isSpeakingDharma = false;
+    this.currentEventText = '';
+    if (this.mutedSimTimer) {
+      clearTimeout(this.mutedSimTimer);
+      this.mutedSimTimer = null;
+    }
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+      this.dharmaNextTimer = null;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.onended = null;
+        this.currentAudio.onerror = null;
+        this.currentAudio.pause();
+        this.currentAudio.removeAttribute('src');
+        this.currentAudio.load();
+        this.currentAudio = null;
+      } catch {
+        // Ignore
+      }
+    }
+    this.emitStatus('Đã ngắt đọc', false, '');
+    this.emitEventQueue();
+    if (oldActive) this.notifyItemFinished(oldActive);
+    oldQueue.forEach((it) => this.notifyItemFinished(it));
+  }
+
+  /**
+   * Định dạng mẫu câu sự kiện có chứa [Tên] / {name} và [Comment] / {prayer}
+   * Tích hợp tự động lọc icon spam & giới hạn số chữ tối đa (maxWords)
+   */
+  public formatEventTemplate(
+    template: string,
+    username: string,
+    comment = '',
+    maxWords?: number
+  ): string {
+    const limit =
+      maxWords ?? this.latestConfig?.maxTtsWords ?? 25;
+    const cleanComment = comment
+      ? sanitizeAndLimitSpeechText(comment, limit)
+      : '';
+    const safeTpl = (template || '').trim();
+    if (!safeTpl) return `${username} ${cleanComment}`.trim();
+    return safeTpl
+      .replace(/\[Tên\]|\[tên\]|\[Ten\]|\[ten\]|\{name\}/g, username)
+      .replace(/\[Comment\]|\[comment\]|\{prayer\}|\{comment\}/g, cleanComment)
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  public formatPrayerSpeech(
+    username: string,
+    prayer: string,
+    isVip: boolean,
+    template: string,
+    maxWords?: number
+  ): string {
+    const tpl = template || '[Tên] cầu nguyện: [Comment]';
+    const prefix = isVip ? 'Nam mô A Di Đà Phật. ' : '';
+    return prefix + this.formatEventTemplate(tpl, username, prayer, maxWords);
+  }
+
+  public enqueueTTS(
+    text: string,
+    isPriority: boolean,
+    config: GameConfig,
+    meta?: TTSQueueItemMeta
+  ): boolean {
+    this.latestConfig = config;
+    if (!config.ttsEnabled) return false;
+    const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!cleanText) return false;
+
+    const normKey = cleanText.toLowerCase();
+    const now = Date.now();
+    for (const [k, t] of this.recentSpokenMap.entries()) {
+      if (now - t > 6500) {
+        this.recentSpokenMap.delete(k);
+      }
+    }
+
+    const isGiftEvent =
+      meta?.reason === 'gift' || meta?.reason === 'special_gift';
+
+    // Nếu người chơi đang có sẵn 1 lượt đọc cảm ơn dâng lễ chờ trong hàng đợi -> cập nhật gộp luôn vào lượt đó
+    if (isGiftEvent && meta?.username) {
+      const lowerUser = meta.username.trim().toLowerCase();
+      const existingGiftInQueue = this.ttsQueue.find(
+        (item) =>
+          (item.meta?.reason === 'gift' || item.meta?.reason === 'special_gift') &&
+          item.meta?.username?.trim().toLowerCase() === lowerUser
+      );
+      if (existingGiftInQueue) {
+        existingGiftInQueue.text = cleanText;
+        existingGiftInQueue.meta = {
+          ...existingGiftInQueue.meta,
+          ...meta,
+          reason:
+            existingGiftInQueue.meta?.reason === 'special_gift' ||
+            meta.reason === 'special_gift'
+              ? 'special_gift'
+              : 'gift',
+        };
+        this.emitEventQueue();
+        return true;
+      }
+    }
+
+    // Chống đọc lặp 2 lần cùng 1 câu bình luận do lag mạng hoặc sự kiện trùng lặp trong 6 giây (không chặn sự kiện dâng lễ mới)
+    if (!isGiftEvent && (!meta?.reason || meta.reason !== 'manual')) {
+      const lastSpokenAt = this.recentSpokenMap.get(normKey);
+      if (lastSpokenAt && now - lastSpokenAt < 6000) {
+        return false;
+      }
+      if (
+        this.currentEventText.trim().toLowerCase() === normKey ||
+        this.ttsQueue.some((item) => item.text.trim().toLowerCase() === normKey)
+      ) {
+        return false;
+      }
+    }
+    this.recentSpokenMap.set(normKey, now);
+
+    const queueItem: TTSQueueItem = {
+      id: `tts_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      text: cleanText,
+      isPriority,
+      lang: meta?.lang || 'vi',
+      addedAt: now,
+      meta,
+    };
+
+    // Khi hàng chờ đạt giới hạn (mặc định 30) thì xóa các bình luận thường cũ (giữ lại các lượt Chủ Phòng & dâng lễ ưu tiên đang chờ)
+    const maxQueueSize = Math.max(1, Math.min(200, config.maxTtsQueueSize ?? 30));
+    if (this.ttsQueue.length >= maxQueueSize) {
+      this.ttsQueue = this.ttsQueue.filter(
+        (item) =>
+          item.isHostLive ||
+          item.meta?.reason === 'gift' ||
+          item.meta?.reason === 'special_gift'
+      );
+    }
+
+    if (isPriority) {
+      // Đẩy lên đầu hàng chờ nhưng đứng sau các câu Live Text của Chủ Phòng và xếp theo thứ tự giữa các câu ưu tiên
+      const firstNonPriorityIdx = this.ttsQueue.findIndex((q) => !q.isPriority);
+      if (firstNonPriorityIdx === -1) {
+        this.ttsQueue.push(queueItem);
+      } else {
+        this.ttsQueue.splice(firstNonPriorityIdx, 0, queueItem);
+      }
+    } else {
+      this.ttsQueue.push(queueItem);
+    }
+
+    // Nếu đang đọc bài thuyết pháp (Dharma) thì ngắt thuyết pháp ngay lập tức để nhường câu cầu nguyện/dâng lễ đọc luôn, tránh chồng âm thanh
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+      this.dharmaNextTimer = null;
+    }
+    if (this.isSpeakingDharma) {
+      this.stopCurrentUtteranceOnly();
+    }
+
+    this.prefetchNextQueueItems(config);
+    this.emitEventQueue();
+    this.processQueue(config);
+    return true;
+  }
+
+  /**
+   * Đưa câu đọc của Cô Giáo thuộc Luồng Tiết Học (Luồng 0 -> 6) vào đầu Hàng Chờ Đọc Sự Kiện:
+   * - Xóa các câu luồng tiết học cũ chưa kịp đọc (nếu có) để không bao giờ bị trễ pha.
+   * - Đặt ngay đầu hàng chờ (chỉ sau Live Text của Chủ Phòng) và nếu đang đọc dở bình luận thường của học sinh thì ngắt nhẹ để Cô Giáo đọc ngay đúng nhịp bảng lớp.
+   */
+  public enqueueLessonFlowItems(
+    items: Array<{
+      text: string;
+      lang?: 'vi' | 'en';
+      lessonFlowToken?: string;
+      lessonStepLabel?: string;
+      speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
+    }>,
+    config: GameConfig
+  ): boolean {
+    this.latestConfig = config;
+    if (!config.ttsEnabled) return false;
+
+    const validItems = items
+      .map((it) => ({
+        ...it,
+        text: (it.text || '').replace(/\s+/g, ' ').trim(),
+      }))
+      .filter((it) => Boolean(it.text));
+    if (validItems.length === 0) return false;
+
+    // Dọn các câu thuộc luồng tiết học cũ còn tồn trong hàng chờ
+    this.ttsQueue = this.ttsQueue.filter(
+      (q) => !q.meta?.lessonStepLabel && !q.meta?.lessonFlowToken
+    );
+
+    const now = Date.now();
+    const queueEntries: TTSQueueItem[] = validItems.map((it, idx) => ({
+      id: `lesson_tts_${now}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      text: it.text,
+      isPriority: true,
+      lang: it.lang || 'vi',
+      addedAt: now + idx,
+      meta: {
+        reason: 'manual',
+        lang: it.lang || 'vi',
+        speakerRole: it.speakerRole || 'abbot',
+        lessonFlowToken: it.lessonFlowToken,
+        lessonStepLabel: it.lessonStepLabel,
+      },
+    }));
+
+    // Chèn ngay đầu hàng đợi (sau các câu Host Live nếu có)
+    let insertIdx = 0;
+    while (
+      insertIdx < this.ttsQueue.length &&
+      this.ttsQueue[insertIdx].isHostLive
+    ) {
+      insertIdx++;
+    }
+    this.ttsQueue.splice(insertIdx, 0, ...queueEntries);
+
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+      this.dharmaNextTimer = null;
+    }
+
+    // Nếu đang đọc thuyết pháp hoặc đang đọc bình luận thường của học sinh (không phải quà tặng / Host Live) -> ngắt để Cô Giáo điều khiển luồng bảng lớp ngay lập tức
+    const activeReason = this.activeEventItem?.meta?.reason;
+    const isInterruptibleActive =
+      this.isSpeakingDharma ||
+      (this.isSpeaking &&
+        !this.activeEventItem?.isHostLive &&
+        activeReason !== 'gift' &&
+        activeReason !== 'special_gift');
+
+    if (isInterruptibleActive) {
+      const interruptedItem = this.activeEventItem;
+      this.stopCurrentUtteranceOnly();
+      if (interruptedItem) {
+        this.notifyItemFinished(interruptedItem);
+      }
+    }
+
+    this.prefetchNextQueueItems(config);
+    this.emitEventQueue();
+    this.processQueue(config);
+    return true;
+  }
+
+  /**
+   * Phát biểu ưu tiên tối đa của Chủ Phòng / Giáo Viên (Live Text-to-Audio):
+   * - Dùng bộ giọng đọc riêng của Chủ Phòng (hostTtsEngine, hostNodeVoice, hostSystemVoiceURI, hostTtsRate, hostTtsPitch)
+   * - Không bị giới hạn số chữ của comment thường (tự tách câu mượt nếu đoạn văn dài)
+   * - Hỗ trợ đọc đè ngay lập tức (interrupt = true) hoặc chèn lên vị trí #1 đầu hàng đợi (interrupt = false)
+   */
+  public speakHostLiveText(
+    rawText: string,
+    config: GameConfig,
+    options?: {
+      interrupt?: boolean;
+      speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
+    }
+  ): boolean {
+    this.latestConfig = config;
+    const cleaned = String(rawText || '')
+      .replace(
+        /[\p{Extended_Pictographic}\p{Emoji_Presentation}\u2600-\u27BF\uFE00-\uFE0F\u200D]/gu,
+        ' '
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return false;
+
+    const chunks = splitDharmaIntoSentences(cleaned);
+    if (chunks.length === 0) return false;
+
+    const now = Date.now();
+    const shouldInterrupt =
+      options?.interrupt ?? config.hostTtsInterrupt ?? true;
+    const speakerRole =
+      options?.speakerRole ?? config.hostTtsSpeakerRole ?? 'abbot';
+
+    const hostItems: TTSQueueItem[] = chunks.map((chunk, idx) => ({
+      id: `host_tts_${now}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      text: chunk,
+      isPriority: true,
+      isHostLive: true,
+      addedAt: now + idx,
+      meta: {
+        username: 'Chủ Phòng Live',
+        reason: 'host_live',
+        isBot: false,
+        isHostLive: true,
+        speakerRole,
+      },
+    }));
+
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+      this.dharmaNextTimer = null;
+    }
+
+    if (shouldInterrupt) {
+      // Xóa các câu Chủ Phòng cũ còn sót nếu bấm đè liên tục và ngắt ngay câu đang phát để đọc câu mới của Chủ Phòng
+      this.ttsQueue = [...hostItems, ...this.ttsQueue];
+      if (this.isSpeaking) {
+        this.stopCurrentUtteranceOnly();
+      }
+    } else {
+      // Chèn lên đầu hàng đợi (ngay sau các câu Chủ Phòng đang chờ nếu có, nhưng đứng trước tất cả comment/quà của học sinh)
+      let insertIdx = 0;
+      while (
+        insertIdx < this.ttsQueue.length &&
+        this.ttsQueue[insertIdx].isHostLive
+      ) {
+        insertIdx++;
+      }
+      this.ttsQueue.splice(insertIdx, 0, ...hostItems);
+      if (this.isSpeakingDharma) {
+        this.stopCurrentUtteranceOnly();
+      }
+    }
+
+    this.prefetchNextQueueItems(config);
+    this.emitEventQueue();
+    this.processQueue(config);
+    return true;
+  }
+
+  private scheduleNextDharmaStep(delayMs = 350) {
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+    }
+    this.dharmaNextTimer = setTimeout(() => {
+      this.dharmaNextTimer = null;
+      if (this.latestConfig) {
+        this.processQueue(this.latestConfig);
+      }
+    }, delayMs);
+  }
+
+  public skipToNextDharmaArticle(config: GameConfig): string | null {
+    const articles = config.dharmaArticles || [];
+    if (articles.length === 0) return null;
+    const curIdx = articles.findIndex((a) => a.id === config.activeDharmaId);
+    const nextIdx = curIdx >= 0 ? (curIdx + 1) % articles.length : 0;
+    const nextArticle = articles[nextIdx];
+    this.dharmaIndex = 0;
+    this.lastDharmaArticleId = nextArticle.id;
+    this.lastDharmaContent = nextArticle.content;
+    if (this.latestConfig) {
+      this.latestConfig = {
+        ...this.latestConfig,
+        activeDharmaId: nextArticle.id,
+      };
+    }
+    if (this.isSpeakingDharma) {
+      this.stopCurrentUtteranceOnly();
+      this.scheduleNextDharmaStep(150);
+    }
+    this.emitDharmaArticleChange(nextArticle.id);
+    return nextArticle.id;
+  }
+
+  private getNextDharmaSentence(config: GameConfig): string | null {
+    if (!config.dharmaEnabled) return null;
+    const articles = config.dharmaArticles || [];
+    let activeIdx = articles.findIndex((a) => a.id === config.activeDharmaId);
+    if (activeIdx < 0) activeIdx = 0;
+    let active = articles[activeIdx];
+    if (!active || !active.content.trim()) return null;
+
+    if (
+      this.lastDharmaArticleId !== active.id ||
+      this.lastDharmaContent !== active.content
+    ) {
+      this.lastDharmaArticleId = active.id;
+      this.lastDharmaContent = active.content;
+      this.dharmaIndex = 0;
+    }
+
+    let sentences = splitDharmaIntoSentences(active.content);
+    if (sentences.length === 0) return null;
+
+    if (this.dharmaIndex >= sentences.length) {
+      if ((config.dharmaAutoNext ?? true) && articles.length > 1) {
+        const nextIdx = (activeIdx + 1) % articles.length;
+        const nextArticle = articles[nextIdx];
+        if (nextArticle && nextArticle.content.trim()) {
+          active = nextArticle;
+          this.lastDharmaArticleId = active.id;
+          this.lastDharmaContent = active.content;
+          this.dharmaIndex = 0;
+          if (this.latestConfig) {
+            this.latestConfig = {
+              ...this.latestConfig,
+              activeDharmaId: active.id,
+            };
+          }
+          this.emitDharmaArticleChange(active.id);
+          sentences = splitDharmaIntoSentences(active.content);
+        } else {
+          this.dharmaIndex = 0;
+        }
+      } else {
+        this.dharmaIndex = 0;
+      }
+    }
+
+    if (sentences.length === 0) return null;
+    const line = sentences[this.dharmaIndex];
+    this.dharmaIndex = this.dharmaIndex + 1;
+    return line;
+  }
+
+  private processQueue(config: GameConfig) {
+    if (this.isSpeaking) return;
+
+    let nextItem: TTSQueueItem | null = null;
+    let nextText: string | null = null;
+    let isDharmaLine = false;
+
+    if (this.ttsQueue.length > 0) {
+      nextItem = this.ttsQueue.shift()!;
+      nextText = nextItem.text;
+      isDharmaLine = false;
+    } else if (config.dharmaEnabled && !this.localTabMuted) {
+      nextText = this.getNextDharmaSentence(config);
+      isDharmaLine = true;
+    }
+
+    if (!nextText) {
+      this.activeEventItem = null;
+      this.emitEventQueue();
+      return;
+    }
+
+    const token = ++this.speechTokenSeq;
+    let finishedOnce = false;
+
+    // Dọn dẹp triệt để tiến trình phát cũ (nếu có) trước khi phát câu mới để tuyệt đối không bao giờ bị chồng 2 giọng
+    if (this.dharmaNextTimer) {
+      clearTimeout(this.dharmaNextTimer);
+      this.dharmaNextTimer = null;
+    }
+    if (this.mutedSimTimer) {
+      clearTimeout(this.mutedSimTimer);
+      this.mutedSimTimer = null;
+    }
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.onended = null;
+        this.currentAudio.onerror = null;
+        this.currentAudio.pause();
+        this.currentAudio.removeAttribute('src');
+        this.currentAudio = null;
+      } catch {
+        // Ignore
+      }
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    const isHostLiveItem = Boolean(
+      !isDharmaLine && (nextItem?.isHostLive || nextItem?.meta?.isHostLive)
+    );
+    const playbackConfig = this.buildEffectiveItemConfig(
+      config,
+      isHostLiveItem,
+      nextItem?.meta?.speakerRole
+    );
+
+    this.isSpeaking = true;
+    this.isSpeakingDharma = isDharmaLine;
+    this.activeEventItem = isDharmaLine ? null : nextItem;
+    this.currentEventText = isDharmaLine ? '' : nextText;
+    if (!isDharmaLine && nextItem && this.onStartEventItemCallback) {
+      try {
+        this.onStartEventItemCallback(nextItem);
+      } catch {
+        // Ignore callback error
+      }
+    }
+    this.emitStatus(
+      isHostLiveItem
+        ? '🎙️ Đang đọc Live Text Chủ Phòng...'
+        : isDharmaLine
+        ? 'Đang giảng bài...'
+        : 'Đang đọc sự kiện...',
+      true,
+      nextText
+    );
+    this.emitEventQueue();
+
+    // Tải trước (Pre-fetch) câu kế tiếp trong hàng chờ vào RAM ngay khi bắt đầu đọc câu hiện tại (triệt tiêu độ trễ mạng giữa các câu)
+    this.prefetchNextQueueItems(config);
+
+    const finish = () => {
+      if (finishedOnce || token !== this.speechTokenSeq) return;
+      finishedOnce = true;
+
+      const completedItem = isDharmaLine ? null : nextItem;
+      this.isSpeaking = false;
+      this.isSpeakingDharma = false;
+      this.currentEventText = '';
+      this.activeEventItem = null;
+      const latestCfg = this.latestConfig || config;
+      const hasMore =
+        this.ttsQueue.length > 0 || Boolean(latestCfg.dharmaEnabled);
+      if (!hasMore) {
+        this.emitStatus('Sẵn sàng', false, '');
+      }
+      this.emitEventQueue();
+      if (completedItem) {
+        this.notifyItemFinished(completedItem);
+      }
+      this.scheduleNextDharmaStep(isDharmaLine ? 380 : 80);
+    };
+
+    const itemLang: 'vi' | 'en' =
+      (!isDharmaLine && (nextItem?.lang || nextItem?.meta?.lang)) || 'vi';
+
+    // Nếu tab hiện tại đang tắt tiếng cục bộ (Mute Tab Admin), vẫn giữ nhịp thời gian đọc tương ứng số chữ để Camera trên Tab Admin di chuyển khớp 1:1
+    if (this.localTabMuted) {
+      const wordCount = nextText.split(/\s+/).filter(Boolean).length;
+      const effectiveMutedRate =
+        itemLang === 'en'
+          ? playbackConfig.englishTtsRate ?? 0.95
+          : playbackConfig.ttsRate || 1;
+      const simDurationMs = Math.max(
+        1400,
+        Math.min(
+          8500,
+          Math.round(
+            (wordCount * 310) / Math.max(0.5, effectiveMutedRate)
+          )
+        )
+      );
+      this.mutedSimTimer = setTimeout(finish, simDurationMs);
+      return;
+    }
+
+    if (itemLang === 'en') {
+      // Phát âm chuẩn Tiếng Anh bản xứ (tl=en)
+      this.playViaGoogleStream(nextText, playbackConfig, token, finish, false, 'en');
+    } else if (playbackConfig.ttsEngine === 'node_edge') {
+      this.playViaNodeEdge(nextText, playbackConfig, token, finish);
+    } else if (playbackConfig.ttsEngine === 'google_stream') {
+      this.playViaGoogleStream(nextText, playbackConfig, token, finish, false, 'vi');
+    } else {
+      this.playViaWebSpeech(nextText, playbackConfig, token, finish);
+    }
+  }
+
+  private applyAudioPlaybackParams(
+    audio: HTMLAudioElement,
+    effectiveRate: number,
+    preservePitch: boolean,
+    volume: number
+  ) {
+    const safeRate = Math.max(0.5, Math.min(2.0, Number(effectiveRate) || 1));
+    audio.volume = Math.max(0.05, Math.min(1, Number(volume) || 1));
+    audio.preservesPitch = preservePitch;
+    (
+      audio as HTMLAudioElement & {
+        mozPreservesPitch?: boolean;
+        webkitPreservesPitch?: boolean;
+      }
+    ).mozPreservesPitch = preservePitch;
+    (
+      audio as HTMLAudioElement & {
+        mozPreservesPitch?: boolean;
+        webkitPreservesPitch?: boolean;
+      }
+    ).webkitPreservesPitch = preservePitch;
+    audio.defaultPlaybackRate = safeRate;
+    audio.playbackRate = safeRate;
+  }
+
+  private computeStreamPlaybackRateAndPitch(
+    voice: string,
+    config: GameConfig
+  ): { effectiveRate: number; preservePitch: boolean } {
+    const baseRate = Math.max(0.5, Math.min(2.0, config.ttsRate || 1));
+    const pitch = config.ttsPitch ?? 1;
+
+    // Khi người dùng chỉnh tốc độ cao (> 1.15x), ưu tiên giữ nguyên 100% tốc độ baseRate và preservePitch = true
+    // để giọng đọc Nguồn 2 & 3 tăng tốc rõ rệt đúng tỉ lệ thanh trượt mà không bị biến dạng giọng chuột Mickey
+    if (baseRate > 1.15) {
+      return {
+        effectiveRate: baseRate,
+        preservePitch: true,
+      };
+    }
+
+    if (voice === 'google-vi-male-deep') {
+      const pitchFactor = pitch < 1 ? Math.max(0.85, pitch) : 0.92;
+      return {
+        effectiveRate: Math.max(0.65, Math.min(2.0, baseRate * pitchFactor)),
+        preservePitch: false,
+      };
+    }
+    if (voice === 'google-vi-warm') {
+      return {
+        effectiveRate: Math.max(0.65, Math.min(2.0, baseRate * 0.95)),
+        preservePitch: false,
+      };
+    }
+    if (voice === 'google-vi-bright') {
+      const brightFactor = pitch > 1 ? Math.min(1.15, pitch) : 1.06;
+      return {
+        effectiveRate: Math.max(0.75, Math.min(2.0, baseRate * brightFactor)),
+        preservePitch: false,
+      };
+    }
+    return {
+      effectiveRate: baseRate,
+      preservePitch: true,
+    };
+  }
+
+  private playViaNodeEdge(
+    text: string,
+    config: GameConfig,
+    token: number,
+    onDone: () => void
+  ) {
+    const shortText = text.slice(0, 195);
+    const voice = config.nodeVoice || 'google-vi-gtx';
+    const endpoint = config.nodeTtsEndpoint || 'http://localhost:3000/tts';
+    const url = `${endpoint}?voice=${encodeURIComponent(
+      voice
+    )}&text=${encodeURIComponent(shortText)}`;
+
+    let fallbackTriggered = false;
+    let hasStartedPlaying = false;
+    let activeAudio: HTMLAudioElement | null = null;
+
+    const cleanupAudio = () => {
+      if (!activeAudio) return;
+      activeAudio.onended = null;
+      activeAudio.onerror = null;
+      activeAudio.onplaying = null;
+      activeAudio.onloadedmetadata = null;
+      try {
+        activeAudio.pause();
+        activeAudio.removeAttribute('src');
+        activeAudio.load();
+      } catch {
+        // Ignore
+      }
+      if (this.currentAudio === activeAudio) {
+        this.currentAudio = null;
+      }
+      activeAudio = null;
+    };
+
+    const fallbackOnce = () => {
+      if (fallbackTriggered || token !== this.speechTokenSeq) return;
+      fallbackTriggered = true;
+      clearTimeout(lagTimeout);
+      cleanupAudio();
+      // Ưu tiên dự phòng sang Google Cloud Stream đa máy chủ (/api/tts) trước để giữ đồng nhất màu giọng MP3 và âm lượng, nếu vẫn lỗi mới xuống WebSpeech
+      this.playViaGoogleStream(text, config, token, onDone, true);
+    };
+
+    const lagTimeout = setTimeout(() => {
+      if (!hasStartedPlaying) {
+        fallbackOnce();
+      }
+    }, 2200);
+
+    void this.getOrFetchAudioBlobUrl(url, 2000).then((blobUrl) => {
+      if (fallbackTriggered || token !== this.speechTokenSeq) return;
+      if (!blobUrl) {
+        fallbackOnce();
+        return;
+      }
+      const audio = new Audio();
+      audio.crossOrigin = 'anonymous';
+      activeAudio = audio;
+      this.currentAudio = audio;
+      const { effectiveRate, preservePitch } =
+        this.computeStreamPlaybackRateAndPitch(voice, config);
+
+      // QUAN TRỌNG: Gán audio.src trước, sau đó mới gán defaultPlaybackRate & playbackRate
+      // vì theo chuẩn HTML5, gán audio.src sẽ reset playbackRate về defaultPlaybackRate (1.0)
+      audio.src = blobUrl;
+      this.applyAudioPlaybackParams(
+        audio,
+        effectiveRate,
+        preservePitch,
+        config.ttsVolume
+      );
+
+      audio.onloadedmetadata = () => {
+        this.applyAudioPlaybackParams(
+          audio,
+          effectiveRate,
+          preservePitch,
+          config.ttsVolume
+        );
+      };
+
+      audio.onplaying = () => {
+        hasStartedPlaying = true;
+        clearTimeout(lagTimeout);
+        this.applyAudioPlaybackParams(
+          audio,
+          effectiveRate,
+          preservePitch,
+          config.ttsVolume
+        );
+      };
+
+      audio.onended = () => {
+        if (fallbackTriggered || token !== this.speechTokenSeq) return;
+        fallbackTriggered = true;
+        clearTimeout(lagTimeout);
+        cleanupAudio();
+        onDone();
+      };
+
+      audio.onerror = () => {
+        fallbackOnce();
+      };
+
+      audio.play().catch(() => {
+        fallbackOnce();
+      });
+    });
+  }
+
+  private playViaGoogleStream(
+    text: string,
+    config: GameConfig,
+    token: number,
+    onDone: () => void,
+    isFallbackFromNode = false,
+    lang: 'vi' | 'en' = 'vi'
+  ) {
+    const shortText = text.slice(0, 195);
+    const voice = lang === 'en' ? 'google-en-gtx' : config.nodeVoice || 'google-vi-gtx';
+    const proxyUrl = `/api/tts?lang=${lang}&voice=${encodeURIComponent(
+      voice
+    )}&text=${encodeURIComponent(shortText)}`;
+
+    let fallbackTriggered = false;
+    let hasStartedPlaying = false;
+    let activeAudio: HTMLAudioElement | null = null;
+
+    const cleanupAudio = () => {
+      if (!activeAudio) return;
+      activeAudio.onended = null;
+      activeAudio.onerror = null;
+      activeAudio.onplaying = null;
+      activeAudio.onloadedmetadata = null;
+      try {
+        activeAudio.pause();
+        activeAudio.removeAttribute('src');
+        activeAudio.load();
+      } catch {
+        // Ignore
+      }
+      if (this.currentAudio === activeAudio) {
+        this.currentAudio = null;
+      }
+      activeAudio = null;
+    };
+
+    const fallbackOnce = () => {
+      if (fallbackTriggered || token !== this.speechTokenSeq) return;
+      fallbackTriggered = true;
+      clearTimeout(lagTimeout);
+      cleanupAudio();
+      this.playViaWebSpeech(
+        text,
+        config,
+        token,
+        onDone,
+        lang === 'en'
+          ? {
+              lang: 'en-US',
+              rate: Math.max(0.5, Math.min(2.0, config.englishTtsRate ?? 0.95)),
+            }
+          : undefined
+      );
+    };
+
+    const timeoutBudget = isFallbackFromNode ? 1800 : 2300;
+    const lagTimeout = setTimeout(() => {
+      if (!hasStartedPlaying) {
+        fallbackOnce();
+      }
+    }, timeoutBudget);
+
+    void this.getOrFetchAudioBlobUrl(proxyUrl, timeoutBudget - 150).then(
+      (blobUrl) => {
+        if (fallbackTriggered || token !== this.speechTokenSeq) return;
+        if (!blobUrl) {
+          fallbackOnce();
+          return;
+        }
+        const audio = new Audio();
+        audio.crossOrigin = 'anonymous';
+        activeAudio = audio;
+        this.currentAudio = audio;
+        const { effectiveRate, preservePitch } =
+          lang === 'en'
+            ? {
+                effectiveRate: Math.max(
+                  0.5,
+                  Math.min(2.0, config.englishTtsRate ?? 0.95)
+                ),
+                preservePitch: true,
+              }
+            : this.computeStreamPlaybackRateAndPitch(voice, config);
+
+        // QUAN TRỌNG: Gán audio.src trước, sau đó mới gán defaultPlaybackRate & playbackRate
+        // vì theo chuẩn HTML5, gán audio.src sẽ reset playbackRate về defaultPlaybackRate (1.0)
+        audio.src = blobUrl;
+        this.applyAudioPlaybackParams(
+          audio,
+          effectiveRate,
+          preservePitch,
+          config.ttsVolume
+        );
+
+        audio.onloadedmetadata = () => {
+          this.applyAudioPlaybackParams(
+            audio,
+            effectiveRate,
+            preservePitch,
+            config.ttsVolume
+          );
+        };
+
+        audio.onplaying = () => {
+          hasStartedPlaying = true;
+          clearTimeout(lagTimeout);
+          this.applyAudioPlaybackParams(
+            audio,
+            effectiveRate,
+            preservePitch,
+            config.ttsVolume
+          );
+        };
+
+        audio.onended = () => {
+          if (fallbackTriggered || token !== this.speechTokenSeq) return;
+          fallbackTriggered = true;
+          clearTimeout(lagTimeout);
+          cleanupAudio();
+          onDone();
+        };
+
+        audio.onerror = () => {
+          fallbackOnce();
+        };
+
+        audio.play().catch(() => {
+          fallbackOnce();
+        });
+      }
+    );
+  }
+
+  private playViaWebSpeech(
+    text: string,
+    config: GameConfig,
+    token: number,
+    onDone: () => void,
+    override?: { rate?: number; pitch?: number; lang?: string }
+  ) {
+    if (token !== this.speechTokenSeq) return;
+    if (!('speechSynthesis' in window)) {
+      onDone();
+      return;
+    }
+
+    let settled = false;
+    const settleOnce = () => {
+      if (settled || token !== this.speechTokenSeq) return;
+      settled = true;
+      clearTimeout(safetyWatchdog);
+      onDone();
+    };
+
+    // Bảo vệ trường hợp trình duyệt treo sự kiện onend của WebSpeech
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const maxExpectedMs = Math.max(4000, Math.min(18000, wordCount * 550 + 2500));
+    const safetyWatchdog = setTimeout(settleOnce, maxExpectedMs);
+
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      const targetLang = override?.lang || 'vi-VN';
+      utter.lang = targetLang;
+      const defaultRate = targetLang.toLowerCase().startsWith('en')
+        ? config.englishTtsRate ?? 0.95
+        : config.ttsRate;
+      utter.rate = Math.max(0.5, Math.min(2.0, override?.rate ?? defaultRate));
+      utter.pitch = override?.pitch ?? config.ttsPitch;
+      utter.volume = config.ttsVolume;
+
+      const voices = window.speechSynthesis.getVoices();
+      if (targetLang.toLowerCase().startsWith('en')) {
+        const enVoice = voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+        if (enVoice) utter.voice = enVoice;
+      } else {
+        let chosen = config.selectedSystemVoiceURI
+          ? voices.find((v) => v.voiceURI === config.selectedSystemVoiceURI)
+          : undefined;
+        if (!chosen) {
+          chosen = voices.find((v) => v.lang.toLowerCase().includes('vi'));
+        }
+        if (chosen) utter.voice = chosen;
+      }
+
+      utter.onend = settleOnce;
+      utter.onerror = settleOnce;
+      window.speechSynthesis.speak(utter);
+    } catch {
+      settleOnce();
+    }
+  }
+}
+
+export const soundEngine = new TempleSoundService();

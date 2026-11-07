@@ -1,0 +1,459 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    user-select: none;
+    font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom subtle scrollbars for Dev Studio */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #141210;
+}
+::-webkit-scrollbar-thumb {
+  background: #44403c;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #d97706;
+}
+
+/* 9:16 Chánh Điện Viewport */
+.temple-stage-bg {
+  background: radial-gradient(circle at 50% 22%, #78350f 0%, #451a03 42%, #1c1917 100%);
+  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.92), 0 0 0 1px rgba(245, 158, 11, 0.28);
+}
+
+.buddha-aura {
+  background: radial-gradient(circle, rgba(253, 224, 71, 0.55) 0%, rgba(245, 158, 11, 0.25) 45%, rgba(245, 158, 11, 0) 72%);
+  filter: blur(8px);
+  animation: auraPulse 4s ease-in-out infinite;
+}
+
+@keyframes auraPulse {
+  0%, 100% { transform: translateX(-50%) scale(0.96); opacity: 0.85; }
+  50% { transform: translateX(-50%) scale(1.06); opacity: 1; }
+}
+
+.temple-floor {
+  background: 
+    linear-gradient(180deg, rgba(28, 13, 6, 0.95) 0%, rgba(69, 26, 3, 0.92) 30%, rgba(41, 16, 4, 0.98) 100%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0px, rgba(0,0,0,0.18) 2px, transparent 2px, transparent 45px);
+  border-top: 3px solid #b45309;
+  box-shadow: inset 0 25px 45px rgba(0,0,0,0.75);
+}
+
+.sun-ray {
+  background: linear-gradient(215deg, rgba(254, 240, 138, 0.2) 0%, rgba(251, 191, 36, 0.05) 45%, transparent 75%);
+  transform: rotate(-18deg);
+}
+
+/* 2.5D Pilgrim Animations (compositor-only transform) */
+.pilgrim-walk .pilgrim-sprite {
+  animation: walkBob 0.42s ease-in-out infinite alternate;
+}
+
+@keyframes walkBob {
+  0% { transform: translateY(0px) rotate(-2deg); }
+  100% { transform: translateY(-5px) rotate(2deg); }
+}
+
+.pilgrim-pray .pilgrim-head-torso {
+  transform-origin: 32px 58px;
+  animation: bowPray 2.6s ease-in-out infinite;
+}
+
+@keyframes bowPray {
+  0%, 100% { transform: translateY(0px) scaleY(1); }
+  40%, 60% { transform: translateY(9px) scaleY(0.84); }
+}
+
+/* Hiệu ứng bảng thông báo dâng lễ hiện rõ trong bảng rồi mờ dần khi hết thời gian */
+.toast-float-up {
+  animation: toastPopStayFade 7.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes toastPopStayFade {
+  0% {
+    transform: translateY(8px) scale(0.96);
+    opacity: 0;
+  }
+  6% {
+    transform: translateY(0px) scale(1);
+    opacity: 1;
+  }
+  88% {
+    transform: translateY(0px) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-4px) scale(0.98);
+    opacity: 0;
+  }
+}
+
+/* Icon Hoa Sen Hồng nhấp nháy liên tục trong Bảng Sự Kiện Đại Lễ */
+.pink-lotus-blink {
+  animation: pinkLotusBlink 0.95s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(244, 114, 182, 0.95));
+}
+
+@keyframes pinkLotusBlink {
+  0%, 100% {
+    transform: scale(0.92) rotate(-3deg);
+    opacity: 0.72;
+    filter: drop-shadow(0 0 4px rgba(244, 114, 182, 0.6));
+  }
+  50% {
+    transform: scale(1.18) rotate(3deg);
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(251, 113, 133, 1));
+  }
+}
+
+/* 3 bông hoa sen nhỏ nằm phía trên tên người chơi (đè lên model nhân vật) bay lên nhẹ nhàng khi thả tim */
+.lotus-head-float-1 {
+  animation: lotusHeadRiseLeft 1.95s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.lotus-head-float-2 {
+  animation: lotusHeadRiseCenter 2.1s cubic-bezier(0.22, 0.61, 0.36, 1) 0.12s forwards;
+}
+.lotus-head-float-3 {
+  animation: lotusHeadRiseRight 1.95s cubic-bezier(0.22, 0.61, 0.36, 1) 0.24s forwards;
+}
+
+@keyframes lotusHeadRiseLeft {
+  0% { transform: translate(0px, 2px) scale(0.55) rotate(-8deg); opacity: 0; }
+  18% { transform: translate(-3px, -4px) scale(0.95) rotate(-4deg); opacity: 0.96; }
+  55% { transform: translate(-6px, -16px) scale(1) rotate(3deg); opacity: 0.92; }
+  85% { transform: translate(-4px, -26px) scale(0.9) rotate(-3deg); opacity: 0.65; }
+  100% { transform: translate(-6px, -34px) scale(0.75) rotate(0deg); opacity: 0; }
+}
+
+@keyframes lotusHeadRiseCenter {
+  0% { transform: translate(0px, 3px) scale(0.55); opacity: 0; }
+  18% { transform: translate(0px, -5px) scale(1.02); opacity: 1; }
+  55% { transform: translate(1.5px, -19px) scale(1.05); opacity: 0.95; }
+  85% { transform: translate(-1px, -31px) scale(0.92); opacity: 0.68; }
+  100% { transform: translate(0px, -40px) scale(0.78); opacity: 0; }
+}
+
+@keyframes lotusHeadRiseRight {
+  0% { transform: translate(0px, 2px) scale(0.55) rotate(8deg); opacity: 0; }
+  18% { transform: translate(3px, -4px) scale(0.95) rotate(4deg); opacity: 0.96; }
+  55% { transform: translate(6px, -16px) scale(1) rotate(-3deg); opacity: 0.92; }
+  85% { transform: translate(4px, -26px) scale(0.9) rotate(3deg); opacity: 0.65; }
+  100% { transform: translate(6px, -34px) scale(0.75) rotate(0deg); opacity: 0; }
+}
+
+/* Viền thanh đếm trong thẻ Sự kiện Đại lễ glow hồng nháy lên 1 cái khi số tim tăng */
+.event-bar-pink-flash {
+  animation: eventBarPinkGlow 0.65s ease-out forwards;
+}
+
+@keyframes eventBarPinkGlow {
+  0% {
+    border-color: #fbcfe8;
+    box-shadow: 0 0 0px rgba(244, 114, 182, 0);
+  }
+  25% {
+    border-color: #ffffff;
+    box-shadow: 0 0 18px #f472b6, 0 0 30px #ec4899, inset 0 0 8px #f9a8d4;
+  }
+  100% {
+    border-color: rgba(244, 114, 182, 0.45);
+    box-shadow: 0 0 0px rgba(244, 114, 182, 0);
+  }
+}
+
+/* Viền Bảng Kích Hoạt Sự Kiện chớp sáng liên tục từ lúc kích hoạt cho đến khi sự kiện kết thúc */
+.grand-event-activated-border-blink {
+  animation: grandEventActivatedBorderBlink 0.7s ease-in-out infinite;
+}
+
+@keyframes grandEventActivatedBorderBlink {
+  0%, 100% {
+    border-color: #fde047 !important;
+    box-shadow: 0 0 14px rgba(250, 204, 21, 0.95), 0 0 26px rgba(244, 114, 182, 0.75), inset 0 0 10px rgba(253, 224, 71, 0.45) !important;
+  }
+  50% {
+    border-color: #22d3ee !important;
+    box-shadow: 0 0 18px rgba(34, 211, 238, 1), 0 0 32px rgba(236, 72, 153, 0.9), inset 0 0 14px rgba(34, 211, 238, 0.55) !important;
+  }
+}
+
+/* Hiệu ứng text số điểm cộng/trừ run nhẹ liên tục phía trên thẻ điểm */
+.score-delta-vibrate {
+  animation: scoreDeltaVibrate 0.36s ease-in-out infinite;
+}
+
+@keyframes scoreDeltaVibrate {
+  0%, 100% {
+    transform: translate3d(0px, 0px, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(-0.9px, -0.7px, 0) rotate(-1.6deg);
+  }
+  50% {
+    transform: translate3d(0.9px, 0.5px, 0) rotate(1.4deg);
+  }
+  75% {
+    transform: translate3d(-0.6px, 0.7px, 0) rotate(-1.1deg);
+  }
+}
+
+/* Hiệu ứng bung tỏa nhiều hoa sen hồng nhỏ tại lư hương khi lễ vật tan biến */
+@keyframes burnerLotusExplode {
+  0% {
+    transform: translate(-50%, -50%) scale(0.3) rotate(0deg);
+    opacity: 1;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--tx, 0px)), calc(-50% + var(--ty, -40px))) scale(1.05) rotate(var(--rot, 45deg));
+    opacity: 0;
+  }
+}
+
+.burner-lotus-particle {
+  animation: burnerLotusExplode 0.95s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Floating text +số hoa sen (màu hồng không viền kèm icon model hoa sen không viền) tại vị trí lễ vật tan biến */
+@keyframes burnerLotusFloatScore {
+  0% {
+    transform: translate(-50%, -20%) scale(0.75);
+    opacity: 0;
+  }
+  15% {
+    transform: translate(-50%, -75%) scale(1.08);
+    opacity: 1;
+  }
+  30% {
+    transform: translate(-50%, -105%) scale(1);
+    opacity: 1;
+  }
+  78% {
+    transform: translate(-50%, -175%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -220%) scale(0.94);
+    opacity: 0;
+  }
+}
+
+.burner-lotus-float-score {
+  animation: burnerLotusFloatScore 1.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.lotus-score-pink {
+  color: #f472b6;
+  -webkit-text-stroke: 0px transparent;
+  text-shadow: 0 0 8px rgba(244, 114, 182, 0.45);
+}
+
+/* Hoa sen kích thước vừa bay từ chậm rồi tăng tốc dần về nhập vào bảng Sự kiện Đại lễ */
+@keyframes flyingLotusToBoard {
+  0% {
+    transform: translate(-50%, -50%) scale(0.65);
+    opacity: 0;
+  }
+  12% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.02),
+      calc(-50% + var(--dy, 0px) * 0.02 - 10px)
+    ) scale(0.95);
+    opacity: 1;
+  }
+  30% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.08 - 8px),
+      calc(-50% + var(--dy, 0px) * 0.08 - 18px)
+    ) scale(1.08);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.22 - 10px),
+      calc(-50% + var(--dy, 0px) * 0.22 - 14px)
+    ) scale(1.12);
+    opacity: 1;
+  }
+  70% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.48 - 6px),
+      calc(-50% + var(--dy, 0px) * 0.48 - 6px)
+    ) scale(1.04);
+    opacity: 1;
+  }
+  86% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.78),
+      calc(-50% + var(--dy, 0px) * 0.78)
+    ) scale(0.9);
+    opacity: 1;
+  }
+  96% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px) * 0.96),
+      calc(-50% + var(--dy, 0px) * 0.96)
+    ) scale(0.75);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(
+      calc(-50% + var(--dx, 0px)),
+      calc(-50% + var(--dy, 0px))
+    ) scale(0.5);
+    opacity: 0;
+  }
+}
+
+.flying-lotus-projectile {
+  animation: flyingLotusToBoard 1.65s linear forwards;
+}
+
+/* Font chữ Pixel hỗ trợ đầy đủ dấu Tiếng Việt */
+.font-pixel-vi {
+  font-family: 'Pixelify Sans', 'VT323', 'JetBrains Mono', monospace;
+  image-rendering: pixelated;
+  letter-spacing: 0.06em;
+}
+
+/* Hiệu ứng zoom lớn nhỏ nhẹ năng động cho màn hình "CHUẨN BỊ" 2s */
+@keyframes prepareZoomPulse {
+  0%, 100% {
+    transform: scale(0.94);
+    text-shadow: 0 3px 0 #78350f, 0 0 14px rgba(250, 204, 21, 0.55);
+  }
+  50% {
+    transform: scale(1.08);
+    text-shadow: 0 4px 0 #78350f, 0 0 26px rgba(250, 204, 21, 0.95), 0 0 42px rgba(52, 211, 153, 0.75);
+  }
+}
+
+.prepare-zoom-pulse {
+  animation: prepareZoomPulse 0.65s ease-in-out infinite;
+}
+
+/* Hiệu ứng nhấp nháy sáng màu xanh lá cho 2s hiển thị đáp án tiếng Anh */
+@keyframes answerGreenFlash {
+  0%, 100% {
+    transform: scale(1);
+    background-color: rgba(16, 185, 129, 0.45);
+    border-color: #6ee7b7;
+    box-shadow: 0 0 10px rgba(52, 211, 153, 0.55), inset 0 0 6px rgba(167, 243, 208, 0.35);
+  }
+  50% {
+    transform: scale(1.08);
+    background-color: rgba(34, 197, 94, 0.82);
+    border-color: #ecfdf5;
+    box-shadow: 0 0 22px rgba(74, 222, 128, 0.98), 0 0 34px rgba(16, 185, 129, 0.8), inset 0 0 12px rgba(255, 255, 255, 0.65);
+  }
+}
+
+.answer-green-flash {
+  animation: answerGreenFlash 0.48s ease-in-out infinite;
+}
+
+/* Hiệu ứng chớp nháy thẻ Top 1 màu vàng trong 3s đầu của Bảng Kết Quả */
+@keyframes top1GoldCardBlink {
+  0%, 100% {
+    background-color: rgba(245, 158, 11, 0.28);
+    border-color: rgba(253, 224, 71, 0.85);
+    box-shadow: 0 0 8px rgba(250, 204, 21, 0.35);
+    transform: scale(1);
+  }
+  50% {
+    background-color: rgba(234, 179, 8, 0.58);
+    border-color: #fef9c3;
+    box-shadow: 0 0 18px rgba(250, 204, 21, 0.95), inset 0 0 10px rgba(254, 240, 138, 0.55);
+    transform: scale(1.02);
+  }
+}
+
+.top1-card-blink {
+  animation: top1GoldCardBlink 0.55s ease-in-out infinite;
+}
+
+/* Hiệu ứng highlight nhấp nháy cho Top 1 (Vàng), Top 2 (Tím), Top 3 (Xanh lá) ở Bảng Tổng Điểm */
+@keyframes rankTop1Blink {
+  0%, 100% {
+    background-color: rgba(234, 179, 8, 0.28);
+    border-color: #fde047;
+    box-shadow: 0 0 8px rgba(250, 204, 21, 0.4);
+  }
+  50% {
+    background-color: rgba(250, 204, 21, 0.56);
+    border-color: #fefce8;
+    box-shadow: 0 0 18px rgba(250, 204, 21, 0.95), inset 0 0 8px rgba(254, 240, 138, 0.6);
+  }
+}
+
+@keyframes rankTop2Blink {
+  0%, 100% {
+    background-color: rgba(168, 85, 247, 0.28);
+    border-color: #d8b4fe;
+    box-shadow: 0 0 8px rgba(192, 132, 252, 0.4);
+  }
+  50% {
+    background-color: rgba(192, 132, 252, 0.56);
+    border-color: #faf5ff;
+    box-shadow: 0 0 18px rgba(192, 132, 252, 0.95), inset 0 0 8px rgba(233, 213, 255, 0.6);
+  }
+}
+
+@keyframes rankTop3Blink {
+  0%, 100% {
+    background-color: rgba(16, 185, 129, 0.28);
+    border-color: #6ee7b7;
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
+  }
+  50% {
+    background-color: rgba(52, 211, 153, 0.56);
+    border-color: #ecfdf5;
+    box-shadow: 0 0 18px rgba(52, 211, 153, 0.95), inset 0 0 8px rgba(167, 243, 208, 0.6);
+  }
+}
+
+.rank-top1-blink {
+  animation: rankTop1Blink 0.6s ease-in-out infinite;
+}
+
+.rank-top2-blink {
+  animation: rankTop2Blink 0.6s ease-in-out 0.1s infinite;
+}
+
+.rank-top3-blink {
+  animation: rankTop3Blink 0.6s ease-in-out 0.2s infinite;
+}
+
+/* Hiệu ứng fade mượt (opacity: 0 -> 1 trong 0.25s) chỉ cho phần chữ/nội dung bên trong Bảng Lớp, giữ nguyên khung nền bảng đen đứng yên */
+@keyframes classBoardContentFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.class-board-phase-fade {
+  animation: classBoardContentFadeIn 0.25s ease-out forwards;
+  will-change: opacity;
+}
+
