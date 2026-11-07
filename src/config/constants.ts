@@ -1513,6 +1513,14 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
+// Chặn mọi lỗi ngầm không làm sập cửa sổ CMD
+process.on('uncaughtException', err => {
+  console.warn('⚠️ [BỎ QUA LỖI NGẦM]:', err?.message || err);
+});
+process.on('unhandledRejection', err => {
+  console.warn('⚠️ [BỎ QUA PROMISE LỖI]:', err?.message || err);
+});
+
 let MsEdgeTTS, OUTPUT_FORMAT;
 try {
   ({ MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts'));
@@ -1606,10 +1614,18 @@ app.get('/tts', async (req, res) => {
 });
 
 // ================= CẤU HÌNH KẾT NỐI TIKTOK LIVE =================
-// Cách 1: Đền ID kênh TikTok vào dòng dưới (VD: "lophocthaygiao")
-// Cách 2: Hoặc nhập trực tiếp ID TikTok trên giao diện Web Game (Tab TikTok Live)
+// Cách 1: Điền ID kênh TikTok vào dòng dưới (VD: "lophocthaygiao")
+// Cách 2: Hoặc nhập trực tiếp ID TikTok trên giao diện Web Game (Tab TikTok Live) rồi bấm "Kết nối Live"
 let TIKTOK_USERNAME = (process.argv[2] || "ten_id_tiktok_cua_ban").replace(/^@+/, '').trim();
 const CLOUD_RELAY_URL = "__CLOUD_RELAY_URL__";
+
+let lastStatusPayload = {
+  type: 'status',
+  status: 'idle',
+  username: TIKTOK_USERNAME !== 'ten_id_tiktok_cua_ban' ? TIKTOK_USERNAME : '',
+  roomId: '',
+  message: 'Chờ kết nối phòng Live...'
+};
 
 const sseClients = new Set();
 app.get('/events', (req, res) => {
@@ -1618,7 +1634,55 @@ app.get('/events', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
   sseClients.add(res);
+  try {
+    res.write(\`data: \${JSON.stringify(lastStatusPayload)}\\n\\n\`);
+  } catch (e) {}
   req.on('close', () => sseClients.delete(res));
+});
+
+app.get('/status', (req, res) => {
+  res.json({ ok: true, ...lastStatusPayload });
+});
+
+app.post('/connect', async (req, res) => {
+  const user = String(req.body?.username || req.query?.username || '').replace(/^@+/, '').trim();
+  if (!user) return res.status(400).json({ ok: false, error: 'Thiếu ID TikTok' });
+  const result = await connectTikTok(user);
+  if (result.ok) {
+    res.json({ ok: true, roomId: result.roomId, username: user });
+  } else {
+    res.status(500).json({ ok: false, error: result.error || 'Không kết nối được phòng Live' });
+  }
+});
+
+app.get('/connect', async (req, res) => {
+  const user = String(req.query?.username || '').replace(/^@+/, '').trim();
+  if (!user) return res.status(400).json({ ok: false, error: 'Thiếu ID TikTok' });
+  const result = await connectTikTok(user);
+  res.json(result);
+});
+
+app.post('/disconnect', async (req, res) => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (activeTiktok) {
+    try {
+      activeTiktok.removeAllListeners?.();
+      await activeTiktok.disconnect?.();
+    } catch (e) {}
+    activeTiktok = null;
+  }
+  lastStatusPayload = {
+    type: 'status',
+    status: 'simulated',
+    username: TIKTOK_USERNAME,
+    roomId: '',
+    message: 'Đã ngắt kết nối phiên Live'
+  };
+  broadcast(lastStatusPayload);
+  res.json({ ok: true });
 });
 
 // Gộp cả WebSocket (ws://localhost:8080 & ws://127.0.0.1:8080) và HTTP vào cổng 8080 để không bao giờ bị đụng cổng 3000
@@ -1638,6 +1702,9 @@ ttsServer3000.on('error', () => {});
 ttsServer3000.listen(3000, '0.0.0.0');
 
 function broadcast(data, excludeWs = null) {
+  if (data && data.type === 'status') {
+    lastStatusPayload = data;
+  }
   const json = JSON.stringify(data);
   wss.clients.forEach(client => {
     if (client !== excludeWs && client.readyState === 1) {
@@ -1671,8 +1738,8 @@ function getUserName(data) {
 
 function getCommentText(data) {
   return (
-    data?.comment ||
     data?.content ||
+    data?.comment ||
     data?.text ||
     data?.message ||
     data?.common?.displayText?.defaultPattern ||
@@ -1685,15 +1752,15 @@ function getUserAvatar(data) {
   const candidates = [
     u.profilePictureUrl,
     u.avatarUrl,
-    u.avatarLarge?.url?.[0],
-    u.avatarLarge?.urls?.[0],
-    u.avatarLarge?.urlList?.[0],
+    u.avatarThumb?.urlList?.[0],
     u.avatarThumb?.url?.[0],
     u.avatarThumb?.urls?.[0],
-    u.avatarThumb?.urlList?.[0],
+    u.avatarLarge?.urlList?.[0],
+    u.avatarLarge?.url?.[0],
+    u.avatarLarge?.urls?.[0],
+    u.profilePicture?.urlList?.[0],
     u.profilePicture?.url?.[0],
     u.profilePicture?.urls?.[0],
-    u.profilePicture?.urlList?.[0],
     data?.profilePictureUrl,
     data?.avatarUrl,
   ];
@@ -1705,25 +1772,13 @@ function getUserAvatar(data) {
 
 let activeTiktok = null;
 let reconnectTimer = null;
+let isConnectingNow = false;
 
-async function loadTikTokConnectorClass() {
-  // QUAN TRỌNG: Dùng trực tiếp TikTokLiveConnection (TUYỆT ĐỐI KHÔNG dùng 'tiktok-live-connector/legacy' vì bản legacy bị lỗi .map() trên undefined khi nhận gói tin RoomUser/Chat mới của TikTok!)
+async function loadTikTokConnectorPkg() {
   try {
-    const pkg = require('tiktok-live-connector');
-    return (
-      pkg.TikTokLiveConnection ||
-      pkg.WebcastPushConnection ||
-      pkg.default?.TikTokLiveConnection ||
-      pkg.default?.WebcastPushConnection
-    );
+    return require('tiktok-live-connector');
   } catch (e) {
-    const pkg = await import('tiktok-live-connector');
-    return (
-      pkg.TikTokLiveConnection ||
-      pkg.WebcastPushConnection ||
-      pkg.default?.TikTokLiveConnection ||
-      pkg.default?.WebcastPushConnection
-    );
+    return await import('tiktok-live-connector');
   }
 }
 
@@ -1733,7 +1788,7 @@ async function connectTikTok(customUser) {
   }
   if (!TIKTOK_USERNAME || TIKTOK_USERNAME === 'ten_id_tiktok_cua_ban') {
     console.log('ℹ️ [CHỜ ID TIKTOK] Hãy sửa TIKTOK_USERNAME trong server.js hoặc nhập ID TikTok trên Web Game rồi bấm Kết nối!');
-    return;
+    return { ok: false, error: 'Chưa nhập ID TikTok' };
   }
 
   if (reconnectTimer) {
@@ -1748,18 +1803,68 @@ async function connectTikTok(customUser) {
     activeTiktok = null;
   }
 
+  isConnectingNow = true;
+  const targetUser = TIKTOK_USERNAME;
+
   try {
-    const TikTokConnector = await loadTikTokConnectorClass();
-    console.log(\`⏳ [ĐANG KẾT NỐI] Đang vào phòng Live TikTok: @\${TIKTOK_USERNAME}...\`);
-    // Tắt processInitialData, enableExtendedGiftInfo & fetchRoomInfoOnConnect để tránh lỗi .map() trên gói tin cũ và tránh gọi endpoint trả phí EulerStream
-    const tiktok = new TikTokConnector(TIKTOK_USERNAME, {
+    const pkg = await loadTikTokConnectorPkg();
+    // Bỏ qua bước cào HTML SIGI_STATE cũ để kết nối nhanh gấp đôi
+    if (pkg.RoomIdRouteConfig) {
+      pkg.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
+    } else if (pkg.default?.RoomIdRouteConfig) {
+      pkg.default.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
+    }
+
+    // Ưu tiên tuyệt đối TikTokLiveConnection (v2.x) để không bao giờ bị lỗi .map() của bản legacy
+    const TikTokConnector =
+      pkg.TikTokLiveConnection ||
+      pkg.default?.TikTokLiveConnection ||
+      pkg.WebcastPushConnection ||
+      pkg.default?.WebcastPushConnection;
+
+    console.log(\`⏳ [ĐANG KẾT NỐI] Đang vào phòng Live TikTok: @\${targetUser}...\`);
+    broadcast({
+      type: 'status',
+      status: 'connecting',
+      username: targetUser,
+      roomId: '',
+      message: \`Đang kết nối @\${targetUser}...\`
+    });
+
+    const tiktok = new TikTokConnector(targetUser, {
       processInitialData: false,
       enableExtendedGiftInfo: false,
       fetchRoomInfoOnConnect: false,
     });
+
+    // Chặn gọi API lấy danh sách quà trả phí của EulerStream
     if (typeof tiktok.fetchAvailableGifts === 'function') {
       tiktok.fetchAvailableGifts = async () => [];
     }
+
+    // Bọc an toàn hàm giải mã gói tin để không bao giờ bị văng lỗi .map() nếu dùng thư viện cũ
+    if (typeof tiktok.processProtoMessageFetchResult === 'function') {
+      const origProcess = tiktok.processProtoMessageFetchResult.bind(tiktok);
+      tiktok.processProtoMessageFetchResult = async function (fetchResult) {
+        try {
+          if (fetchResult && Array.isArray(fetchResult.messages)) {
+            for (const m of fetchResult.messages) {
+              const d = m?.decodedData?.data;
+              if (d && typeof d === 'object') {
+                if (!Array.isArray(d.ranksList)) d.ranksList = [];
+                if (!Array.isArray(d.emotes)) d.emotes = [];
+                if (!Array.isArray(d.emoteList)) d.emoteList = [];
+                if (d.user && !Array.isArray(d.user.badgeList)) d.user.badgeList = [];
+              }
+            }
+          }
+          return await origProcess(fetchResult);
+        } catch (err) {
+          // Bỏ qua gói tin lỗi định dạng, giữ nguyên kết nối
+        }
+      };
+    }
+
     activeTiktok = tiktok;
 
     const GIFT_ID_FALLBACK = {
@@ -1784,14 +1889,20 @@ async function connectTikTok(customUser) {
 
     tiktok.on('gift', data => {
       try {
-        const giftType = data?.giftType ?? data?.gift?.giftType ?? data?.giftDetails?.giftType;
-        const repeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
+        // Trong tiktok-live-proto v3, loại quà nằm ở data.gift.type (1 = quà combo gửi liên tục)
+        const giftType =
+          data?.gift?.type ??
+          data?.giftType ??
+          data?.gift?.giftType ??
+          data?.giftDetails?.giftType;
+        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
         if (giftType === 1 && !repeatEnd) return;
+
         const username = getUserName(data);
         const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
         const diamondCount = Number(
-          data?.giftDetails?.diamondCount ??
           data?.gift?.diamondCount ??
+          data?.giftDetails?.diamondCount ??
           data?.extendedGiftInfo?.diamond_count ??
           data?.diamondCount ??
           fallbackGift?.coins ??
@@ -1799,8 +1910,8 @@ async function connectTikTok(customUser) {
         ) || 1;
         const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1);
         const giftName =
-          data?.giftDetails?.giftName ||
           data?.gift?.name ||
+          data?.giftDetails?.giftName ||
           data?.extendedGiftInfo?.name ||
           data?.giftName ||
           fallbackGift?.name ||
@@ -1815,7 +1926,7 @@ async function connectTikTok(customUser) {
     tiktok.on('like', data => {
       try {
         const username = getUserName(data);
-        const likeCount = Math.max(1, Number(data?.likeCount ?? data?.count ?? data?.unmergedLikeCount ?? 1) || 1);
+        const likeCount = Math.max(1, Number(data?.count ?? data?.likeCount ?? data?.unmergedLikeCount ?? 1) || 1);
         console.log(\`❤️ [THẢ TIM] \${username} thả \${likeCount} tim\`);
         broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount });
       } catch (e) {}
@@ -1850,28 +1961,45 @@ async function connectTikTok(customUser) {
     });
 
     tiktok.on('disconnected', () => {
+      if (activeTiktok !== tiktok) return;
       console.warn('🔄 [MẤT KẾT NỐI LIVE] Tự động kết nối lại sau 5 giây...');
       reconnectTimer = setTimeout(() => connectTikTok(), 5000);
     });
 
     const state = await tiktok.connect();
-    console.log(\`✅ [THÀNH CÔNG] Đã kết nối phòng Live @\${TIKTOK_USERNAME} (Room ID: \${state?.roomId || 'OK'}) - Đang lắng nghe Comment & Quà...\`);
+    isConnectingNow = false;
+    const roomIdStr = String(state?.roomId || tiktok.roomId || 'OK');
+    console.log(\`✅ [THÀNH CÔNG] Đã kết nối phòng Live @\${targetUser} (Room ID: \${roomIdStr}) - Đang lắng nghe Comment & Quà...\`);
     broadcast({
       type: 'status',
       status: 'connected',
-      username: TIKTOK_USERNAME,
-      roomId: String(state?.roomId || ''),
-      message: \`Đã kết nối @\${TIKTOK_USERNAME}\`
+      username: targetUser,
+      roomId: roomIdStr,
+      message: \`Đã kết nối @\${targetUser} (Room: \${roomIdStr})\`
     });
+    return { ok: true, roomId: roomIdStr };
   } catch (err) {
-    console.error(\`❌ [LỖI KẾT NỐI @\${TIKTOK_USERNAME}]:\`, err?.message || err);
-    console.log('🔄 Thử kết nối lại sau 8 giây...');
-    reconnectTimer = setTimeout(() => connectTikTok(), 8000);
+    isConnectingNow = false;
+    const errMsg = err?.message || String(err);
+    console.error(\`❌ [LỖI KẾT NỐI @\${targetUser}]:\`, errMsg);
+    broadcast({
+      type: 'status',
+      status: 'error',
+      username: targetUser,
+      roomId: '',
+      message: \`Lỗi kết nối @\${targetUser}: \${errMsg}\`
+    });
+    console.log('🔄 Thử kết nối lại sau 10 giây...');
+    reconnectTimer = setTimeout(() => connectTikTok(), 10000);
+    return { ok: false, error: errMsg };
   }
 }
 
 wss.on('connection', ws => {
   console.log(\`🔌 [WEBSOCKET] Trình duyệt Game đã kết nối thành công! (Đang mở: \${wss.clients.size} tab)\`);
+  try {
+    ws.send(JSON.stringify(lastStatusPayload));
+  } catch (e) {}
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw);

@@ -260,10 +260,16 @@ async function startServer() {
 
     try {
       const tiktokPkg: any = await import('tiktok-live-connector');
+      if (tiktokPkg.RoomIdRouteConfig) {
+        tiktokPkg.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
+      } else if (tiktokPkg.default?.RoomIdRouteConfig) {
+        tiktokPkg.default.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
+      }
+
       const ConnectorClass =
         tiktokPkg.TikTokLiveConnection ||
-        tiktokPkg.WebcastPushConnection ||
         tiktokPkg.default?.TikTokLiveConnection ||
+        tiktokPkg.WebcastPushConnection ||
         tiktokPkg.default?.WebcastPushConnection;
 
       const conn = new ConnectorClass(rawUser, {
@@ -275,6 +281,16 @@ async function startServer() {
         conn.fetchAvailableGifts = async () => [];
       }
       activeTikTokConn = conn;
+
+      const GIFT_ID_FALLBACK: Record<number, { name: string; coins: number }> = {
+        5655: { name: 'Rose', coins: 1 },
+        5827: { name: 'Ice Cream Cone', coins: 1 },
+        5269: { name: 'TikTok', coins: 1 },
+        7934: { name: 'GG', coins: 1 },
+        5487: { name: 'Finger Heart', coins: 5 },
+        5658: { name: 'Perfume', coins: 20 },
+        5660: { name: 'Doughnut', coins: 30 },
+      };
 
       const onChat = (data: any) => {
         const username = extractTikTokUsername(data);
@@ -289,16 +305,22 @@ async function startServer() {
       };
 
       const onGift = (data: any) => {
-        const giftType = data?.giftType ?? data?.gift?.giftType ?? data?.giftDetails?.giftType;
-        const repeatEnd = data?.repeatEnd;
+        const giftType =
+          data?.gift?.type ??
+          data?.giftType ??
+          data?.gift?.giftType ??
+          data?.giftDetails?.giftType;
+        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
         if (giftType === 1 && !repeatEnd) return;
         const username = extractTikTokUsername(data);
+        const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
         const diamondCount =
           Number(
-            data?.giftDetails?.diamondCount ??
-              data?.gift?.diamondCount ??
+            data?.gift?.diamondCount ??
+              data?.giftDetails?.diamondCount ??
               data?.extendedGiftInfo?.diamond_count ??
               data?.diamondCount ??
+              fallbackGift?.coins ??
               1
           ) || 1;
         const repeatCount = Math.max(
@@ -306,10 +328,11 @@ async function startServer() {
           Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1
         );
         const giftName =
-          data?.giftDetails?.giftName ||
           data?.gift?.name ||
+          data?.giftDetails?.giftName ||
           data?.extendedGiftInfo?.name ||
           data?.giftName ||
+          fallbackGift?.name ||
           'Quà tặng';
         const coins = Math.max(1, diamondCount * repeatCount);
         const avatarUrl = extractTikTokAvatar(data);

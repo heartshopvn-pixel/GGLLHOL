@@ -322,8 +322,10 @@ class LiveSyncService {
     const clean = username.trim().replace(/^@+/, '');
     if (!clean) return { ok: false, error: 'Vui lòng nhập ID TikTok' };
 
-    // Gửi lệnh tới cả Node.js local (nếu đang mở ws://localhost:8080)
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    // Đảm bảo kết nối WebSocket tới Local Bridge 8080 nếu chưa mở
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.connectWebSocket(this.lastWsUrl || 'ws://127.0.0.1:8080');
+    } else {
       try {
         this.ws.send(JSON.stringify({ type: 'CONNECT_TIKTOK', username: clean }));
       } catch {
@@ -331,7 +333,42 @@ class LiveSyncService {
       }
     }
 
-    // Đồng thời kết nối qua Backend Server tích hợp sẵn
+    // 1. Ưu tiên gọi trực tiếp Local Node.js Bridge (http://127.0.0.1:8080/connect) - hoạt động cả trên GitHub Pages lẫn Local
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      const localRes = await fetch('http://127.0.0.1:8080/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: clean }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const localData = await localRes.json();
+      if (localRes.ok && localData?.ok) {
+        this.setStatus('connected');
+        return { ok: true, roomId: localData.roomId || 'Local-8080' };
+      }
+      if (localData?.error && this.isStaticHost()) {
+        return { ok: false, error: localData.error };
+      }
+    } catch {
+      // Nếu Local Bridge 8080 chưa bật hoặc đang chạy trên Cloud Server
+    }
+
+    // Nếu đang mở trên GitHub Pages mà ws://localhost:8080 đã kết nối (bản server.js cũ chưa có /connect)
+    if (this.isStaticHost()) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.setStatus('connected');
+        return { ok: true, roomId: 'WS-8080' };
+      }
+      return {
+        ok: false,
+        error: 'Chưa kết nối được server.js ở máy! Hãy mở CMD chạy: node server.js',
+      };
+    }
+
+    // 2. Kết nối qua Backend Server tích hợp sẵn (khi chạy trên AI Studio / Node server)
     try {
       const res = await fetch('/api/tiktok/connect', {
         method: 'POST',
@@ -351,9 +388,16 @@ class LiveSyncService {
 
   public async disconnectTikTokRoom() {
     try {
-      await fetch('/api/tiktok/disconnect', { method: 'POST' });
+      fetch('http://127.0.0.1:8080/disconnect', { method: 'POST' }).catch(() => {});
     } catch {
       // Ignore
+    }
+    if (!this.isStaticHost()) {
+      try {
+        await fetch('/api/tiktok/disconnect', { method: 'POST' });
+      } catch {
+        // Ignore
+      }
     }
     this.disconnectWebSocket();
   }
@@ -481,7 +525,13 @@ class LiveSyncService {
       return;
     }
     if (raw.type === 'status') {
-      if (raw.status === 'connected') this.setStatus('connected');
+      if (raw.status === 'connected') {
+        this.setStatus('connected');
+      } else if (raw.status === 'connecting') {
+        this.setStatus('connecting');
+      } else if (raw.status === 'error') {
+        this.setStatus('error');
+      }
       this.lastRoomInfo = {
         username: raw.username || this.lastRoomInfo.username,
         roomId: raw.roomId || '',
