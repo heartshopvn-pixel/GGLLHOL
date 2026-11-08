@@ -2702,7 +2702,16 @@ export function useClassroomEngine() {
           outsideWinners: nextOutsideWinners,
         };
         classBoardStateRef.current = nextState;
-        syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+        const isPureLiveTabNow =
+          typeof window !== 'undefined' &&
+          (new URLSearchParams(window.location.search).get('view') === 'live' ||
+            new URLSearchParams(window.location.search).get('mode') === 'live' ||
+            new URLSearchParams(window.location.search).get('obs') === '1');
+        const isSlaveTabNow =
+          peerCountsRef.current.obsPeers > 0 && !isPureLiveTabNow;
+        if (!isBot || !isSlaveTabNow) {
+          syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+        }
         return nextState;
       });
 
@@ -7075,6 +7084,251 @@ export function useClassroomEngine() {
     scheduleQuizNpcAnswers,
   ]);
 
+  // Theo dõi các tác vụ phụ (reset cờ trả lời ở Luồng 2, chấm điểm ở Luồng 4, và sắp xếp lớp ở Luồng 5)
+  // đã được thực thi tại trình duyệt hiện tại cho từng vòng câu hỏi (roundSeq_questionIndex).
+  // Đảm bảo dù chuyển luồng bằng bộ đếm cục bộ hay nhận gói đồng bộ SYNC_CLASS_BOARD_STATE từ trình duyệt khác,
+  // mọi trình duyệt (Điều khiển & OBS) đều thực thi sắp xếp lớp và chấm điểm đúng 100%!
+  const executedRoundSideEffectsRef = useRef<{
+    askingRoundKey: string;
+    answerFlashRoundKey: string;
+    resultSummaryRoundKey: string;
+  }>({
+    askingRoundKey: '',
+    answerFlashRoundKey: '',
+    resultSummaryRoundKey: '',
+  });
+
+  const ensureAskingPhaseSideEffects = useCallback(
+    (roundSeq: number, questionIndex: number, askDurMs: number) => {
+      const roundKey = `${roundSeq || 1}_${questionIndex || 0}`;
+      if (executedRoundSideEffectsRef.current.askingRoundKey === roundKey) {
+        return false;
+      }
+      executedRoundSideEffectsRef.current.askingRoundKey = roundKey;
+
+      const cfg = configRef.current;
+      const activeSeatedCount = pilgrimsRef.current.filter(
+        (p) =>
+          p.slotId !== null &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      ).length;
+      if (
+        activeSeatedCount === 0 &&
+        waitingPoolRef.current.size === 0 &&
+        cfg.autoCrowd
+      ) {
+        enqueueBatchNpcsAfterQuestion();
+      }
+
+      const readyPilgrims = pilgrimsRef.current.map((p) => ({
+        ...p,
+        answeredCurrentQuestion: false,
+        quizResultStatus: null,
+        quizResultUntil: 0,
+        quizEarnedPoints: 0,
+      }));
+      pilgrimsRef.current = readyPilgrims;
+      setPilgrims(readyPilgrims);
+
+      scheduleQuizNpcAnswers(questionIndex, Math.max(2500, askDurMs || 12000));
+      return true;
+    },
+    [enqueueBatchNpcsAfterQuestion, scheduleQuizNpcAnswers]
+  );
+
+  const ensureAnswerFlashPhaseSideEffects = useCallback(
+    (
+      roundSeq: number,
+      questionIndex: number,
+      cWinners: ClassBoardQuizWinner[] = [],
+      oWinners: ClassBoardQuizWinner[] = [],
+      playSfx = true
+    ) => {
+      const roundKey = `${roundSeq || 1}_${questionIndex || 0}`;
+      if (executedRoundSideEffectsRef.current.answerFlashRoundKey === roundKey) {
+        return false;
+      }
+      executedRoundSideEffectsRef.current.answerFlashRoundKey = roundKey;
+
+      clearQuizNpcTimers();
+      const cfg = configRef.current;
+
+      // 1. Cộng điểm câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
+      const rewardedQueueKeys = new Set<string>();
+      oWinners.forEach((ow, idx) => {
+        if (!ow.username) return;
+        const pts = ow.points || getQuizRankPoints(idx + 1);
+        const lower = ow.username.trim().toLowerCase();
+        rewardedQueueKeys.add(lower);
+        const qEntry = waitingPoolRef.current.get(lower);
+        if (qEntry) {
+          qEntry.points = (qEntry.points || 0) + pts;
+          qEntry.answeredCorrectInRound = true;
+          qEntry.idleRounds = 0;
+        }
+        addLotusPointsToDonor(ow.username, pts, true);
+      });
+
+      // Đảm bảo học sinh trong Hàng Chờ cục bộ đã trả lời đúng (answeredCorrectInRound === true) cũng được cộng điểm trước khi sắp xếp
+      for (const [lowerKey, qEntry] of waitingPoolRef.current.entries()) {
+        if (qEntry.answeredCorrectInRound && !rewardedQueueKeys.has(lowerKey)) {
+          const fallbackPts = 5;
+          qEntry.points = (qEntry.points || 0) + fallbackPts;
+          addLotusPointsToDonor(qEntry.username, fallbackPts, true);
+        }
+      }
+
+      // 2. Lazy Calculation 1 lần cho Hàng Chờ (ai không trả lời đúng sẽ reset points = 0)
+      const resetUsers = recomputeWaitingQueueLazy({
+        finalizeQuizRound: true,
+      });
+
+      // 3. Cộng điểm câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
+      const classWinnerMap = new Map<string, number>();
+      cWinners.forEach((w, idx) => {
+        if (!w.username) return;
+        const pts = w.points || getQuizRankPoints(idx + 1);
+        classWinnerMap.set(w.username.trim().toLowerCase(), pts);
+        addLotusPointsToDonor(w.username, pts, true);
+      });
+
+      if (playSfx && !soundEngine.isRemoteSlaveMode()) {
+        soundEngine.playAnswerRevealSfx(
+          cfg.ttsVolume || 1,
+          cfg.answerRevealSfxPreset || 'chime_sparkle',
+          cfg.answerRevealMp3Url
+        );
+      }
+
+      const nowFlow4 = Date.now();
+      const badgeUntil = nowFlow4 + 4800;
+      const scoreCardDurMs =
+        Math.max(0.5, cfg.scoreTagDurationSec ?? 4) * 1000;
+
+      const markedPilgrims = pilgrimsRef.current.map((p) => {
+        const isSeatedInClass =
+          p.slotId !== null &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit';
+        if (!isSeatedInClass) return p;
+
+        const lowerName = p.username.trim().toLowerCase();
+        const earnedPts = classWinnerMap.get(lowerName);
+        const isRight =
+          Boolean(p.answeredCurrentQuestion) || earnedPts !== undefined;
+
+        if (isRight) {
+          const finalEarned = earnedPts || 5;
+          if (earnedPts === undefined) {
+            addLotusPointsToDonor(p.username, finalEarned, true);
+          }
+          const donorItem = lotusDonorsRef.current.find(
+            (d) => d.username.trim().toLowerCase() === lowerName
+          );
+          const totalScoreNow = donorItem
+            ? donorItem.coins
+            : (p.currentScoreDisplay || 0) + finalEarned;
+          return {
+            ...p,
+            correctStreak: (p.correctStreak || 0) + 1,
+            savedByShieldInCurrentRound: false,
+            answeredCurrentQuestion: true,
+            quizResultStatus: 'correct' as const,
+            quizResultUntil: badgeUntil,
+            quizEarnedPoints: finalEarned,
+            currentScoreDisplay: totalScoreNow,
+            scoreChangeDelta: finalEarned,
+            scoreCardUntil: nowFlow4 + scoreCardDurMs,
+            scoreCardKey: nowFlow4 + p.id,
+          };
+        }
+
+        if (p.hasShield) {
+          const nowShield = Date.now();
+          return {
+            ...p,
+            hasShield: false,
+            savedByShieldInCurrentRound: true,
+            correctStreak: 0,
+            answeredCurrentQuestion: false,
+            quizResultStatus: 'wrong' as const,
+            quizResultUntil: badgeUntil,
+            quizEarnedPoints: 0,
+            floatingScoreText: '🛡️ Đỡ bằng Khiên!',
+            floatingScoreColor: 'gold' as const,
+            floatingScoreUntil: nowShield + 3600,
+            floatingScoreKey: nowShield,
+          };
+        }
+
+        resetUsers.add(lowerName);
+        return {
+          ...p,
+          correctStreak: 0,
+          savedByShieldInCurrentRound: false,
+          coins: 0,
+          pendingGiftCoins: 0,
+          hasDeskCat: false,
+          deskCatCount: 0,
+          hasDeskPig: false,
+          hasDeskSnack: false,
+          hasPcGamingDesk: false,
+          answeredCurrentQuestion: false,
+          quizResultStatus: 'wrong' as const,
+          quizResultUntil: badgeUntil,
+          quizEarnedPoints: 0,
+        };
+      });
+      pilgrimsRef.current = markedPilgrims;
+      setPilgrims(markedPilgrims);
+
+      if (resetUsers.size > 0) {
+        const nextDonors = lotusDonorsRef.current.filter(
+          (d) => !resetUsers.has(d.username.trim().toLowerCase())
+        );
+        lotusDonorsRef.current = nextDonors;
+        setLotusDonors(nextDonors);
+      }
+
+      return true;
+    },
+    [addLotusPointsToDonor, clearQuizNpcTimers, recomputeWaitingQueueLazy]
+  );
+
+  const ensureResultSummaryPhaseSideEffects = useCallback(
+    (
+      roundSeq: number,
+      questionIndex: number,
+      cWinners: ClassBoardQuizWinner[] = [],
+      oWinners: ClassBoardQuizWinner[] = []
+    ) => {
+      const roundKey = `${roundSeq || 1}_${questionIndex || 0}`;
+      // Đảm bảo bước chấm điểm Luồng 4 đã chạy cho vòng này trước khi lọc học sinh đúng/sai và xếp chỗ ngồi!
+      ensureAnswerFlashPhaseSideEffects(
+        roundSeq,
+        questionIndex,
+        cWinners,
+        oWinners,
+        false
+      );
+
+      if (executedRoundSideEffectsRef.current.resultSummaryRoundKey === roundKey) {
+        return false;
+      }
+      executedRoundSideEffectsRef.current.resultSummaryRoundKey = roundKey;
+
+      rotateClassroomSeatsAfterReveal();
+      enqueueBatchNpcsAfterQuestion();
+      return true;
+    },
+    [
+      enqueueBatchNpcsAfterQuestion,
+      ensureAnswerFlashPhaseSideEffects,
+      rotateClassroomSeatsAfterReveal,
+    ]
+  );
+
   // Vòng lặp điều phối Luồng Tiết Học 0 -> 6 tự động & đồng bộ giọng đọc TTS của Cô Giáo:
   // - Luồng 0 (lesson_start): Bắt đầu chạy tiết học (chỉ nói 1 lần khi bắt đầu) - Bảng hiện text lớn lời bắt đầu của cô giáo [Nói xong chuyển luồng 1]
   // - Luồng 1 (preparing): Đọc "Chuẩn bị" - Bảng chuẩn bị + "Bắt đầu sau 3, 2, 1" [Mặc định 3s]
@@ -7095,9 +7349,8 @@ export function useClassroomEngine() {
       const prev = classBoardStateRef.current;
       if (!prev.isRunning || prev.engine !== 'english_quiz') return;
 
-      // Nếu đang mở song song Tab Điều Khiển và Màn hình Live (?obs=1 / ?view=live),
-      // hoặc tab hiện tại đang bị ẩn ở nền / tắt tiếng khi có nhiều tab kết nối:
-      // Không cho tab phụ / tab điều khiển bị trễ tự ý chuyển luồng và bắn SYNC_CLASS_BOARD_STATE đè ngược lên màn hình Live!
+      // Nếu đang mở song song Tab Điều Khiển và Màn hình Live (?obs=1 / ?view=live):
+      // Màn hình Live (?obs=1) LUÔN LUÔN là Master (tuyệt đối không bao giờ trở thành Follower kể cả khi cửa sổ trình duyệt bị OBS che khuất).
       const isPureLiveTab =
         typeof window !== 'undefined' &&
         (new URLSearchParams(window.location.search).get('view') === 'live' ||
@@ -7105,11 +7358,9 @@ export function useClassroomEngine() {
           new URLSearchParams(window.location.search).get('obs') === '1');
       const peersNow = peerCountsRef.current;
       const isPassiveFollowerTab =
-        (peersNow.obsPeers > 0 && !isPureLiveTab) ||
-        (peersNow.totalPeers > 1 &&
-          ((typeof document !== 'undefined' &&
-            document.visibilityState === 'hidden') ||
-            soundEngine.isTabMuted()));
+        !isPureLiveTab &&
+        (peersNow.obsPeers > 0 ||
+          (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
 
       // Đồng bộ theo Mốc Thời Gian Tuyệt Đối (phaseEndAt) trên Tab Điều Khiển để không bao giờ bị trôi/lệch nhịp dù trình duyệt có giảm nhịp nền
       const nextLeft =
@@ -7173,7 +7424,15 @@ export function useClassroomEngine() {
           nextLeft <= 0;
       }
 
-      if (!shouldAdvance || isPassiveFollowerTab) {
+      // Dự phòng an toàn: Nếu tab Follower đã chờ quá 2.5s sau khi hết thời gian của luồng mà Master chưa gửi gói chuyển luồng (do trình duyệt Master bị throttle nền),
+      // tự động cho phép chuyển luồng để không bao giờ bị treo!
+      const followerGraceExpired =
+        isPassiveFollowerTab &&
+        shouldAdvance &&
+        nextLeft <= 0 &&
+        nextElapsed >= (prev.totalDurationMs || 3000) + 2500;
+
+      if (!shouldAdvance || (isPassiveFollowerTab && !followerGraceExpired)) {
         // Trong Luồng 2 & 3: sau 2.8s đầu đọc đề, tự động chuyển nhãn sang Luồng 3 (Đợi trả lời / Gợi ý) nếu chưa chuyển
         const nextStepNum =
           prev.phase === 'asking' &&
@@ -7300,32 +7559,11 @@ export function useClassroomEngine() {
         const askDurMs =
           Math.max(5, cfg.hudLayout.classBoardQuestionDurationSec || 12) * 1000;
 
-        // Lưu ý: Mỗi đợt sắp xếp lớp (ra hay vào lớp từ Hàng Chờ) đều chỉ bắt đầu khi mới vào Luồng 5 (sau khi kết thúc Luồng 4).
-        // Ở đầu câu hỏi mới (Luồng 1 -> Luồng 2), chỉ bổ sung NPC vào Hàng Chờ nếu cả lớp và Hàng Chờ đều trống hoàn toàn.
-        const activeSeatedCount = pilgrimsRef.current.filter(
-          (p) =>
-            p.slotId !== null &&
-            p.state !== 'leave_side_to_aisle' &&
-            p.state !== 'leave_down_exit'
-        ).length;
-        if (
-          activeSeatedCount === 0 &&
-          waitingPoolRef.current.size === 0 &&
-          cfg.autoCrowd
-        ) {
-          enqueueBatchNpcsAfterQuestion();
-        }
-
-        // Làm mới cờ trả lời của toàn bộ học sinh trong lớp trước khi bắt đầu câu hỏi
-        const readyPilgrims = pilgrimsRef.current.map((p) => ({
-          ...p,
-          answeredCurrentQuestion: false,
-          quizResultStatus: null,
-          quizResultUntil: 0,
-          quizEarnedPoints: 0,
-        }));
-        pilgrimsRef.current = readyPilgrims;
-        setPilgrims(readyPilgrims);
+        ensureAskingPhaseSideEffects(
+          prev.roundSeq || 1,
+          prev.questionIndex,
+          askDurMs
+        );
 
         const questionTpl =
           cfg.lessonQuestionTtsTemplate ||
@@ -7368,7 +7606,6 @@ export function useClassroomEngine() {
         };
         classBoardStateRef.current = askingState;
         setClassBoardState(askingState);
-        scheduleQuizNpcAnswers(prev.questionIndex, askDurMs);
         syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
           state: askingState,
           lessonTtsItems: questionTtsItems,
@@ -7380,134 +7617,16 @@ export function useClassroomEngine() {
       // CHUYỂN TỪ LUỒNG 2 & 3 (asking) -> LUỒNG 4 (answer_flash - Đọc câu trả lời & CỘNG ĐIỂM CHO HỌC SINH)
       // ============================================================================
       if (prev.phase === 'asking') {
-        clearQuizNpcTimers();
-
         const cWinners = prev.classWinners || [];
         const oWinners = prev.outsideWinners || [];
 
-        // 1. Cộng điểm câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
-        oWinners.forEach((ow, idx) => {
-          if (!ow.username) return;
-          const pts = ow.points || getQuizRankPoints(idx + 1);
-          const lower = ow.username.trim().toLowerCase();
-          const qEntry = waitingPoolRef.current.get(lower);
-          if (qEntry) {
-            qEntry.points = (qEntry.points || 0) + pts;
-            qEntry.answeredCorrectInRound = true;
-            qEntry.idleRounds = 0;
-          }
-          addLotusPointsToDonor(ow.username, pts, true);
-        });
-
-        // 2. Lazy Calculation 1 lần cho Hàng Chờ (ai không trả lời đúng sẽ reset points = 0)
-        const resetUsers = recomputeWaitingQueueLazy({
-          finalizeQuizRound: true,
-        });
-
-        // 3. Cộng điểm câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
-        const classWinnerMap = new Map<string, number>();
-        cWinners.forEach((w, idx) => {
-          if (!w.username) return;
-          const pts = w.points || getQuizRankPoints(idx + 1);
-          classWinnerMap.set(w.username.trim().toLowerCase(), pts);
-          addLotusPointsToDonor(w.username, pts, true);
-        });
-
-        soundEngine.playAnswerRevealSfx(
-          cfg.ttsVolume || 1,
-          cfg.answerRevealSfxPreset || 'chime_sparkle',
-          cfg.answerRevealMp3Url
+        ensureAnswerFlashPhaseSideEffects(
+          prev.roundSeq || 1,
+          prev.questionIndex,
+          cWinners,
+          oWinners,
+          true
         );
-
-        const nowFlow4 = Date.now();
-        const badgeUntil = nowFlow4 + 4800;
-        const scoreCardDurMs =
-          Math.max(0.5, cfg.scoreTagDurationSec ?? 4) * 1000;
-
-        const markedPilgrims = pilgrimsRef.current.map((p) => {
-          const isSeatedInClass =
-            p.slotId !== null &&
-            p.state !== 'leave_side_to_aisle' &&
-            p.state !== 'leave_down_exit';
-          if (!isSeatedInClass) return p;
-
-          const lowerName = p.username.trim().toLowerCase();
-          const earnedPts = classWinnerMap.get(lowerName);
-          const isRight =
-            Boolean(p.answeredCurrentQuestion) || earnedPts !== undefined;
-
-          if (isRight) {
-            const finalEarned = earnedPts || 5;
-            const donorItem = lotusDonorsRef.current.find(
-              (d) => d.username.trim().toLowerCase() === lowerName
-            );
-            const totalScoreNow = donorItem
-              ? donorItem.coins
-              : (p.currentScoreDisplay || 0) + finalEarned;
-            // Cộng điểm + Hiển thị ngay Thẻ Show Số Điểm, chữ +điểm và VFX Hoa Điểm 10 bung nổ ngay lúc đọc câu trả lời (Luồng 4)!
-            return {
-              ...p,
-              correctStreak: (p.correctStreak || 0) + 1,
-              savedByShieldInCurrentRound: false,
-              answeredCurrentQuestion: true,
-              quizResultStatus: 'correct' as const,
-              quizResultUntil: badgeUntil,
-              quizEarnedPoints: finalEarned,
-              currentScoreDisplay: totalScoreNow,
-              scoreChangeDelta: finalEarned,
-              scoreCardUntil: nowFlow4 + scoreCardDurMs,
-              scoreCardKey: nowFlow4 + p.id,
-            };
-          }
-
-          // Trả lời sai: reset chuỗi combo câu đúng liên tiếp về 0.
-          // Nếu học sinh đang có Khiên bảo vệ (hasShield) -> Mất khiên và được bảo vệ giữ lại chỗ ngồi & điểm số!
-          if (p.hasShield) {
-            const nowShield = Date.now();
-            return {
-              ...p,
-              hasShield: false,
-              savedByShieldInCurrentRound: true,
-              correctStreak: 0,
-              answeredCurrentQuestion: false,
-              quizResultStatus: 'wrong' as const,
-              quizResultUntil: badgeUntil,
-              quizEarnedPoints: 0,
-              floatingScoreText: '🛡️ Đỡ bằng Khiên!',
-              floatingScoreColor: 'gold' as const,
-              floatingScoreUntil: nowShield + 3600,
-              floatingScoreKey: nowShield,
-            };
-          }
-
-          resetUsers.add(lowerName);
-          return {
-            ...p,
-            correctStreak: 0,
-            savedByShieldInCurrentRound: false,
-            coins: 0,
-            pendingGiftCoins: 0,
-            hasDeskCat: false,
-            deskCatCount: 0,
-            hasDeskPig: false,
-            hasDeskSnack: false,
-            hasPcGamingDesk: false,
-            answeredCurrentQuestion: false,
-            quizResultStatus: 'wrong' as const,
-            quizResultUntil: badgeUntil,
-            quizEarnedPoints: 0,
-          };
-        });
-        pilgrimsRef.current = markedPilgrims;
-        setPilgrims(markedPilgrims);
-
-        if (resetUsers.size > 0) {
-          const nextDonors = lotusDonorsRef.current.filter(
-            (d) => !resetUsers.has(d.username.trim().toLowerCase())
-          );
-          lotusDonorsRef.current = nextDonors;
-          setLotusDonors(nextDonors);
-        }
 
         const flowToken4 = `flow_ans_${Date.now()}_${prev.questionIndex}`;
         const answerPrefix = (cfg.lessonAnswerTtsTemplate || 'Đáp án là')
@@ -7569,13 +7688,17 @@ export function useClassroomEngine() {
       // (Điểm số của các học sinh đã được cộng và hiển thị ở Luồng 4)
       // ============================================================================
       if (prev.phase === 'answer_flash') {
-        // CẬP NHẬT CHỖ NGỒI NGAY KHI BẮT ĐẦU LUỒNG SỐ 5:
-        // Loại học sinh trong lớp không trả lời / trả lời sai, đẩy học sinh Top Rank từ Hàng Chờ vào lớp, và thêm đợt NPC mới vào Hàng Chờ
-        rotateClassroomSeatsAfterReveal();
-        enqueueBatchNpcsAfterQuestion();
-
         const cWinners = prev.classWinners || [];
         const oWinners = prev.outsideWinners || [];
+
+        // CẬP NHẬT CHỖ NGỒI NGAY KHI BẮT ĐẦU LUỒNG SỐ 5:
+        // Loại học sinh trong lớp không trả lời / trả lời sai, đẩy học sinh Top Rank từ Hàng Chờ vào lớp, và thêm đợt NPC mới vào Hàng Chờ
+        ensureResultSummaryPhaseSideEffects(
+          prev.roundSeq || 1,
+          prev.questionIndex,
+          cWinners,
+          oWinners
+        );
 
         const classRightCount = cWinners.length;
         const outsideRightCount = oWinners.length;
@@ -7956,9 +8079,12 @@ export function useClassroomEngine() {
       // 2. KIỂM TRA CÓ AI TẶNG QUÀ PHẠT ĐẶC BIỆT (5 / 10 / 10+) KHÔNG ('punishment_notice')
       // ============================================================================
       if (prev.phase === 'ranking_board' || prev.phase === 'reveal') {
-        if (!prev.seatUpdateTriggered) {
-          rotateClassroomSeatsAfterReveal();
-        }
+        ensureResultSummaryPhaseSideEffects(
+          prev.roundSeq || 1,
+          prev.questionIndex,
+          prev.classWinners || [],
+          prev.outsideWinners || []
+        );
 
         const currentTop1Rec = dailyRecordsRef.current[0];
         const rawPending = pendingRecordNoticeRef.current;
@@ -8358,6 +8484,9 @@ export function useClassroomEngine() {
     classBoardState.engine,
     clearQuizNpcTimers,
     enqueueBatchNpcsAfterQuestion,
+    ensureAnswerFlashPhaseSideEffects,
+    ensureAskingPhaseSideEffects,
+    ensureResultSummaryPhaseSideEffects,
     getActiveQuizList,
     recomputeWaitingQueueLazy,
     rotateClassroomSeatsAfterReveal,
@@ -9707,6 +9836,98 @@ export function useClassroomEngine() {
               }));
             }
 
+            // Gộp danh sách winners của cả 2 trình duyệt nếu đang cùng vòng câu hỏi để không làm mất trạng thái trả lời đúng của học sinh tại trình duyệt hiện tại
+            const isSameRound =
+              incRound === curRound &&
+              (incoming.questionIndex ?? 0) === (current.questionIndex ?? 0);
+            const mergedWinnersMap = new Map<string, ClassBoardQuizWinner>();
+            if (isSameRound && Array.isArray(current.winners)) {
+              current.winners.forEach((w) => {
+                if (w?.username) {
+                  mergedWinnersMap.set(w.username.trim().toLowerCase(), w);
+                }
+              });
+            }
+            if (Array.isArray(incoming.winners)) {
+              incoming.winners.forEach((w) => {
+                if (w?.username) {
+                  const k = w.username.trim().toLowerCase();
+                  if (!mergedWinnersMap.has(k)) {
+                    mergedWinnersMap.set(k, w);
+                  }
+                }
+              });
+            }
+            const mergedWinners = Array.from(mergedWinnersMap.values());
+            const mergedClassWinners =
+              mergedWinners.length > 0
+                ? mergedWinners.filter((w) => w.isSeated !== false)
+                : incoming.classWinners || [];
+            const mergedOutsideWinners =
+              mergedWinners.length > 0
+                ? mergedWinners.filter((w) => w.isSeated === false)
+                : incoming.outsideWinners || [];
+
+            // Đánh dấu học sinh trong lớp hoặc hàng chờ tương ứng với danh sách trả lời đúng được đồng bộ sang
+            if (mergedWinners.length > 0 && incoming.phase === 'asking') {
+              const winnerSet = new Set(mergedWinnersMap.keys());
+              let hasPilgrimMarkChange = false;
+              const nextPilgrims = pilgrimsRef.current.map((st) => {
+                if (
+                  st.slotId !== null &&
+                  st.state !== 'leave_side_to_aisle' &&
+                  st.state !== 'leave_down_exit' &&
+                  !st.answeredCurrentQuestion &&
+                  winnerSet.has(st.username.trim().toLowerCase())
+                ) {
+                  hasPilgrimMarkChange = true;
+                  return { ...st, answeredCurrentQuestion: true };
+                }
+                return st;
+              });
+              if (hasPilgrimMarkChange) {
+                pilgrimsRef.current = nextPilgrims;
+                setPilgrims(nextPilgrims);
+              }
+              mergedOutsideWinners.forEach((ow) => {
+                const lower = (ow.username || '').trim().toLowerCase();
+                const qEntry = waitingPoolRef.current.get(lower);
+                if (qEntry) {
+                  qEntry.answeredCorrectInRound = true;
+                  qEntry.idleRounds = 0;
+                }
+              });
+            }
+
+            // Thực thi đầy đủ các tác vụ phụ (reset cờ trả lời ở Luồng 2, chấm điểm ở Luồng 4, và sắp xếp lớp ở Luồng 5)
+            // ngay khi nhận gói đồng bộ chuyển luồng từ trình duyệt kia!
+            if (incoming.phase === 'asking') {
+              ensureAskingPhaseSideEffects(
+                incRound,
+                incoming.questionIndex || 0,
+                incoming.totalDurationMs || 12000
+              );
+            } else if (incoming.phase === 'answer_flash') {
+              ensureAnswerFlashPhaseSideEffects(
+                incRound,
+                incoming.questionIndex || 0,
+                mergedClassWinners,
+                mergedOutsideWinners,
+                true
+              );
+            } else if (
+              incoming.phase === 'result_summary' ||
+              incoming.phase === 'ranking_board' ||
+              incoming.phase === 'reveal'
+            ) {
+              ensureResultSummaryPhaseSideEffects(
+                incRound,
+                incoming.questionIndex || 0,
+                mergedClassWinners,
+                mergedOutsideWinners
+              );
+            }
+
             if (
               !soundEngine.isRemoteSlaveMode() &&
               Array.isArray(p.lessonTtsItems) &&
@@ -9726,6 +9947,9 @@ export function useClassroomEngine() {
 
             const syncedState: ClassBoardRuntimeState = {
               ...incoming,
+              winners: mergedWinners,
+              classWinners: mergedClassWinners,
+              outsideWinners: mergedOutsideWinners,
               phaseEndAt:
                 incoming.phaseEndAt ||
                 Date.now() + Math.max(0, incoming.timeLeftMs || 0),
@@ -9795,6 +10019,9 @@ export function useClassroomEngine() {
       unsubSync();
     };
   }, [
+    ensureAnswerFlashPhaseSideEffects,
+    ensureAskingPhaseSideEffects,
+    ensureResultSummaryPhaseSideEffects,
     flushPendingGiftPilgrims,
     handleTriggerClassroomGift,
     handleTriggerFollow,
