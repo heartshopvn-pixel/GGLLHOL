@@ -6,6 +6,14 @@ import { createServer as createViteServer } from 'vite';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [UNCAUGHT EXCEPTION]:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.error('⚠️ [UNHANDLED REJECTION]:', reason?.message || reason);
+});
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -533,7 +541,11 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -545,9 +557,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    console.error('⚠️ [SERVER LISTEN ERROR]:', err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('❌ [FATAL STARTUP ERROR]:', err);
+});
