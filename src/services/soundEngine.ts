@@ -28,6 +28,30 @@ export interface TTSQueueItem {
   meta?: TTSQueueItemMeta;
 }
 
+export interface TtsVoiceDiagnosticIncident {
+  id: string;
+  timestamp: number;
+  type: 'fallback' | 'server_switch' | 'disconnected' | 'interrupted';
+  fromSource: string;
+  toSource: string;
+  reason: string;
+  textSample?: string;
+}
+
+export interface TtsVoiceDiagnosticSnapshot {
+  health: 'healthy' | 'server_switched' | 'fallback' | 'disconnected';
+  configuredEngineLabel: string;
+  activeServerLabel: string;
+  statusHeadline: string;
+  statusDetail: string;
+  lastLatencyMs: number | null;
+  lastUpdatedAt: number;
+  totalFallbacks: number;
+  totalServerSwitches: number;
+  totalDisconnects: number;
+  recentIncidents: TtsVoiceDiagnosticIncident[];
+}
+
 export interface EventTtsQueueSnapshot {
   waitingCount: number;
   isPlayingEvent: boolean;
@@ -35,6 +59,7 @@ export interface EventTtsQueueSnapshot {
   queueItems: string[];
   activeItem: TTSQueueItem | null;
   detailedQueue: TTSQueueItem[];
+  diagnostic: TtsVoiceDiagnosticSnapshot;
 }
 
 export type EventTtsQueueListener = (snapshot: EventTtsQueueSnapshot) => void;
@@ -225,14 +250,128 @@ class TempleSoundService {
 
 
   private audioBlobCache = new Map<string, string>();
+  private audioBlobMetaCache = new Map<
+    string,
+    {
+      source: string;
+      switchedMirror: boolean;
+      failReason?: string;
+      latencyMs: number;
+    }
+  >();
   private inFlightPrefetches = new Map<string, Promise<string | null>>();
   private readonly MAX_BLOB_CACHE = 45;
+
+  private ttsDiagnostic: TtsVoiceDiagnosticSnapshot = {
+    health: 'healthy',
+    configuredEngineLabel: '#2 Google Cloud Stream',
+    activeServerLabel: 'Google Stream (#2 • Sẵn sàng)',
+    statusHeadline: 'Ổn định • Sẵn sàng phát giọng đọc',
+    statusDetail: 'Chưa phát sinh lỗi ngắt quãng, chuyển server hay fallback',
+    lastLatencyMs: null,
+    lastUpdatedAt: Date.now(),
+    totalFallbacks: 0,
+    totalServerSwitches: 0,
+    totalDisconnects: 0,
+    recentIncidents: [],
+  };
+
+  private getConfiguredEngineLabel(config?: GameConfig | null): string {
+    const engine = config?.ttsEngine || this.latestConfig?.ttsEngine || 'google_stream';
+    if (engine === 'node_edge') return '#3 Node.js Local (Edge/GTX)';
+    if (engine === 'web_speech') return '#1 Web Speech (Nội bộ)';
+    return '#2 Google Cloud Stream';
+  }
+
+  private recordTtsDiagnosticIncident(
+    incident: Omit<TtsVoiceDiagnosticIncident, 'id' | 'timestamp'>,
+    patch?: Partial<
+      Pick<
+        TtsVoiceDiagnosticSnapshot,
+        | 'health'
+        | 'activeServerLabel'
+        | 'statusHeadline'
+        | 'statusDetail'
+        | 'lastLatencyMs'
+      >
+    >
+  ) {
+    const now = Date.now();
+    const entry: TtsVoiceDiagnosticIncident = {
+      ...incident,
+      id: `tts_inc_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: now,
+    };
+    this.ttsDiagnostic = {
+      ...this.ttsDiagnostic,
+      configuredEngineLabel: this.getConfiguredEngineLabel(this.latestConfig),
+      health:
+        patch?.health ||
+        (incident.type === 'fallback'
+          ? 'fallback'
+          : incident.type === 'server_switch'
+          ? 'server_switched'
+          : incident.type === 'disconnected'
+          ? 'disconnected'
+          : this.ttsDiagnostic.health),
+      activeServerLabel:
+        patch?.activeServerLabel || this.ttsDiagnostic.activeServerLabel,
+      statusHeadline:
+        patch?.statusHeadline || incident.reason,
+      statusDetail:
+        patch?.statusDetail ||
+        `${incident.fromSource} ➔ ${incident.toSource}`,
+      lastLatencyMs:
+        patch?.lastLatencyMs !== undefined
+          ? patch.lastLatencyMs
+          : this.ttsDiagnostic.lastLatencyMs,
+      lastUpdatedAt: now,
+      totalFallbacks:
+        this.ttsDiagnostic.totalFallbacks +
+        (incident.type === 'fallback' ? 1 : 0),
+      totalServerSwitches:
+        this.ttsDiagnostic.totalServerSwitches +
+        (incident.type === 'server_switch' ? 1 : 0),
+      totalDisconnects:
+        this.ttsDiagnostic.totalDisconnects +
+        (incident.type === 'disconnected' ? 1 : 0),
+      recentIncidents: [entry, ...this.ttsDiagnostic.recentIncidents].slice(
+        0,
+        15
+      ),
+    };
+    this.emitEventQueue();
+  }
+
+  public clearTtsDiagnosticHistory() {
+    this.ttsDiagnostic = {
+      health: 'healthy',
+      configuredEngineLabel: this.getConfiguredEngineLabel(this.latestConfig),
+      activeServerLabel: this.ttsDiagnostic.activeServerLabel,
+      statusHeadline: 'Ổn định • Đã làm mới bộ đếm theo dõi giọng đọc',
+      statusDetail: 'Đang giám sát kết nối máy chủ giọng đọc theo thời gian thực',
+      lastLatencyMs: this.ttsDiagnostic.lastLatencyMs,
+      lastUpdatedAt: Date.now(),
+      totalFallbacks: 0,
+      totalServerSwitches: 0,
+      totalDisconnects: 0,
+      recentIncidents: [],
+    };
+    this.emitEventQueue();
+  }
 
   private getOrFetchAudioBlobUrl(url: string, timeoutMs = 2400): Promise<string | null> {
     const cached = this.audioBlobCache.get(url);
     if (cached) {
       this.audioBlobCache.delete(url);
       this.audioBlobCache.set(url, cached);
+      const oldMeta = this.audioBlobMetaCache.get(url);
+      this.audioBlobMetaCache.set(url, {
+        source: 'ram-cache',
+        switchedMirror: Boolean(oldMeta?.switchedMirror),
+        failReason: oldMeta?.failReason,
+        latencyMs: 0,
+      });
       return Promise.resolve(cached);
     }
     const existingPromise = this.inFlightPrefetches.get(url);
@@ -240,11 +379,26 @@ class TempleSoundService {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startMs = Date.now();
 
     const p = fetch(url, { signal: controller.signal })
       .then(async (res) => {
         clearTimeout(timer);
+        const latencyMs = Math.max(1, Date.now() - startMs);
         if (!res.ok) return null;
+        const rawSource =
+          res.headers.get('X-TTS-Source') ||
+          (url.includes('/api/tts') ? 'google-gtx' : 'node-local');
+        const switchedMirror = res.headers.get('X-TTS-Switched') === '1';
+        const rawFail = res.headers.get('X-TTS-Fail-Reason') || '';
+        let decodedFail: string | undefined;
+        if (rawFail) {
+          try {
+            decodedFail = decodeURIComponent(rawFail);
+          } catch {
+            decodedFail = rawFail;
+          }
+        }
         const blob = await res.blob();
         if (!blob || blob.size < 128) return null;
         const blobUrl = URL.createObjectURL(blob);
@@ -260,9 +414,16 @@ class TempleSoundService {
               }
             }
             this.audioBlobCache.delete(oldestKey);
+            this.audioBlobMetaCache.delete(oldestKey);
           }
         }
         this.audioBlobCache.set(url, blobUrl);
+        this.audioBlobMetaCache.set(url, {
+          source: rawSource,
+          switchedMirror,
+          failReason: decodedFail,
+          latencyMs,
+        });
         return blobUrl;
       })
       .catch(() => {
@@ -333,7 +494,7 @@ class TempleSoundService {
   }
 
   private prefetchNextQueueItems(config: GameConfig) {
-    if (this.localTabMuted) return;
+    if (this.localTabMuted || this.remoteSlaveMode) return;
     const upcoming = this.ttsQueue.slice(0, 2);
     for (const item of upcoming) {
       const streamUrl = this.buildStreamUrlForEngine(
@@ -348,8 +509,72 @@ class TempleSoundService {
     }
   }
 
+  private remoteSlaveMode = false;
+  private remoteMasterQueueSnapshot: EventTtsQueueSnapshot | null = null;
+
+  public isRemoteSlaveMode(): boolean {
+    return this.remoteSlaveMode;
+  }
+
+  public setRemoteSlaveMode(active: boolean) {
+    if (this.remoteSlaveMode === active) return;
+    this.remoteSlaveMode = active;
+    if (active) {
+      this.stopBgmInternal();
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (this.currentAudio) {
+        try {
+          this.currentAudio.onended = null;
+          this.currentAudio.onerror = null;
+          this.currentAudio.pause();
+          this.currentAudio.removeAttribute('src');
+          this.currentAudio = null;
+        } catch {
+          // Ignore
+        }
+      }
+      if (this.mutedSimTimer) {
+        clearTimeout(this.mutedSimTimer);
+        this.mutedSimTimer = null;
+      }
+      this.ttsQueue = [];
+      this.activeEventItem = null;
+      this.isSpeaking = false;
+      this.isSpeakingDharma = false;
+      this.currentEventText = '';
+    } else {
+      this.remoteMasterQueueSnapshot = null;
+      if (this.latestConfig && !this.localTabMuted) {
+        this.syncConfig(this.latestConfig);
+      }
+    }
+    this.emitEventQueue();
+  }
+
+  public applyMasterQueueSnapshot(
+    snapshot: EventTtsQueueSnapshot,
+    status?: { text: string; active: boolean }
+  ) {
+    if (!snapshot) return;
+    this.remoteMasterQueueSnapshot = snapshot;
+    if (snapshot.diagnostic) {
+      this.ttsDiagnostic = snapshot.diagnostic;
+    }
+    if (status) {
+      this.emitStatus(
+        status.text,
+        status.active,
+        snapshot.currentEventText || ''
+      );
+    }
+    const snap = this.getEventQueueSnapshot();
+    this.queueListeners.forEach((fn) => fn(snap));
+  }
+
   public isTabMuted(): boolean {
-    return this.localTabMuted;
+    return this.localTabMuted || this.remoteSlaveMode;
   }
 
   public setTabMuted(muted: boolean) {
@@ -371,7 +596,7 @@ class TempleSoundService {
           // Ignore
         }
       }
-    } else if (this.latestConfig) {
+    } else if (this.latestConfig && !this.remoteSlaveMode) {
       this.syncConfig(this.latestConfig);
     }
   }
@@ -388,6 +613,9 @@ class TempleSoundService {
   }
 
   public getEventQueueSnapshot(): EventTtsQueueSnapshot {
+    if (this.remoteSlaveMode && this.remoteMasterQueueSnapshot) {
+      return this.remoteMasterQueueSnapshot;
+    }
     const isPlayingEvent = this.isSpeaking && !this.isSpeakingDharma;
     return {
       waitingCount: this.ttsQueue.length,
@@ -396,6 +624,11 @@ class TempleSoundService {
       queueItems: this.ttsQueue.map((item) => item.text),
       activeItem: isPlayingEvent ? this.activeEventItem : null,
       detailedQueue: [...this.ttsQueue],
+      diagnostic: {
+        ...this.ttsDiagnostic,
+        configuredEngineLabel: this.getConfiguredEngineLabel(this.latestConfig),
+        recentIncidents: [...this.ttsDiagnostic.recentIncidents],
+      },
     };
   }
 
@@ -1932,18 +2165,11 @@ class TempleSoundService {
       this.dharmaNextTimer = null;
     }
 
-    const isZombieFlow6 = expandedItems.some((it) =>
-      (it.lessonStepLabel || '').includes('Luồng 6')
-    );
-
-    // Nếu đang đọc thuyết pháp hoặc đang đọc bình luận thường của học sinh (hoặc khi vào Luồng 6 vinh danh Zombie cần đọc ngay) -> ngắt để Cô Giáo điều khiển luồng bảng lớp ngay lập tức
-    const activeReason = this.activeEventItem?.meta?.reason;
+    // Khi chuyển luồng bảng lớp mới (Luồng 0 -> 6): Luôn ngắt câu đang phát (trừ Live Text trực tiếp của Chủ Phòng)
+    // để giọng đọc của Cô Thảo trên Hàng Chờ Âm Thanh luôn khớp 100% với nội dung hiển thị trên bảng lớp!
     const isInterruptibleActive =
       this.isSpeakingDharma ||
-      (this.isSpeaking &&
-        !this.activeEventItem?.isHostLive &&
-        (isZombieFlow6 ||
-          (activeReason !== 'gift' && activeReason !== 'special_gift')));
+      (this.isSpeaking && !this.activeEventItem?.isHostLive);
 
     if (isInterruptibleActive) {
       const interruptedItem = this.activeEventItem;
@@ -1957,6 +2183,32 @@ class TempleSoundService {
     this.emitEventQueue();
     this.processQueue(config);
     return true;
+  }
+
+  /**
+   * Tạm dừng và dọn các câu thuộc Luồng Tiết Học đang đọc dở khi người dùng bấm Tạm dừng
+   * hoặc khi chuyển tiết học sang Bảng Thông Báo.
+   */
+  public pauseLessonFlowTts(): void {
+    this.ttsQueue = this.ttsQueue.filter(
+      (q) => !q.meta?.lessonStepLabel && !q.meta?.lessonFlowToken
+    );
+
+    const activeIsLessonFlow = Boolean(
+      this.activeEventItem &&
+        !this.activeEventItem.isHostLive &&
+        (this.activeEventItem.meta?.lessonStepLabel ||
+          this.activeEventItem.meta?.lessonFlowToken)
+    );
+
+    if (activeIsLessonFlow) {
+      this.stopCurrentUtteranceOnly();
+    }
+
+    this.emitEventQueue();
+    if (this.latestConfig && !this.isSpeaking) {
+      this.processQueue(this.latestConfig);
+    }
   }
 
   /**
@@ -2136,7 +2388,7 @@ class TempleSoundService {
       nextItem = this.ttsQueue.shift()!;
       nextText = nextItem.text;
       isDharmaLine = false;
-    } else if (config.dharmaEnabled && !this.localTabMuted) {
+    } else if (config.dharmaEnabled && !this.isTabMuted()) {
       nextText = this.getNextDharmaSentence(config);
       isDharmaLine = true;
     }
@@ -2233,8 +2485,9 @@ class TempleSoundService {
     const itemLang: 'vi' | 'en' =
       (!isDharmaLine && (nextItem?.lang || nextItem?.meta?.lang)) || 'vi';
 
-    // Nếu tab hiện tại đang tắt tiếng cục bộ (Mute Tab Admin), vẫn giữ nhịp thời gian đọc tương ứng số chữ để Camera trên Tab Admin di chuyển khớp 1:1
-    if (this.localTabMuted) {
+    // Nếu tab hiện tại đang tắt tiếng cục bộ (Mute Tab Admin) hoặc đang ở chế độ Remote Slave (có màn hình Live ?obs=1 đang phát),
+    // tuyệt đối không gọi /api/tts để không tranh chấp băng thông với màn hình Live!
+    if (this.isTabMuted()) {
       const wordCount = nextText.split(/\s+/).filter(Boolean).length;
       const effectiveMutedRate =
         itemLang === 'en'
@@ -2368,27 +2621,43 @@ class TempleSoundService {
       activeAudio = null;
     };
 
-    const fallbackOnce = () => {
+    const fallbackOnce = (reasonText = 'Server Node.js (#3) phản hồi quá hạn (>2.2s) hoặc mất kết nối') => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
       fallbackTriggered = true;
       clearTimeout(lagTimeout);
       cleanupAudio();
+      this.recordTtsDiagnosticIncident(
+        {
+          type: 'fallback',
+          fromSource: '#3 Node.js Local',
+          toSource: '#2 Google Cloud Stream',
+          reason: reasonText,
+          textSample: shortText.slice(0, 48),
+        },
+        {
+          health: 'fallback',
+          activeServerLabel: 'Fallback: #2 Google Cloud Stream',
+          statusHeadline: '⚠️ Đứt/Trễ #3 Node.js ➔ Đã Fallback sang #2 Google Stream',
+          statusDetail: reasonText,
+        }
+      );
       // Ưu tiên dự phòng sang Google Cloud Stream đa máy chủ (/api/tts) trước để giữ đồng nhất màu giọng MP3 và âm lượng, nếu vẫn lỗi mới xuống WebSpeech
       this.playViaGoogleStream(text, config, token, onDone, true);
     };
 
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
-        fallbackOnce();
+        fallbackOnce('Server Node.js (#3) trễ >2.2s ➔ Tự chuyển sang #2 Google Stream');
       }
     }, 2200);
 
     void this.getOrFetchAudioBlobUrl(url, 2000).then((blobUrl) => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
       if (!blobUrl) {
-        fallbackOnce();
+        fallbackOnce('Không kết nối được cổng Node.js (#3) ➔ Chuyển sang #2 Google Stream');
         return;
       }
+      const meta = this.audioBlobMetaCache.get(url);
       const audio = new Audio();
       audio.crossOrigin = 'anonymous';
       activeAudio = audio;
@@ -2424,6 +2693,23 @@ class TempleSoundService {
           preservePitch,
           config.ttsVolume
         );
+        this.ttsDiagnostic = {
+          ...this.ttsDiagnostic,
+          configuredEngineLabel: this.getConfiguredEngineLabel(config),
+          health: 'healthy',
+          activeServerLabel:
+            meta?.source === 'ram-cache'
+              ? 'Node.js (#3 • RAM Cache 0ms)'
+              : `Node.js Local (#3 • ${voice})`,
+          statusHeadline: 'Ổn định • Đang phát trực tiếp từ Server Node.js (#3)',
+          statusDetail:
+            meta?.source === 'ram-cache'
+              ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
+              : `Kết nối tốt tới ${endpoint} (${meta?.latencyMs ?? 0}ms)`,
+          lastLatencyMs: meta?.latencyMs ?? 0,
+          lastUpdatedAt: Date.now(),
+        };
+        this.emitEventQueue();
       };
 
       audio.onended = () => {
@@ -2435,11 +2721,11 @@ class TempleSoundService {
       };
 
       audio.onerror = () => {
-        fallbackOnce();
+        fallbackOnce('Luồng âm thanh Node.js (#3) bị đứt khi đang tải');
       };
 
       audio.play().catch(() => {
-        fallbackOnce();
+        fallbackOnce('Không thể khởi chạy Audio từ Node.js (#3)');
       });
     });
   }
@@ -2481,11 +2767,28 @@ class TempleSoundService {
       activeAudio = null;
     };
 
-    const fallbackOnce = () => {
+    const fallbackOnce = (reasonText = 'Luồng Google Cloud Stream (#2) quá hạn phản hồi') => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
       fallbackTriggered = true;
       clearTimeout(lagTimeout);
       cleanupAudio();
+      this.recordTtsDiagnosticIncident(
+        {
+          type: 'fallback',
+          fromSource: isFallbackFromNode
+            ? '#3 Node & #2 Google Stream'
+            : '#2 Google Cloud Stream',
+          toSource: '#1 Web Speech (Nội bộ)',
+          reason: reasonText,
+          textSample: shortText.slice(0, 48),
+        },
+        {
+          health: 'fallback',
+          activeServerLabel: 'Fallback Khẩn: #1 Web Speech (Nội bộ)',
+          statusHeadline: '🚨 Đứt luồng Stream (#2) ➔ Đang Fallback về #1 Web Speech',
+          statusDetail: reasonText,
+        }
+      );
       this.playViaWebSpeech(
         text,
         config,
@@ -2496,14 +2799,17 @@ class TempleSoundService {
               lang: 'en-US',
               rate: Math.max(0.5, Math.min(2.0, config.englishTtsRate ?? 0.95)),
             }
-          : undefined
+          : undefined,
+        true
       );
     };
 
     const timeoutBudget = isFallbackFromNode ? 1800 : 2300;
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
-        fallbackOnce();
+        fallbackOnce(
+          `Máy chủ Google Stream (#2) phản hồi chậm >${(timeoutBudget / 1000).toFixed(1)}s ➔ Chuyển sang #1 Web Speech`
+        );
       }
     }, timeoutBudget);
 
@@ -2511,9 +2817,10 @@ class TempleSoundService {
       (blobUrl) => {
         if (fallbackTriggered || token !== this.speechTokenSeq) return;
         if (!blobUrl) {
-          fallbackOnce();
+          fallbackOnce('Cả 2 máy chủ Google GTX & TW-OB đều không phản hồi ➔ Chuyển sang #1 Web Speech');
           return;
         }
+        const meta = this.audioBlobMetaCache.get(proxyUrl);
         const audio = new Audio();
         audio.crossOrigin = 'anonymous';
         activeAudio = audio;
@@ -2557,6 +2864,64 @@ class TempleSoundService {
             preservePitch,
             config.ttsVolume
           );
+
+          const srcLabel =
+            meta?.source === 'ram-cache'
+              ? 'RAM Cache (0ms)'
+              : meta?.source === 'google-tw-ob'
+              ? 'Server TW-OB'
+              : 'Server GTX';
+
+          if (meta?.switchedMirror) {
+            this.recordTtsDiagnosticIncident(
+              {
+                type: 'server_switch',
+                fromSource:
+                  voice === 'google-vi-twob' ? 'Server TW-OB' : 'Server GTX',
+                toSource: srcLabel,
+                reason: meta.failReason
+                  ? `Máy chủ chính bị ngắt (${meta.failReason}) ➔ Tự chuyển sang ${srcLabel}`
+                  : `Tự động chuyển đổi sang máy chủ dự phòng ${srcLabel}`,
+                textSample: shortText.slice(0, 48),
+              },
+              {
+                health: 'server_switched',
+                activeServerLabel: `Google Stream (#2 • Dự phòng ${srcLabel})`,
+                statusHeadline: `🔄 Đã tự động chuyển Server đọc sang ${srcLabel}`,
+                statusDetail: meta.failReason
+                  ? `Nguyên nhân: ${meta.failReason} • Độ trễ: ${meta.latencyMs}ms`
+                  : `Đang phát ổn định trên máy chủ dự phòng (${meta.latencyMs}ms)`,
+                lastLatencyMs: meta.latencyMs,
+              }
+            );
+          } else if (isFallbackFromNode) {
+            this.ttsDiagnostic = {
+              ...this.ttsDiagnostic,
+              configuredEngineLabel: this.getConfiguredEngineLabel(config),
+              health: 'fallback',
+              activeServerLabel: `Fallback #2 Google Stream (${srcLabel})`,
+              statusHeadline: `⚠️ Đang chạy dự phòng trên #2 Google Stream (${srcLabel})`,
+              statusDetail: `Do #3 Node.js Local không phản hồi • Độ trễ: ${meta?.latencyMs ?? 0}ms`,
+              lastLatencyMs: meta?.latencyMs ?? 0,
+              lastUpdatedAt: Date.now(),
+            };
+            this.emitEventQueue();
+          } else {
+            this.ttsDiagnostic = {
+              ...this.ttsDiagnostic,
+              configuredEngineLabel: this.getConfiguredEngineLabel(config),
+              health: 'healthy',
+              activeServerLabel: `Google Stream (#2 • ${srcLabel})`,
+              statusHeadline: `Ổn định • Đang phát qua #2 Google Stream (${srcLabel})`,
+              statusDetail:
+                meta?.source === 'ram-cache'
+                  ? 'Phát tức thì từ bộ nhớ đệm Pre-fetch RAM (0ms)'
+                  : `Kết nối trực tiếp máy chủ ${srcLabel} • Phản hồi: ${meta?.latencyMs ?? 0}ms`,
+              lastLatencyMs: meta?.latencyMs ?? 0,
+              lastUpdatedAt: Date.now(),
+            };
+            this.emitEventQueue();
+          }
         };
 
         audio.onended = () => {
@@ -2568,11 +2933,11 @@ class TempleSoundService {
         };
 
         audio.onerror = () => {
-          fallbackOnce();
+          fallbackOnce('File âm thanh từ Google Stream (#2) bị đứt giữa chừng');
         };
 
         audio.play().catch(() => {
-          fallbackOnce();
+          fallbackOnce('Trình duyệt chặn hoặc lỗi giải mã luồng Google Stream (#2)');
         });
       }
     );
@@ -2583,10 +2948,25 @@ class TempleSoundService {
     config: GameConfig,
     token: number,
     onDone: () => void,
-    override?: { rate?: number; pitch?: number; lang?: string }
+    override?: { rate?: number; pitch?: number; lang?: string },
+    isFallbackFromStream = false
   ) {
     if (token !== this.speechTokenSeq) return;
     if (!('speechSynthesis' in window)) {
+      this.recordTtsDiagnosticIncident(
+        {
+          type: 'disconnected',
+          fromSource: '#1 Web Speech',
+          toSource: 'Không hỗ trợ',
+          reason: 'Trình duyệt/OBS không hỗ trợ Web Speech API nội bộ',
+          textSample: text.slice(0, 48),
+        },
+        {
+          health: 'disconnected',
+          activeServerLabel: 'Không có Engine (#1 Bị khóa)',
+          statusHeadline: '❌ Trình duyệt không hỗ trợ #1 Web Speech',
+        }
+      );
       onDone();
       return;
     }
@@ -2602,7 +2982,25 @@ class TempleSoundService {
     // Bảo vệ trường hợp trình duyệt treo sự kiện onend của WebSpeech
     const wordCount = text.split(/\s+/).filter(Boolean).length;
     const maxExpectedMs = Math.max(4000, Math.min(18000, wordCount * 550 + 2500));
-    const safetyWatchdog = setTimeout(settleOnce, maxExpectedMs);
+    const safetyWatchdog = setTimeout(() => {
+      if (!settled && token === this.speechTokenSeq) {
+        this.recordTtsDiagnosticIncident(
+          {
+            type: 'disconnected',
+            fromSource: '#1 Web Speech',
+            toSource: 'Watchdog Tự Ngắt',
+            reason: `Giọng #1 Web Speech bị đứt/treo quá ${(maxExpectedMs / 1000).toFixed(1)}s ➔ Tự động giải phóng hàng chờ`,
+            textSample: text.slice(0, 48),
+          },
+          {
+            health: 'disconnected',
+            activeServerLabel: '#1 Web Speech (Đã tự giải phóng treo)',
+            statusHeadline: '❌ Giọng #1 Web Speech bị treo/ngắt quãng ➔ Đã tự ngắt an toàn',
+          }
+        );
+      }
+      settleOnce();
+    }, maxExpectedMs);
 
     try {
       window.speechSynthesis.cancel();
@@ -2617,9 +3015,13 @@ class TempleSoundService {
       utter.volume = config.ttsVolume;
 
       const voices = window.speechSynthesis.getVoices();
+      let chosenVoiceName = 'Mặc định trình duyệt';
       if (targetLang.toLowerCase().startsWith('en')) {
         const enVoice = voices.find((v) => v.lang.toLowerCase().startsWith('en'));
-        if (enVoice) utter.voice = enVoice;
+        if (enVoice) {
+          utter.voice = enVoice;
+          chosenVoiceName = enVoice.name;
+        }
       } else {
         let chosen = config.selectedSystemVoiceURI
           ? voices.find((v) => v.voiceURI === config.selectedSystemVoiceURI)
@@ -2627,11 +3029,49 @@ class TempleSoundService {
         if (!chosen) {
           chosen = voices.find((v) => v.lang.toLowerCase().includes('vi'));
         }
-        if (chosen) utter.voice = chosen;
+        if (chosen) {
+          utter.voice = chosen;
+          chosenVoiceName = chosen.name;
+        }
+      }
+
+      if (!isFallbackFromStream) {
+        this.ttsDiagnostic = {
+          ...this.ttsDiagnostic,
+          configuredEngineLabel: this.getConfiguredEngineLabel(config),
+          health: 'healthy',
+          activeServerLabel: `Web Speech (#1 • ${chosenVoiceName.slice(0, 22)})`,
+          statusHeadline: 'Ổn định • Đang phát qua #1 Web Speech nội bộ',
+          statusDetail: `Giọng hệ thống: ${chosenVoiceName} (0ms mạng)`,
+          lastLatencyMs: 0,
+          lastUpdatedAt: Date.now(),
+        };
+        this.emitEventQueue();
       }
 
       utter.onend = settleOnce;
-      utter.onerror = settleOnce;
+      utter.onerror = (ev) => {
+        if (
+          token === this.speechTokenSeq &&
+          ev.error !== 'interrupted' &&
+          ev.error !== 'canceled'
+        ) {
+          this.recordTtsDiagnosticIncident(
+            {
+              type: 'disconnected',
+              fromSource: '#1 Web Speech',
+              toSource: 'Bỏ qua câu lỗi',
+              reason: `Lỗi giọng đọc trình duyệt (${ev.error || 'unknown'})`,
+              textSample: text.slice(0, 48),
+            },
+            {
+              health: 'disconnected',
+              statusHeadline: `❌ Giọng #1 Web Speech báo lỗi (${ev.error || 'ngắt quãng'})`,
+            }
+          );
+        }
+        settleOnce();
+      };
       window.speechSynthesis.speak(utter);
     } catch {
       settleOnce();

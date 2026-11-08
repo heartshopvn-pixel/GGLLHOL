@@ -693,7 +693,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
                 zombieFlow6Speech1Template:
                   'Chúc mừng các em đã đánh bại zombie cấp [Cấp] và cứu cô giáo, sau đây là bảng xếp hạng điểm số',
                 zombieFlow6Speech2Template:
-                  'Cô trọng thưởng cho ba bạn top 1: [Top1] 120 hoa điểm 10, top 2: [Top2] 100 hoa điểm 10 và top 3: [Top3] 80 hoa điểm 10. Cùng tất cả các bạn một ly trà sữa mát cha lát te phun tóp pinh, chúng ta tiếp tục học thôi nào',
+                  'Cô trọng thưởng cho ba bạn top 1: [Top1] 100 hoa điểm 10, top 2: [Top2] 75 hoa điểm 10 và top 3: [Top3] 50 hoa điểm 10, các bạn còn lại 25 hoa điểm 10. Cùng tất cả các bạn một ly trà sữa mát cha lát te phun tóp pinh, chúng ta tiếp tục học thôi nào',
                 zombieFlow6MinDurationSec: 4.5,
               })
             }
@@ -996,7 +996,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
               rows={3}
               value={
                 config.zombieFlow6Speech2Template ??
-                'Cô trọng thưởng cho ba bạn top 1: [Top1] 120 hoa điểm 10, top 2: [Top2] 100 hoa điểm 10 và top 3: [Top3] 80 hoa điểm 10. Cùng tất cả các bạn một ly trà sữa mát cha lát te phun tóp pinh, chúng ta tiếp tục học thôi nào'
+                'Cô trọng thưởng cho ba bạn top 1: [Top1] 100 hoa điểm 10, top 2: [Top2] 75 hoa điểm 10 và top 3: [Top3] 50 hoa điểm 10, các bạn còn lại 25 hoa điểm 10. Cùng tất cả các bạn một ly trà sữa mát cha lát te phun tóp pinh, chúng ta tiếp tục học thôi nào'
               }
               onChange={(e) =>
                 onUpdateConfig({ zombieFlow6Speech2Template: e.target.value })

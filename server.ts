@@ -418,7 +418,12 @@ async function startServer() {
     text: string,
     variant: string,
     lang = 'vi'
-  ): Promise<Buffer> {
+  ): Promise<{
+    buf: Buffer;
+    source: 'ram-cache' | 'google-gtx' | 'google-tw-ob';
+    switchedMirror: boolean;
+    failReason?: string;
+  }> {
     const isSlow = variant === 'google-vi-slow' || variant === 'slow';
     const speedParam = isSlow ? '0.24' : '1';
     const tl = lang === 'en' || variant.includes('-en') ? 'en' : 'vi';
@@ -427,21 +432,35 @@ async function startServer() {
     if (cached) {
       ttsBufferCache.delete(cacheKey);
       ttsBufferCache.set(cacheKey, cached);
-      return cached;
+      return {
+        buf: cached,
+        source: 'ram-cache',
+        switchedMirror: false,
+      };
     }
 
     const encoded = encodeURIComponent(text);
     const gtxUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${tl}&client=gtx&ttsspeed=${speedParam}&q=${encoded}`;
     const twObUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&ttsspeed=${speedParam}&q=${encoded}`;
-    const endpoints =
-      variant === 'google-vi-twob' ? [twObUrl, gtxUrl] : [gtxUrl, twObUrl];
+    const endpoints: Array<{ url: string; label: 'google-gtx' | 'google-tw-ob' }> =
+      variant === 'google-vi-twob'
+        ? [
+            { url: twObUrl, label: 'google-tw-ob' },
+            { url: gtxUrl, label: 'google-gtx' },
+          ]
+        : [
+            { url: gtxUrl, label: 'google-gtx' },
+            { url: twObUrl, label: 'google-tw-ob' },
+          ];
 
     let lastErr: unknown = null;
-    for (const url of endpoints) {
+    let firstFailReason = '';
+    for (let idx = 0; idx < endpoints.length; idx++) {
+      const ep = endpoints[idx];
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 2200);
       try {
-        const response = await fetch(url, {
+        const response = await fetch(ep.url, {
           signal: controller.signal,
           headers: {
             'User-Agent':
@@ -451,13 +470,17 @@ async function startServer() {
         });
         clearTimeout(timeout);
         if (!response.ok) {
-          lastErr = new Error(`HTTP ${response.status}`);
+          const reason = `HTTP ${response.status} (${ep.label})`;
+          if (!firstFailReason) firstFailReason = reason;
+          lastErr = new Error(reason);
           continue;
         }
         const arrayBuffer = await response.arrayBuffer();
         const buf = Buffer.from(arrayBuffer);
         if (buf.length < 128) {
-          lastErr = new Error('Empty audio buffer');
+          const reason = `Buffer rỗng (${ep.label})`;
+          if (!firstFailReason) firstFailReason = reason;
+          lastErr = new Error(reason);
           continue;
         }
         if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
@@ -465,9 +488,19 @@ async function startServer() {
           if (oldestKey) ttsBufferCache.delete(oldestKey);
         }
         ttsBufferCache.set(cacheKey, buf);
-        return buf;
-      } catch (err) {
+        return {
+          buf,
+          source: ep.label,
+          switchedMirror: idx > 0,
+          failReason: firstFailReason || undefined,
+        };
+      } catch (err: any) {
         clearTimeout(timeout);
+        const reason =
+          err?.name === 'AbortError'
+            ? `Quá hạn >2.2s (${ep.label})`
+            : `${err?.message || 'Lỗi mạng'} (${ep.label})`;
+        if (!firstFailReason) firstFailReason = reason;
         lastErr = err;
       }
     }
@@ -480,10 +513,19 @@ async function startServer() {
       const text = String(req.query.text || 'Nam mô A Di Đà Phật').trim().slice(0, 200);
       const voiceVariant = String(req.query.voice || 'google-vi-gtx').trim();
       const lang = String(req.query.lang || 'vi').trim().toLowerCase();
-      const audioBuffer = await fetchGoogleTtsBuffer(text, voiceVariant, lang);
+      const result = await fetchGoogleTtsBuffer(text, voiceVariant, lang);
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(audioBuffer);
+      res.setHeader('X-TTS-Source', result.source);
+      res.setHeader('X-TTS-Switched', result.switchedMirror ? '1' : '0');
+      if (result.failReason) {
+        res.setHeader('X-TTS-Fail-Reason', encodeURIComponent(result.failReason));
+      }
+      res.setHeader(
+        'Access-Control-Expose-Headers',
+        'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
+      );
+      res.send(result.buf);
     } catch {
       res.status(502).end();
     }

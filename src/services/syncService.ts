@@ -271,22 +271,10 @@ class LiveSyncService {
     return obj;
   }
 
-  public sendCommand(action: SyncPacket['action'], payload: Record<string, any> = {}) {
-    const packet: SyncPacket = {
-      type: 'ADMIN_SYNC',
-      action,
-      payload,
-      ts: Date.now() + Math.random(),
-    };
-    this.recentPacketTimestamps.add(packet.ts);
+  private debouncedRelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingMergedPayloads = new Map<string, Record<string, any>>();
 
-    // 1. Instant local same-browser BroadcastChannel (supports full binary/base64 payloads)
-    try {
-      this.channel?.postMessage(packet);
-    } catch {
-      // Ignore
-    }
-
+  private dispatchNetworkRelay(packet: SyncPacket) {
     let serializedPacket = JSON.stringify(packet);
     if (serializedPacket.length > 45 * 1024 * 1024) {
       serializedPacket = JSON.stringify(this.stripHeavyDataUrls(packet));
@@ -316,6 +304,67 @@ class LiveSyncService {
         // Ignore
       }
     }
+  }
+
+  public sendCommand(action: SyncPacket['action'], payload: Record<string, any> = {}) {
+    const packet: SyncPacket = {
+      type: 'ADMIN_SYNC',
+      action,
+      payload,
+      ts: Date.now() + Math.random(),
+    };
+    this.recentPacketTimestamps.add(packet.ts);
+
+    // 1. Instant local same-browser BroadcastChannel (0ms latency within same browser)
+    try {
+      this.channel?.postMessage(packet);
+    } catch {
+      // Ignore
+    }
+
+    // Debounce & merge high-frequency slider/drag commands (70ms) over HTTP/WS so dragging sliders in Chrome never floods /api/sync-command or blocks /api/tts
+    const isHighFreqConfigPatch =
+      action === 'UPDATE_CONFIG' ||
+      action === 'UPDATE_HUD_LAYOUT' ||
+      action === 'UPDATE_GRID' ||
+      action === 'UPDATE_ZONES';
+
+    if (isHighFreqConfigPatch) {
+      const prevPending = this.pendingMergedPayloads.get(action) || {};
+      const mergedPayload: Record<string, any> = {
+        ...prevPending,
+        ...payload,
+      };
+      if (prevPending.patch && payload.patch) {
+        mergedPayload.patch = { ...prevPending.patch, ...payload.patch };
+      }
+      if (prevPending.grid && payload.grid) {
+        mergedPayload.grid = { ...prevPending.grid, ...payload.grid };
+      }
+      this.pendingMergedPayloads.set(action, mergedPayload);
+
+      const existingTimer = this.debouncedRelayTimers.get(action);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+      const timer = setTimeout(() => {
+        this.debouncedRelayTimers.delete(action);
+        const finalPayload = this.pendingMergedPayloads.get(action) || payload;
+        this.pendingMergedPayloads.delete(action);
+        const mergedPacket: SyncPacket = {
+          type: 'ADMIN_SYNC',
+          action,
+          payload: finalPayload,
+          ts: Date.now() + Math.random(),
+        };
+        this.recentPacketTimestamps.add(mergedPacket.ts);
+        this.dispatchNetworkRelay(mergedPacket);
+      }, 70);
+      this.debouncedRelayTimers.set(action, timer);
+      return;
+    }
+
+    this.dispatchNetworkRelay(packet);
   }
 
   public async connectTikTokRoom(username: string): Promise<{ ok: boolean; error?: string; roomId?: string }> {

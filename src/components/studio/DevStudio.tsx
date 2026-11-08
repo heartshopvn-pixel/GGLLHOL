@@ -171,6 +171,8 @@ interface DevStudioProps {
   onPushFullSyncToLive?: () => void;
   classBoardState?: ClassBoardRuntimeState;
   onToggleClassBoardRun?: () => void;
+  onRestartClassBoardFromStart?: () => void;
+  onRunNoticeBoard?: () => void;
   onNextClassBoardQuestion?: () => void;
   onSimulateQuizAnswer?: (customUsername?: string) => void;
   onEnqueueWaitingStudent?: (customUsername?: string, customComment?: string) => void;
@@ -186,6 +188,8 @@ interface DevStudioProps {
     kind: 'heart_seated' | 'heart_queue' | 'book' | 'chair' | 'desk_mate',
     customUsername?: string
   ) => void;
+  compactRemoteStage?: boolean;
+  onToggleCompactRemoteStage?: () => void;
 }
 
 export const DevStudio: React.FC<DevStudioProps> = ({
@@ -275,6 +279,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onPushFullSyncToLive,
   classBoardState,
   onToggleClassBoardRun,
+  onRestartClassBoardFromStart,
+  onRunNoticeBoard,
   onNextClassBoardQuestion,
   onSimulateQuizAnswer,
   onEnqueueWaitingStudent,
@@ -287,6 +293,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onStopZombieEvent,
   onKillZombieImmediately,
   onTestZombieAttack,
+  compactRemoteStage = false,
+  onToggleCompactRemoteStage,
 }) => {
   const [copiedObsLink, setCopiedObsLink] = useState(false);
   const [pushedLiveSync, setPushedLiveSync] = useState(false);
@@ -443,28 +451,56 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             </label>
           </div>
 
-          <button
-            type="button"
-            onClick={onToggleLocalMute}
-            className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
-              isLocalTabMuted
-                ? 'bg-rose-600 text-white'
-                : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
-            }`}
-          >
-            {isLocalTabMuted ? (
-              <>
-                <VolumeX className="w-3 h-3" />
-                <span>Tắt tiếng tab</span>
-              </>
-            ) : (
-              <>
-                <Volume2 className="w-3 h-3 text-emerald-400" />
-                <span>Mở tiếng tab</span>
-              </>
+          <div className="flex items-center gap-1.5">
+            {onToggleCompactRemoteStage && (
+              <button
+                type="button"
+                onClick={onToggleCompactRemoteStage}
+                title="Thu gọn Sân Khấu 2D trên tab điều khiển để tiết kiệm 90% GPU/CPU cho TikTok Live Studio"
+                className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
+                  compactRemoteStage
+                    ? 'bg-amber-500 text-stone-950 shadow-sm'
+                    : 'bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/40'
+                }`}
+              >
+                <Tv className="w-3 h-3" />
+                <span>{compactRemoteStage ? 'Hiện Sân 2D' : '⚡ Thu gọn Sân 2D'}</span>
+              </button>
             )}
-          </button>
+
+            <button
+              type="button"
+              onClick={onToggleLocalMute}
+              className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
+                isLocalTabMuted
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
+              }`}
+            >
+              {isLocalTabMuted ? (
+                <>
+                  <VolumeX className="w-3 h-3" />
+                  <span>{peerCounts.obsPeers > 0 ? 'Slave (Tắt tiếng)' : 'Tắt tiếng tab'}</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-3 h-3 text-emerald-400" />
+                  <span>Mở tiếng tab</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
+
+        {peerCounts.obsPeers > 0 && (
+          <div className="px-2.5 py-1 rounded-md bg-emerald-950/75 border border-emerald-500/40 flex items-center justify-between gap-2 text-[10px] text-emerald-200">
+            <span className="font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              📡 Chế độ Remote Master–Slave: Live ({peerCounts.obsPeers} OBS) làm chuẩn • 0ms lệch nhịp
+            </span>
+            <span className="text-emerald-300/90 font-mono">Debounce 70ms</span>
+          </div>
+        )}
 
         {backupNotice && (
           <div
@@ -634,6 +670,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onTriggerClassroomGift={onTriggerClassroomGift}
             classBoardState={classBoardState}
             onToggleClassBoardRun={onToggleClassBoardRun}
+            onRestartClassBoardFromStart={onRestartClassBoardFromStart}
+            onRunNoticeBoard={onRunNoticeBoard}
             onNextClassBoardQuestion={onNextClassBoardQuestion}
             onSimulateQuizAnswer={onSimulateQuizAnswer}
             onEnqueueWaitingStudent={onEnqueueWaitingStudent}

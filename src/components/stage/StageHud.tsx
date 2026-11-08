@@ -973,7 +973,7 @@ export const StageHud: React.FC<StageHudProps> = ({
                     <div className="flex flex-col gap-1 my-auto">
                       {[0, 1, 2].map((idx) => {
                         const d = zombieEventState.topDamagers[idx];
-                        const rewardPts = idx === 0 ? 120 : idx === 1 ? 100 : 80;
+                        const rewardPts = idx === 0 ? 100 : idx === 1 ? 75 : 50;
                         const medal = idx === 0 ? '🥇 Top 1' : idx === 1 ? '🥈 Top 2' : '🥉 Top 3';
                         return (
                           <div
@@ -994,7 +994,7 @@ export const StageHud: React.FC<StageHudProps> = ({
                       })}
                     </div>
                     <div className="px-2 py-1 rounded bg-emerald-950/80 border border-emerald-400/50 text-[8.5px] font-bold text-emerald-200 leading-tight">
-                      🧋 Tất cả các bạn trong lớp & hàng chờ nhận 1 ly Trà Sữa Matcha Latte Full Topping!
+                      🧋 Các bạn còn lại +25 🌸 • Cả lớp & hàng chờ nhận 1 ly Trà Sữa Matcha Latte Full Topping!
                     </div>
                   </div>
 

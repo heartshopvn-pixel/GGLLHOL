@@ -1444,7 +1444,17 @@ export const GameStage: React.FC<GameStageProps> = ({
               />
             ))}
 
-          {doorCrowd.map((p) => (
+          {doorCrowd
+            .filter(
+              (p) =>
+                !specialFlowerRunners.some(
+                  (r) =>
+                    r.id === p.id ||
+                    r.username.trim().toLowerCase() ===
+                      p.username.trim().toLowerCase()
+                )
+            )
+            .map((p) => (
             <StudentSprite
               key={p.id}
               pilgrim={p}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const CACHE_VERSION = 'v7_girl_student_seated_chair';
+const CACHE_VERSION = 'v8_auto_downscale_vram_cache';
 const processedCache = new Map<string, string[]>();
 const pendingPromises = new Map<string, Promise<string[]>>();
 
@@ -832,19 +832,60 @@ export function processSingleCutoutImage(rawUrl: string): Promise<string> {
 
         const cropW = maxX - minX + 1;
         const cropH = maxY - minY + 1;
+
+        // Auto-Downscale Sprite Cache: Giới hạn kích thước bitmap giải nén trong VRAM (tối đa 320px cho học sinh/vật phẩm, 420px cho bàn học/giáo viên)
+        // Giúp giảm 15-20 lần dung lượng VRAM trên TikTok Live Studio mà vẫn giữ độ nét Retina 2x
+        const isLargeStageProp =
+          url.includes('Desk') ||
+          url.includes('Teacher') ||
+          url.includes('zombie');
+        const maxAllowedDim = isLargeStageProp ? 420 : 320;
+        const maxCropSide = Math.max(cropW, cropH);
+        const downscaleRatio =
+          maxCropSide > maxAllowedDim ? maxAllowedDim / maxCropSide : 1;
+        const targetW = Math.max(1, Math.round(cropW * downscaleRatio));
+        const targetH = Math.max(1, Math.round(cropH * downscaleRatio));
+
         const outCanvas = document.createElement('canvas');
-        outCanvas.width = cropW;
-        outCanvas.height = cropH;
+        outCanvas.width = targetW;
+        outCanvas.height = targetH;
         const outCtx = outCanvas.getContext('2d');
         if (!outCtx) {
           resolve(url);
           return;
         }
-        outCtx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+        outCtx.imageSmoothingEnabled = true;
+        outCtx.imageSmoothingQuality = 'high';
+        outCtx.drawImage(
+          canvas,
+          minX,
+          minY,
+          cropW,
+          cropH,
+          0,
+          0,
+          targetW,
+          targetH
+        );
 
         const outUrl = await canvasToObjectUrl(outCanvas);
         singleCutoutCache.set(cacheKey, outUrl);
         singleCutoutPromises.delete(cacheKey);
+
+        // Nếu đây là ảnh học sinh nữ ngồi ghế gỗ, đồng bộ luôn Blob URL đã nén nhẹ vào BAKED_STATIC_FRAMES
+        if (url.includes('girl_student_seated_wooden_chair')) {
+          Object.values(BAKED_STATIC_FRAMES).forEach((frameList) => {
+            if (frameList.length === 10) {
+              if (frameList[5]?.includes('girl_student_seated_wooden_chair')) {
+                frameList[5] = outUrl;
+              }
+              if (frameList[6]?.includes('girl_student_seated_wooden_chair')) {
+                frameList[6] = outUrl;
+              }
+            }
+          });
+        }
+
         resolve(outUrl);
       } catch {
         singleCutoutPromises.delete(cacheKey);
@@ -895,5 +936,23 @@ export function useProcessedSingleCutout(
   }, [url]);
 
   return processedUrl;
+}
+
+// Tự động nén trước (Pre-warm Auto-Downscale Sprite Cache) các ảnh nhân vật mặc định ngay khi khởi tạo
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    const defaultSingleSprites = [
+      './assets/aistudio/girl_student_seated_wooden_chair.png?v=2',
+      './assets/aistudio/Girl_Student_Standing.jpg',
+      './assets/aistudio/Boy_Student_Seated.jpg',
+      './assets/aistudio/Boy_Student_Standing.jpg',
+      './assets/aistudio/Female_Teacher.jpg',
+      './assets/aistudio/Male_Teacher.jpg',
+      './assets/aistudio/Wooden_School_Desk.jpg',
+    ];
+    defaultSingleSprites.forEach((spriteUrl) => {
+      void processSingleCutoutImage(spriteUrl);
+    });
+  }, 120);
 }
 

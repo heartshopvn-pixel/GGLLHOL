@@ -76,6 +76,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
   const [activeFlow6Cond, setActiveFlow6Cond] =
     useState<LessonFlow6ConditionKey>('normal');
 
+  const [liveDiagnostic, setLiveDiagnostic] = useState(() =>
+    soundEngine.getEventQueueSnapshot().diagnostic
+  );
+
   const scanVoices = () => {
     if (!('speechSynthesis' in window)) return;
     const list = window.speechSynthesis.getVoices() || [];
@@ -92,6 +96,12 @@ export const TabAudio: React.FC<TabAudioProps> = ({
     if ('speechSynthesis' in window) {
       window.speechSynthesis.onvoiceschanged = scanVoices;
     }
+    const unsubDiag = soundEngine.subscribeEventQueue((snap) => {
+      setLiveDiagnostic(snap.diagnostic);
+    });
+    return () => {
+      unsubDiag();
+    };
   }, []);
 
   const bgmTracks = config.bgmTracks || [];
@@ -240,19 +250,205 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
         </div>
 
-        {/* Chi tiết câu đang đọc & danh sách chờ */}
-        {(isPlayingEvent || waitingCount > 0) && (
-          <div className="p-2 rounded-lg bg-stone-950/80 border border-stone-800 space-y-1.5">
-            {isPlayingEvent && currentEventText && (
-              <div className="flex items-start gap-1.5 text-[10.5px]">
-                <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-[9.5px] shrink-0">
-                  ĐANG ĐỌC
-                </span>
-                <span className="text-emerald-200 line-clamp-2">
-                  “{currentEventText}”
-                </span>
+        {/* THẺ CỐ ĐỊNH THEO DÕI TRẠNG THÁI GIỌNG ĐỌC (ĐỨT / FALLBACK / CHUYỂN SERVER) */}
+        <div
+          className={`p-2.5 rounded-lg border space-y-2 transition-colors ${
+            liveDiagnostic.health === 'disconnected'
+              ? 'bg-rose-950/75 border-rose-500/70'
+              : liveDiagnostic.health === 'fallback'
+              ? 'bg-amber-950/75 border-amber-500/70'
+              : liveDiagnostic.health === 'server_switched'
+              ? 'bg-sky-950/75 border-sky-500/70'
+              : 'bg-stone-950/95 border-emerald-500/45'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span
+                className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                  liveDiagnostic.health === 'disconnected'
+                    ? 'bg-rose-400 animate-ping'
+                    : liveDiagnostic.health === 'fallback'
+                    ? 'bg-amber-400 animate-pulse'
+                    : liveDiagnostic.health === 'server_switched'
+                    ? 'bg-sky-400 animate-pulse'
+                    : 'bg-emerald-400'
+                }`}
+              />
+              <span className="text-[10.5px] font-extrabold tracking-wide uppercase text-stone-100 truncate">
+                Trạng Thái Server Giọng Đọc
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span
+                className={`px-1.5 py-0.5 rounded text-[9.5px] font-black uppercase border ${
+                  liveDiagnostic.health === 'disconnected'
+                    ? 'bg-rose-500/25 border-rose-400 text-rose-200'
+                    : liveDiagnostic.health === 'fallback'
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-200'
+                    : liveDiagnostic.health === 'server_switched'
+                    ? 'bg-sky-500/25 border-sky-400 text-sky-200'
+                    : 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
+                }`}
+              >
+                {liveDiagnostic.health === 'disconnected'
+                  ? '🚨 BỊ ĐỨT / LỖI'
+                  : liveDiagnostic.health === 'fallback'
+                  ? '⚠️ ĐÃ FALLBACK'
+                  : liveDiagnostic.health === 'server_switched'
+                  ? '🔄 ĐỔI SERVER'
+                  : '🟢 ỔN ĐỊNH'}
+              </span>
+
+              {(liveDiagnostic.totalFallbacks > 0 ||
+                liveDiagnostic.totalServerSwitches > 0 ||
+                liveDiagnostic.totalDisconnects > 0) && (
+                <button
+                  type="button"
+                  onClick={() => soundEngine.clearTtsDiagnosticHistory()}
+                  className="px-1.5 py-0.5 rounded bg-stone-900 hover:bg-stone-800 border border-stone-700 text-[9px] font-bold text-stone-300 cursor-pointer"
+                  title="Làm mới bộ đếm và lịch sử cảnh báo giọng đọc"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+            <div className="px-2 py-1 rounded bg-stone-900/90 border border-stone-800">
+              <div className="text-[9px] text-stone-400">Nguồn cài đặt:</div>
+              <div className="font-bold text-stone-200 truncate">
+                {liveDiagnostic.configuredEngineLabel}
               </div>
-            )}
+            </div>
+            <div className="px-2 py-1 rounded bg-stone-900/90 border border-stone-800">
+              <div className="text-[9px] text-stone-400">Server đang phát thực tế:</div>
+              <div className="font-bold text-amber-300 truncate">
+                {liveDiagnostic.activeServerLabel}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-2 py-1.5 rounded bg-stone-900/95 border border-stone-800/90 space-y-0.5">
+            <div className="text-[10.5px] font-bold text-white leading-snug">
+              {liveDiagnostic.statusHeadline}
+            </div>
+            <div className="flex items-center justify-between gap-2 text-[9.5px] text-stone-400">
+              <span className="truncate">{liveDiagnostic.statusDetail}</span>
+              <span className="font-mono text-stone-300 shrink-0">
+                {liveDiagnostic.lastLatencyMs !== null
+                  ? `${liveDiagnostic.lastLatencyMs}ms • `
+                  : ''}
+                {new Date(liveDiagnostic.lastUpdatedAt).toLocaleTimeString(
+                  'vi-VN',
+                  { hour12: false }
+                )}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1.5 text-center">
+            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
+              <div className="text-[9px] text-stone-400">Bị đứt / Treo</div>
+              <div
+                className={`text-xs font-black font-mono ${
+                  liveDiagnostic.totalDisconnects > 0
+                    ? 'text-rose-400'
+                    : 'text-stone-400'
+                }`}
+              >
+                {liveDiagnostic.totalDisconnects}
+              </div>
+            </div>
+            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
+              <div className="text-[9px] text-stone-400">Chuyển Server</div>
+              <div
+                className={`text-xs font-black font-mono ${
+                  liveDiagnostic.totalServerSwitches > 0
+                    ? 'text-sky-300'
+                    : 'text-stone-400'
+                }`}
+              >
+                {liveDiagnostic.totalServerSwitches}
+              </div>
+            </div>
+            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
+              <div className="text-[9px] text-stone-400">Tự Fallback</div>
+              <div
+                className={`text-xs font-black font-mono ${
+                  liveDiagnostic.totalFallbacks > 0
+                    ? 'text-amber-300'
+                    : 'text-stone-400'
+                }`}
+              >
+                {liveDiagnostic.totalFallbacks}
+              </div>
+            </div>
+          </div>
+
+          {liveDiagnostic.recentIncidents.length > 0 && (
+            <div className="space-y-1 pt-0.5">
+              <div className="text-[9.5px] font-bold text-amber-200/90">
+                Nhật ký chuyển Server / Fallback gần nhất:
+              </div>
+              <div className="max-h-24 overflow-y-auto space-y-1 pr-0.5">
+                {liveDiagnostic.recentIncidents.slice(0, 4).map((inc) => (
+                  <div
+                    key={inc.id}
+                    className="px-2 py-1 rounded bg-stone-950/90 border border-stone-800 text-[9.5px] space-y-0.5"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span
+                        className={`font-extrabold ${
+                          inc.type === 'disconnected'
+                            ? 'text-rose-300'
+                            : inc.type === 'fallback'
+                            ? 'text-amber-300'
+                            : 'text-sky-300'
+                        }`}
+                      >
+                        {inc.type === 'disconnected'
+                          ? '🚨 BỊ ĐỨT'
+                          : inc.type === 'fallback'
+                          ? '⚠️ FALLBACK'
+                          : '🔄 ĐỔI SERVER'}
+                        : {inc.fromSource} ➔ {inc.toSource}
+                      </span>
+                      <span className="font-mono text-[9px] text-stone-400 shrink-0">
+                        {new Date(inc.timestamp).toLocaleTimeString('vi-VN', {
+                          hour12: false,
+                        })}
+                      </span>
+                    </div>
+                    <div className="text-stone-300 truncate">{inc.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Chi tiết câu đang đọc & danh sách chờ */}
+        <div className="p-2 rounded-lg bg-stone-950/80 border border-stone-800 space-y-1.5">
+          {isPlayingEvent && currentEventText ? (
+            <div className="flex items-start gap-1.5 text-[10.5px]">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-[9.5px] shrink-0">
+                ĐANG ĐỌC
+              </span>
+              <span className="text-emerald-200 line-clamp-2">
+                “{currentEventText}”
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between text-[10px] text-stone-400">
+              <span>Câu đang phát:</span>
+              <span className="font-mono text-stone-300">
+                {ttsStatus.active ? ttsStatus.text : 'Đang rảnh / Chờ câu mới'}
+              </span>
+            </div>
+          )}
 
             {queueItems.length > 0 && (
               <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
@@ -275,7 +471,6 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               </div>
             )}
           </div>
-        )}
 
         {/* Giới hạn hàng chờ (đạt giới hạn tự xóa làm mới) & Giới hạn số chữ mỗi câu */}
         <div className="grid grid-cols-1 gap-2">

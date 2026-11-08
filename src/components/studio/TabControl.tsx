@@ -209,6 +209,8 @@ interface TabControlProps {
   onUpdateConfig: (patch: Partial<GameConfig>) => void;
   onUpdateHudLayout: (patch: Partial<HudLayoutConfig>) => void;
   onToggleClassBoardRun?: () => void;
+  onRestartClassBoardFromStart?: () => void;
+  onRunNoticeBoard?: () => void;
   onNextClassBoardQuestion?: () => void;
   onSimulateQuizAnswer?: (customUsername?: string) => void;
   onEnqueueWaitingStudent?: (customUsername?: string, customComment?: string) => void;
@@ -270,6 +272,8 @@ export const TabControl: React.FC<TabControlProps> = ({
   onUpdateConfig,
   onUpdateHudLayout,
   onToggleClassBoardRun,
+  onRestartClassBoardFromStart,
+  onRunNoticeBoard,
   onNextClassBoardQuestion,
   onSimulateQuizAnswer,
   onEnqueueWaitingStudent,
@@ -560,10 +564,12 @@ export const TabControl: React.FC<TabControlProps> = ({
               className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold border ${
                 isBoardRunning
                   ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
-                  : 'bg-stone-950 border-stone-800 text-stone-400'
+                  : 'bg-amber-500/15 border-amber-500/40 text-amber-200'
               }`}
             >
-              {isBoardRunning ? lessonFlowStepText : 'Tiết học đang dừng'}
+              {isBoardRunning
+                ? lessonFlowStepText
+                : `⏸️ Tạm dừng (${lessonFlowStepText})`}
             </span>
 
             {waitingTtsCount > 0 && onClearEventTtsQueue && (
@@ -740,69 +746,157 @@ export const TabControl: React.FC<TabControlProps> = ({
           </div>
         </div>
 
-        {/* Hàng 2: Chọn Engine + Nút Chạy / Dừng + Câu tiếp + Test trả lời */}
-        <div className="grid grid-cols-12 gap-1.5 items-center">
-          <div className="col-span-5">
-            <select
-              value={activeEngine}
-              onChange={(e) =>
-                onUpdateHudLayout({
-                  classBoardEngine: e.target.value as ClassBoardEngineId,
-                })
-              }
-              className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs font-bold text-amber-200 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="english_quiz">
-                🇬🇧 {hud.classBoardLessonTitle || 'Tiết Tiếng Anh'}
-              </option>
-              <option value="result_board">🏆 Bảng Kết Quả</option>
-              <option value="notice">📋 Bảng Thông Báo</option>
-            </select>
-          </div>
+        {/* Hàng 2: Chọn Tiết Học / Bảng Thông Báo + Nút Tạm dừng / Chạy tiếp + Chạy từ đầu (hoặc Chạy bảng thông báo) */}
+        {activeEngine === 'notice' ? (
+          <div className="space-y-1.5">
+            <div className="grid grid-cols-12 gap-1.5 items-center">
+              <div className="col-span-5">
+                <select
+                  value={activeEngine}
+                  onChange={(e) =>
+                    onUpdateHudLayout({
+                      classBoardEngine: e.target.value as ClassBoardEngineId,
+                    })
+                  }
+                  className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-amber-500/60 text-xs font-bold text-amber-200 focus:outline-none focus:border-emerald-400"
+                >
+                  <option value="english_quiz">
+                    🇬🇧 {hud.classBoardLessonTitle || 'Tiết Tiếng Anh'}
+                  </option>
+                  <option value="result_board">🏆 Bảng Kết Quả</option>
+                  <option value="notice">📋 Bảng Thông Báo</option>
+                </select>
+              </div>
 
-          <div className="col-span-4">
-            <button
-              type="button"
-              onClick={onToggleClassBoardRun}
-              className={`w-full py-1.5 px-2 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition shadow-sm ${
-                isBoardRunning
-                  ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400'
-                  : 'bg-emerald-500 hover:bg-emerald-400 text-stone-950 border border-emerald-300'
-              }`}
-            >
-              {isBoardRunning ? (
-                <>
-                  <Pause className="w-3.5 h-3.5 fill-current" />
-                  <span>Dừng</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Chạy</span>
-                </>
-              )}
-            </button>
-          </div>
+              <div className="col-span-4">
+                <button
+                  type="button"
+                  onClick={onRunNoticeBoard}
+                  title="Bấm chạy bảng thông báo để Cô Thảo đọc dòng chữ hiện tại trong bảng thông báo"
+                  className="w-full py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 cursor-pointer transition shadow-sm bg-emerald-500 hover:bg-emerald-400 text-stone-950 border border-emerald-300"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+                  <span className="truncate">Chạy thông báo</span>
+                </button>
+              </div>
 
-          <div className="col-span-3 flex items-center gap-1">
-            <button
-              type="button"
-              onClick={onNextClassBoardQuestion}
-              title="Qua câu hỏi tiếp theo"
-              className="flex-1 py-1.5 px-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-bold text-stone-200 flex items-center justify-center cursor-pointer transition"
-            >
-              <SkipForward className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onSimulateQuizAnswer?.(customName)}
-              title="Giả lập học sinh comment trả lời đúng câu hiện tại"
-              className="flex-1 py-1.5 px-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/50 text-[11px] font-bold text-amber-300 flex items-center justify-center cursor-pointer transition"
-            >
-              <Zap className="w-3.5 h-3.5" />
-            </button>
+              <div className="col-span-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateHudLayout({ classBoardEngine: 'english_quiz' })
+                  }
+                  title="Trả về tiết Tiếng Anh (ở trạng thái tạm dừng) để bấm Chạy tiếp"
+                  className="w-full py-1.5 px-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/35 border border-cyan-400/60 text-[10.5px] font-extrabold text-cyan-200 flex items-center justify-center gap-1 cursor-pointer transition"
+                >
+                  <BookOpen className="w-3 h-3 shrink-0" />
+                  <span className="truncate">Về tiết học</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Khung nội dung Bảng Thông Báo ngay tại Bảng Lớp để chỉnh & đọc tức thì */}
+            <div className="p-2 rounded-lg bg-stone-950/90 border border-amber-500/35 space-y-1.5 text-[10px]">
+              <div className="flex items-center justify-between gap-1 text-amber-200 font-bold">
+                <span>
+                  ⏸️ Tiết Tiếng Anh đang tạm dừng tại: <span className="text-emerald-300">{lessonFlowStepText}</span>
+                </span>
+              </div>
+              <textarea
+                rows={2}
+                value={
+                  hud.noticeBoardContent ??
+                  'Chào mừng các bạn học sinh vào lớp 12A1! Bình luận để giơ tay phát biểu và nhận Hoa Điểm 10 🌺'
+                }
+                onChange={(e) =>
+                  onUpdateHudLayout({ noticeBoardContent: e.target.value })
+                }
+                placeholder="Nhập dòng chữ hiện tại trong bảng thông báo để Cô đọc..."
+                className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-100 focus:outline-none focus:border-amber-400 resize-y"
+              />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="grid grid-cols-12 gap-1 items-center">
+            <div className="col-span-4">
+              <select
+                value={activeEngine}
+                onChange={(e) =>
+                  onUpdateHudLayout({
+                    classBoardEngine: e.target.value as ClassBoardEngineId,
+                  })
+                }
+                className="w-full px-1.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-[11px] font-bold text-amber-200 focus:outline-none focus:border-emerald-400"
+              >
+                <option value="english_quiz">
+                  🇬🇧 {hud.classBoardLessonTitle || 'Tiết Tiếng Anh'}
+                </option>
+                <option value="result_board">🏆 Bảng Kết Quả</option>
+                <option value="notice">📋 Bảng Thông Báo</option>
+              </select>
+            </div>
+
+            <div className="col-span-3">
+              <button
+                type="button"
+                onClick={onToggleClassBoardRun}
+                title={
+                  isBoardRunning
+                    ? 'Tạm dừng tiết học tại luồng hiện tại'
+                    : `Tiếp tục chạy luồng đang bị dừng (${lessonFlowStepText})`
+                }
+                className={`w-full py-1.5 px-1.5 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 cursor-pointer transition shadow-sm ${
+                  isBoardRunning
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-stone-950 border border-emerald-300'
+                }`}
+              >
+                {isBoardRunning ? (
+                  <>
+                    <Pause className="w-3 h-3 fill-current shrink-0" />
+                    <span className="truncate">Tạm dừng</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3 h-3 fill-current shrink-0" />
+                    <span className="truncate">Chạy tiếp</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="col-span-3">
+              <button
+                type="button"
+                onClick={onRestartClassBoardFromStart}
+                title="Chạy lại tiết học từ đầu (Luồng 0: Bắt đầu tiết học)"
+                className="w-full py-1.5 px-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/60 text-[10.5px] font-extrabold text-amber-200 flex items-center justify-center gap-1 cursor-pointer transition shadow-sm"
+              >
+                <RotateCcw className="w-3 h-3 shrink-0" />
+                <span className="truncate">Chạy từ đầu</span>
+              </button>
+            </div>
+
+            <div className="col-span-2 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onNextClassBoardQuestion}
+                title="Qua câu hỏi tiếp theo"
+                className="flex-1 py-1.5 px-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-bold text-stone-200 flex items-center justify-center cursor-pointer transition"
+              >
+                <SkipForward className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onSimulateQuizAnswer?.(customName)}
+                title="Giả lập học sinh comment trả lời đúng câu hiện tại"
+                className="flex-1 py-1.5 px-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/50 text-[11px] font-bold text-amber-300 flex items-center justify-center cursor-pointer transition"
+              >
+                <Zap className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Hàng 3: Tên tiết học + Gợi ý ô chữ + NPC tham gia + Bộ câu hỏi .txt */}
         {activeEngine === 'english_quiz' && (

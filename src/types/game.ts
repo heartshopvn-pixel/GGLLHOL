@@ -312,6 +312,7 @@ export interface ClassBoardRuntimeState {
   seatUpdateTriggered?: boolean;
   idleChatTriggered?: boolean;
   ttsFinishedAtElapsedMs?: number;
+  phaseEndAt?: number;
 }
 
 export type HudCycleAnimMode = 'slide_right' | 'fade';
@@ -1057,6 +1058,8 @@ export interface SyncPacket {
     | 'CLEAR_DAILY_RECORDS'
     | 'UPDATE_CUSTOM_ASSETS'
     | 'SYNC_CLASS_BOARD_STATE'
+    | 'REMOTE_BOARD_COMMAND'
+    | 'SYNC_LIVE_TTS_SNAPSHOT'
     | 'TRIGGER_ZOMBIE_EVENT'
     | 'SYNC_ZOMBIE_EVENT_STATE'
     | 'REQUEST_FULL_SYNC'
