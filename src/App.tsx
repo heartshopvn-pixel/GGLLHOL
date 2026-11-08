@@ -38,13 +38,11 @@ export default function App() {
     });
   };
 
-  // Tự động hiện lại Sân Khấu 2D nếu người dùng đang bật chế độ "Kéo" bảng (editLayoutMode) hoặc đang mở tab Map
+  // Luôn giữ ẩn Sân Khấu 2D khi bật chế độ Thu gọn Sân 2D (compactRemoteStage), kể cả khi chỉnh thẻ Map
   const shouldHideHeavyStage =
     !isPureStreamMode &&
     studioOpen &&
-    compactRemoteStage &&
-    !engine.config.hudLayout.editLayoutMode &&
-    activeTab !== 'map';
+    compactRemoteStage;
 
   // Keyboard shortcut F2 to toggle Dev Studio for OBS clean capture
   useEffect(() => {
