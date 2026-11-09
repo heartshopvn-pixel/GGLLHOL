@@ -809,6 +809,7 @@ export interface PilgrimData {
   isDetachedFlowerRunner?: boolean;
   leaveAfterGiftAction?: boolean;
   giftActionBusyUntil?: number;
+  spawnDelaySec?: number;
 }
 
 export interface RoamingCatAgent {
@@ -1063,7 +1064,8 @@ export interface SyncPacket {
     | 'TRIGGER_ZOMBIE_EVENT'
     | 'SYNC_ZOMBIE_EVENT_STATE'
     | 'REQUEST_FULL_SYNC'
-    | 'RESTORE_BACKUP';
+    | 'RESTORE_BACKUP'
+    | 'OBS_DISPLAY_CONTROL';
   payload: Record<string, any>;
   ts: number;
 }

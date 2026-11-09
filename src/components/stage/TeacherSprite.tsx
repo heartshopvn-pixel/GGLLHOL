@@ -45,7 +45,7 @@ function getTeacherFrameIndex(monk: TempleMonkData): MonkFrameIndex {
   return 0;
 }
 
-export const TeacherSprite: React.FC<TeacherSpriteProps> = ({
+const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
   monk,
   customAssets,
   characterScale,
@@ -125,8 +125,12 @@ export const TeacherSprite: React.FC<TeacherSpriteProps> = ({
     <div
       className="absolute pointer-events-none select-none"
       style={{
-        left: monk.x,
-        top: monk.y,
+        left: 0,
+        top: 0,
+        transform: `translate3d(${Math.round(monk.x * 10) / 10}px, ${
+          Math.round(monk.y * 10) / 10
+        }px, 0)`,
+        willChange: isWalking ? 'transform' : undefined,
       }}
     >
       {/* CHATBOX CẢM ƠN NHẬN QUÀ CỦA CÔ GIÁO (CHỮ HỒNG, VIỀN HỒNG) & THẦY GIÁM THỊ (CHỮ XANH DƯƠNG, VIỀN XANH DƯƠNG) */}
@@ -506,3 +510,6 @@ export const TeacherSprite: React.FC<TeacherSpriteProps> = ({
     </div>
   );
 };
+
+export const TeacherSprite = React.memo(TeacherSpriteInner);
+

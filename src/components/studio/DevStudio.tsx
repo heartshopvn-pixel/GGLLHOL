@@ -11,6 +11,8 @@ import {
   Sparkles,
   ShieldCheck,
   MapPin,
+  Maximize2,
+  Minimize2,
   Radio,
   RefreshCw,
   Tv,
@@ -190,6 +192,10 @@ interface DevStudioProps {
   ) => void;
   compactRemoteStage?: boolean;
   onToggleCompactRemoteStage?: () => void;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: (hideStudio?: boolean) => void;
+  stretchFullViewport?: boolean;
+  onToggleStretchFullViewport?: () => void;
 }
 
 export const DevStudio: React.FC<DevStudioProps> = ({
@@ -295,6 +301,10 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onTestZombieAttack,
   compactRemoteStage = false,
   onToggleCompactRemoteStage,
+  isFullscreen = false,
+  onToggleFullscreen,
+  stretchFullViewport = false,
+  onToggleStretchFullViewport,
 }) => {
   const [copiedObsLink, setCopiedObsLink] = useState(false);
   const [pushedLiveSync, setPushedLiveSync] = useState(false);
@@ -451,7 +461,47 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             </label>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 flex-wrap justify-end">
+            {onToggleFullscreen && (
+              <button
+                type="button"
+                onClick={() => onToggleFullscreen()}
+                title="Kích hoạt Full Màn Hình cho cửa sổ Link OBS Live (?obs=1), không làm ẩn bảng Dev điều khiển"
+                className={`px-2 py-1 rounded-md text-[11px] font-extrabold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
+                  isFullscreen
+                    ? 'bg-emerald-500 text-stone-950 shadow-sm'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/60 shadow-sm'
+                }`}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="w-3 h-3" />
+                    <span>Thoát Full OBS</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3 h-3" />
+                    <span>Full Màn Hình OBS</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {onToggleStretchFullViewport && (
+              <button
+                type="button"
+                onClick={onToggleStretchFullViewport}
+                title="Bung khít 100% khung hình trên Link OBS Live (?obs=1) không viền đen (Mặc định đã Bật)"
+                className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
+                  stretchFullViewport
+                    ? 'bg-cyan-500 text-stone-950 shadow-sm'
+                    : 'bg-stone-800 hover:bg-stone-700 text-cyan-300 border border-cyan-500/40'
+                }`}
+              >
+                <span>{stretchFullViewport ? '↔️ OBS Bung khít' : '↔️ OBS Tỷ lệ 9:16'}</span>
+              </button>
+            )}
+
             {onToggleCompactRemoteStage && (
               <button
                 type="button"

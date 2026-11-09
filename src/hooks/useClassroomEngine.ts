@@ -4381,10 +4381,16 @@ export function useClassroomEngine() {
         bypassWaitingQueue?: boolean;
         allowDoorCrowdBubbleForBot?: boolean;
       },
-      extraOpts?: { forceAdmitFromQueue?: boolean }
+      extraOpts?: {
+        forceAdmitFromQueue?: boolean;
+        skipStateCommit?: boolean;
+        spawnDelaySec?: number;
+      }
     ): boolean => {
       const cfg = configRef.current;
       const isAdmittingFromQueue = Boolean(extraOpts?.forceAdmitFromQueue);
+      const skipStateCommit = Boolean(extraOpts?.skipStateCommit);
+      const spawnDelaySec = Math.max(0, Number(extraOpts?.spawnDelaySec || 0));
       const bypassWaitingQueue = Boolean(
         opts.bypassWaitingQueue || isAdmittingFromQueue
       );
@@ -4672,37 +4678,44 @@ export function useClassroomEngine() {
           s.id === chosenSlot!.id ? { ...s, occupiedById: id } : s
         );
         vipSlotsRef.current = nextVip;
-        setVipSlots(nextVip);
+        if (!skipStateCommit) {
+          setVipSlots(nextVip);
+        }
       } else {
         const nextNorm = normalSlotsRef.current.map((s) =>
           s.id === chosenSlot!.id ? { ...s, occupiedById: id } : s
         );
         normalSlotsRef.current = nextNorm;
-        setNormalSlots(nextNorm);
+        if (!skipStateCommit) {
+          setNormalSlots(nextNorm);
+        }
       }
 
       // Đi nhanh từ cửa chính bên trái (LEFT_DOOR_POS = { x: 46, y: 500 }) vào ghế trong khoảng ~3.5s (trước khi hết 7s còn lại của pha kết quả)
       // Khi chuyển từ hàng chờ vào lớp: đồng bộ số điểm qua bảng điểm lớp (lotusDonors) nhưng combo (correctStreak) reset về 0
       const queuedPts = Number((opts as { points?: number }).points || 0);
       if (isAdmittingFromQueue && queuedPts > 0) {
-        setLotusDonors((prev) => {
-          const idx = prev.findIndex(
-            (d) => d.username.trim().toLowerCase() === lowerUser
-          );
-          let nextList: DonorEntry[];
+        const prevDonors = lotusDonorsRef.current;
+        const idx = prevDonors.findIndex(
+          (d) => d.username.trim().toLowerCase() === lowerUser
+        );
+        if (idx < 0 || prevDonors[idx].coins < queuedPts) {
+          let nextDonorList: DonorEntry[];
           if (idx >= 0) {
-            if (prev[idx].coins >= queuedPts) return prev;
-            const updated = [...prev];
+            const updated = [...prevDonors];
             updated[idx] = { ...updated[idx], coins: queuedPts };
-            nextList = updated.sort((a, b) => b.coins - a.coins);
+            nextDonorList = updated.sort((a, b) => b.coins - a.coins);
           } else {
-            nextList = [...prev, { username: safeName, coins: queuedPts }].sort(
-              (a, b) => b.coins - a.coins
-            );
+            nextDonorList = [
+              ...prevDonors,
+              { username: safeName, coins: queuedPts },
+            ].sort((a, b) => b.coins - a.coins);
           }
-          lotusDonorsRef.current = nextList;
-          return nextList;
-        });
+          lotusDonorsRef.current = nextDonorList;
+          if (!skipStateCommit) {
+            setLotusDonors(nextDonorList);
+          }
+        }
       }
       const existingDonorScore =
         lotusDonorsRef.current.find(
@@ -4727,7 +4740,10 @@ export function useClassroomEngine() {
         laneX,
         slotX,
         slotY,
-        speed: 220 + Math.random() * 18,
+        speed:
+          spawnDelaySec > 0
+            ? 245 + Math.random() * 22
+            : 220 + Math.random() * 18,
         state: 'walk_carpet_to_slot_y',
         stateTimer: 0,
         prayTimer: 0,
@@ -4759,11 +4775,14 @@ export function useClassroomEngine() {
         answeredCurrentQuestion: false,
         quizResultStatus: null,
         quizResultUntil: 0,
+        spawnDelaySec: spawnDelaySec > 0 ? spawnDelaySec : undefined,
       };
 
       const nextPilgrimsList = [...pilgrimsRef.current, newStudent];
       pilgrimsRef.current = nextPilgrimsList;
-      setPilgrims(nextPilgrimsList);
+      if (!skipStateCommit) {
+        setPilgrims(nextPilgrimsList);
+      }
 
       if (!opts.isBot && cfg.hudLayout.showNewPilgrimToast) {
         pushToast(`🎒 Học sinh ${safeName} vừa vào lớp nhận chỗ ngồi!`, false);
@@ -5002,8 +5021,22 @@ export function useClassroomEngine() {
       const prevPilgrims = pilgrimsRef.current;
       if (prevPilgrims.length > 0) {
         const nextList: PilgrimData[] = [];
+        const nowEpoch = Date.now();
+        let hasActivePilgrimVisualUpdate = false;
 
         for (const p of prevPilgrims) {
+          // Hỗ trợ rải nhịp xuất phát (Phương án 3A): học sinh chờ hết spawnDelaySec mới bước qua cửa
+          if (p.spawnDelaySec && p.spawnDelaySec > 0) {
+            const nextDelay = Math.max(0, p.spawnDelaySec - dt);
+            if (nextDelay > 0) {
+              p.spawnDelaySec = nextDelay;
+              nextList.push(p);
+              continue;
+            }
+            p.spawnDelaySec = undefined;
+            hasActivePilgrimVisualUpdate = true;
+          }
+
           let {
             x,
             y,
@@ -5015,6 +5048,15 @@ export function useClassroomEngine() {
             isCarryingGift,
             pendingGiftCoins,
           } = p;
+          const prevState = state;
+          const wasSettledSeated =
+            prevState === 'pray_seated' &&
+            stateTimer >= 2.0 &&
+            p.hasSatOnce &&
+            x === p.slotX &&
+            y === p.slotY &&
+            !(p.richKidDanceUntil && nowEpoch < p.richKidDanceUntil);
+
           animTime += dt;
           stateTimer += dt;
 
@@ -5515,6 +5557,24 @@ export function useClassroomEngine() {
             }
           }
 
+          // Nếu học sinh đã ngồi ổn định tại bàn (pray_seated >= 2s, không nhảy Rich Kid, không đổi vị trí/trạng thái):
+          // Giữ nguyên tham chiếu object `p` để React.memo bỏ qua hoàn toàn việc re-render!
+          if (
+            wasSettledSeated &&
+            state === 'pray_seated' &&
+            x === p.slotX &&
+            y === p.slotY &&
+            isCarryingGift === p.isCarryingGift &&
+            pendingGiftCoins === p.pendingGiftCoins
+          ) {
+            p.stateTimer = stateTimer;
+            p.prayTimer = prayTimer;
+            p.animTime = animTime;
+            nextList.push(p);
+            continue;
+          }
+
+          hasActivePilgrimVisualUpdate = true;
           nextList.push({
             ...p,
             x,
@@ -5530,8 +5590,14 @@ export function useClassroomEngine() {
           });
         }
 
+        if (nextList.length !== prevPilgrims.length) {
+          hasActivePilgrimVisualUpdate = true;
+        }
+
         pilgrimsRef.current = nextList;
-        setPilgrims(nextList);
+        if (hasActivePilgrimVisualUpdate) {
+          setPilgrims(nextList);
+        }
       }
 
       // 2.5. Cập nhật học sinh trong hàng chờ (specialFlowerRunners) chạy từ vị trí đứng trong đám đông hàng chờ lên tặng hoa cho Cô/Thầy rồi quay về đúng vị trí trong hàng chờ
@@ -6400,15 +6466,15 @@ export function useClassroomEngine() {
     });
 
     pilgrimsRef.current = remainingPilgrims;
-    setPilgrims(remainingPilgrims);
 
     // Xóa luôn data và bảng xếp hạng (lotusDonors) của học sinh trả lời sai bị loại khỏi lớp
+    let donorsModified = false;
     if (evictedUsernamesSet.size > 0) {
       const filteredDonors = lotusDonorsRef.current.filter(
         (d) => !evictedUsernamesSet.has(d.username.trim().toLowerCase())
       );
       lotusDonorsRef.current = filteredDonors;
-      setLotusDonors(filteredDonors);
+      donorsModified = true;
       punishmentWaitingQueueRef.current =
         punishmentWaitingQueueRef.current.filter(
           (item) => !evictedUsernamesSet.has(item.username.trim().toLowerCase())
@@ -6449,20 +6515,44 @@ export function useClassroomEngine() {
     }));
     vipSlotsRef.current = nextVip;
     normalSlotsRef.current = nextNormal;
-    setVipSlots(nextVip);
-    setNormalSlots(nextNormal);
 
     // Đếm tổng số ghế trống hiện tại trong lớp
     const emptyVipCount = vipSlotsRef.current.filter((s) => !s.occupiedById).length;
     const emptyNormalCount = normalSlotsRef.current.filter((s) => !s.occupiedById).length;
     let emptySlotsAvailable = emptyVipCount + emptyNormalCount;
 
-    // Sắp xếp lại Hàng Chờ theo điểm số mới nhất trước khi đẩy vào các ghế trống trong lớp
-    recomputeWaitingQueueLazy();
+    // Sắp xếp lại Hàng Chờ theo đúng thứ tự ưu tiên (Hóa Vàng -> Điểm số -> Tốc độ trả lời -> Người thật -> Thời gian vào) trước khi gom lô đẩy vào lớp
+    if (waitingPoolRef.current.size > 1) {
+      const sortedEntries = Array.from(waitingPoolRef.current.entries()).sort(
+        (entryA, entryB) => {
+          const a = entryA[1];
+          const b = entryB[1];
+          if (Boolean(a.isGoldenPriority) !== Boolean(b.isGoldenPriority)) {
+            return a.isGoldenPriority ? -1 : 1;
+          }
+          if (a.isGoldenPriority && b.isGoldenPriority) {
+            const ptDiffGold = (b.points || 0) - (a.points || 0);
+            if (ptDiffGold !== 0) return ptDiffGold;
+            return (
+              (a.goldenPriorityAt || a.addedAt || 0) -
+              (b.goldenPriorityAt || b.addedAt || 0)
+            );
+          }
+          const ptDiff = (b.points || 0) - (a.points || 0);
+          if (ptDiff !== 0) return ptDiff;
+          const timeDiff = (a.lastElapsedSec ?? 999) - (b.lastElapsedSec ?? 999);
+          if (timeDiff !== 0) return timeDiff;
+          if (a.isBot !== b.isBot) return a.isBot ? 1 : -1;
+          return (a.addedAt || 0) - (b.addedAt || 0);
+        }
+      );
+      waitingPoolRef.current = new Map(sortedEntries);
+    }
 
-    // Đẩy các học sinh có Rank cao nhất trong Kho Hàng Chờ (waitingPoolRef) vào lớp đi khá nhanh để kịp 7s trước câu tiếp theo
-    // Chặn vòng lặp bằng maxAttempts = kích thước hàng chờ hiện tại, và truyền coins: 0 khi vào lớp vì quà đã được xử lý lúc ở Hàng Chờ!
+    // Phương án 2 + 3A: Gom lô (Batch) toàn bộ học sinh từ Hàng Chờ vào lớp và rải nhịp bước qua cửa (spawnDelaySec)
+    // để không gọi setPilgrims/setVipSlots/setNormalSlots lặp đi lặp lại 20-30 lần trong cùng 1 mili-giây!
     let maxAttempts = waitingPoolRef.current.size;
+    let admittedBatchCount = 0;
     while (
       emptySlotsAvailable > 0 &&
       waitingPoolRef.current.size > 0 &&
@@ -6473,17 +6563,41 @@ export function useClassroomEngine() {
       if (!firstKey) break;
       const nextReq = waitingPoolRef.current.get(firstKey)!;
       waitingPoolRef.current.delete(firstKey);
+
+      // Rải nhịp xuất phát theo từng cặp (mỗi cặp cách nhau ~75ms, tối đa 1.05s) giúp đoàn học sinh nối đuôi nhau mượt mà
+      const staggerDelaySec = Math.min(
+        1.05,
+        Math.floor(admittedBatchCount / 2) * 0.075 +
+          (admittedBatchCount % 2) * 0.035
+      );
+      if (Number(nextReq.points || 0) > 0) {
+        donorsModified = true;
+      }
+
       const admitted = spawnOrPromotePilgrim(
         {
           ...nextReq,
           coins: 0,
         },
-        { forceAdmitFromQueue: true }
+        {
+          forceAdmitFromQueue: true,
+          skipStateCommit: true,
+          spawnDelaySec: staggerDelaySec,
+        }
       );
       if (admitted) {
         emptySlotsAvailable -= 1;
+        admittedBatchCount += 1;
       }
     }
+
+    // Commit toàn bộ State đúng 1 LẦN DUY NHẤT sau khi hoàn tất gom lô xếp lớp!
+    setVipSlots([...vipSlotsRef.current]);
+    setNormalSlots([...normalSlotsRef.current]);
+    if (donorsModified) {
+      setLotusDonors([...lotusDonorsRef.current]);
+    }
+    setPilgrims([...pilgrimsRef.current]);
     recomputeWaitingQueueLazy();
   }, [recomputeWaitingQueueLazy, spawnOrPromotePilgrim]);
 

@@ -131,7 +131,7 @@ function getStudentFrameIndex(p: PilgrimData): PilgrimFrameIndex {
   }
 }
 
-export const StudentSprite: React.FC<StudentSpriteProps> = ({
+const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
   pilgrim,
   customAssets,
   characterScale,
@@ -387,12 +387,21 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
     Math.min(360, Math.round(chatBubbleMaxHeight || 110))
   );
 
+  const isWaitingStagger = Boolean(
+    pilgrim.spawnDelaySec && pilgrim.spawnDelaySec > 0
+  );
+
   return (
     <div
       className="absolute pointer-events-none select-none"
       style={{
-        left: pilgrim.x,
-        top: renderedY,
+        left: 0,
+        top: 0,
+        transform: `translate3d(${Math.round(pilgrim.x * 10) / 10}px, ${
+          Math.round(renderedY * 10) / 10
+        }px, 0)`,
+        willChange: isWalking ? 'transform' : undefined,
+        opacity: isWaitingStagger ? 0 : 1,
       }}
     >
       {/* THẺ COMBO GẮN LÊN NGƯỜI HỌC SINH KHI TẶNG QUÀ CÓ COMBO */}
@@ -1167,3 +1176,108 @@ export const StudentSprite: React.FC<StudentSpriteProps> = ({
     </div>
   );
 };
+
+function areStudentSpritePropsEqual(
+  prev: StudentSpriteProps,
+  next: StudentSpriteProps
+): boolean {
+  if (
+    prev.isLeftSeatmate !== next.isLeftSeatmate ||
+    prev.deskSeatY !== next.deskSeatY ||
+    prev.isSpeakingBubble !== next.isSpeakingBubble ||
+    prev.characterScale !== next.characterScale ||
+    prev.useDefaultPngModels !== next.useDefaultPngModels ||
+    prev.nameTagFontFamily !== next.nameTagFontFamily ||
+    prev.nameTagScale !== next.nameTagScale ||
+    prev.nameTagMaxChars !== next.nameTagMaxChars ||
+    prev.nameTagOffsetY !== next.nameTagOffsetY ||
+    prev.streakTagFontFamily !== next.streakTagFontFamily ||
+    prev.streakTagScale !== next.streakTagScale ||
+    prev.scoreTagScale !== next.scoreTagScale ||
+    prev.scoreTagOffsetY !== next.scoreTagOffsetY ||
+    prev.scoreChangeFontSize !== next.scoreChangeFontSize ||
+    prev.scoreChangeStrokeWidth !== next.scoreChangeStrokeWidth ||
+    prev.vfxFlower10Enabled !== next.vfxFlower10Enabled ||
+    prev.vfxFlower10Scale !== next.vfxFlower10Scale ||
+    prev.vfxFlower10OffsetX !== next.vfxFlower10OffsetX ||
+    prev.vfxFlower10OffsetY !== next.vfxFlower10OffsetY ||
+    prev.chatBubbleFontFamily !== next.chatBubbleFontFamily ||
+    prev.chatBubbleScale !== next.chatBubbleScale ||
+    prev.chatBubbleMaxChars !== next.chatBubbleMaxChars ||
+    prev.chatBubbleMaxWidth !== next.chatBubbleMaxWidth ||
+    prev.chatBubbleMaxHeight !== next.chatBubbleMaxHeight ||
+    prev.chatBubbleFontSize !== next.chatBubbleFontSize ||
+    prev.chatBubbleOffsetY !== next.chatBubbleOffsetY ||
+    prev.chatBubbleOffsetX !== next.chatBubbleOffsetX ||
+    prev.walkWobbleIntensity !== next.walkWobbleIntensity ||
+    prev.customAssets !== next.customAssets ||
+    prev.giftModelScales !== next.giftModelScales
+  ) {
+    return false;
+  }
+
+  const a = prev.pilgrim;
+  const b = next.pilgrim;
+  if (a === b) return true;
+
+  if (
+    a.id !== b.id ||
+    a.state !== b.state ||
+    a.slotId !== b.slotId ||
+    Math.abs(a.x - b.x) > 0.05 ||
+    Math.abs(a.y - b.y) > 0.05 ||
+    a.facingLeft !== b.facingLeft ||
+    Boolean((a.spawnDelaySec || 0) > 0) !== Boolean((b.spawnDelaySec || 0) > 0) ||
+    a.username !== b.username ||
+    a.gender !== b.gender ||
+    a.avatarUrl !== b.avatarUrl ||
+    a.avatarColor !== b.avatarColor ||
+    a.isVip !== b.isVip ||
+    a.isGoldenPriority !== b.isGoldenPriority ||
+    a.isCarryingGift !== b.isCarryingGift ||
+    a.prayer !== b.prayer ||
+    a.chatBubbleUntil !== b.chatBubbleUntil ||
+    a.quizResultStatus !== b.quizResultStatus ||
+    a.quizResultUntil !== b.quizResultUntil ||
+    a.scoreCardUntil !== b.scoreCardUntil ||
+    a.scoreCardKey !== b.scoreCardKey ||
+    a.currentScoreDisplay !== b.currentScoreDisplay ||
+    a.scoreChangeDelta !== b.scoreChangeDelta ||
+    a.floatingScoreText !== b.floatingScoreText ||
+    a.floatingScoreUntil !== b.floatingScoreUntil ||
+    a.floatingScoreKey !== b.floatingScoreKey ||
+    a.comboCount !== b.comboCount ||
+    a.comboUntil !== b.comboUntil ||
+    a.comboPopKey !== b.comboPopKey ||
+    a.richKidDanceUntil !== b.richKidDanceUntil ||
+    a.giftActionBusyUntil !== b.giftActionBusyUntil ||
+    a.giftActionHighlightUntil !== b.giftActionHighlightUntil ||
+    a.isPunishedInCurrentRound !== b.isPunishedInCurrentRound ||
+    a.punishmentMultiplier !== b.punishmentMultiplier ||
+    a.hasShield !== b.hasShield ||
+    a.correctStreak !== b.correctStreak
+  ) {
+    return false;
+  }
+
+  // Nếu học sinh đang ngồi yên ổn định (state === 'pray_seated' và đã qua 2s giơ tay chào ban đầu, không nhảy Rich Kid):
+  // Bỏ qua hoàn toàn việc re-render do animTime / stateTimer / prayTimer tăng!
+  const now = Date.now();
+  const isDancing = Boolean(b.richKidDanceUntil && now < b.richKidDanceUntil);
+  if (
+    b.state === 'pray_seated' &&
+    !isDancing &&
+    a.stateTimer >= 2.0 &&
+    b.stateTimer >= 2.0
+  ) {
+    return true;
+  }
+
+  return Math.abs(a.animTime - b.animTime) < 0.01;
+}
+
+export const StudentSprite = React.memo(
+  StudentSpriteInner,
+  areStudentSpritePropsEqual
+);
+

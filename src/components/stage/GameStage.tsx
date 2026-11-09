@@ -119,6 +119,8 @@ interface GameStageProps {
   onRemoveDesksByIds?: (deskIds: string[]) => void;
   onUpdateHudBox: (boxKey: HudBoxKey, nextBox: HudBoxPosition) => void;
   onUpdateZoneBounds: (zoneKey: ZoneKey, nextBounds: RectBounds) => void;
+  isObsLiveMode?: boolean;
+  stretchFullViewport?: boolean;
 }
 
 interface FloatingDust {
@@ -310,6 +312,8 @@ export const GameStage: React.FC<GameStageProps> = ({
   onRemoveDesksByIds,
   onUpdateHudBox,
   onUpdateZoneBounds,
+  isObsLiveMode = false,
+  stretchFullViewport = false,
 }) => {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -318,7 +322,10 @@ export const GameStage: React.FC<GameStageProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dustCanvasRef = useRef<HTMLCanvasElement>(null);
   const rainCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [scale, setScale] = useState(1);
+  const [stageScale, setStageScale] = useState<{ x: number; y: number }>({
+    x: 1,
+    y: 1,
+  });
 
   const vipDesks = useMemo(
     () => groupSlotsIntoDoubleDesks(vipSlots, 'vip'),
@@ -328,6 +335,26 @@ export const GameStage: React.FC<GameStageProps> = ({
     () => groupSlotsIntoDoubleDesks(normalSlots, 'norm'),
     [normalSlots]
   );
+
+  const seatMeta = useMemo(() => {
+    const leftSeatIds = new Set<string>();
+    const deskYBySlotId = new Map<string, number>();
+    vipDesks.forEach((d) => {
+      leftSeatIds.add(d.leftSlot.id);
+      deskYBySlotId.set(d.leftSlot.id, d.centerY);
+      if (d.rightSlot) {
+        deskYBySlotId.set(d.rightSlot.id, d.centerY);
+      }
+    });
+    normalDesks.forEach((d) => {
+      leftSeatIds.add(d.leftSlot.id);
+      deskYBySlotId.set(d.leftSlot.id, d.centerY);
+      if (d.rightSlot) {
+        deskYBySlotId.set(d.rightSlot.id, d.centerY);
+      }
+    });
+    return { leftSeatIds, deskYBySlotId };
+  }, [vipDesks, normalDesks]);
 
   const [draggingNode, setDraggingNode] = useState<{
     kind:
@@ -385,10 +412,37 @@ export const GameStage: React.FC<GameStageProps> = ({
   useEffect(() => {
     const updateScale = () => {
       if (!wrapperRef.current) return;
-      const availW = wrapperRef.current.clientWidth - 16;
-      const availH = wrapperRef.current.clientHeight - 16;
-      const nextScale = Math.min(availW / 540, availH / 960, 1.15);
-      setScale(Math.max(0.28, nextScale));
+      const rawW = wrapperRef.current.clientWidth;
+      const rawH = wrapperRef.current.clientHeight;
+
+      // Bản Điều Khiển (có Dev): giữ nguyên giới hạn scale 1.15 và lề chuẩn như cũ
+      if (!isObsLiveMode) {
+        const availW = Math.max(100, rawW - 16);
+        const availH = Math.max(100, rawH - 16);
+        const nextScale = Math.max(
+          0.28,
+          Math.min(availW / 540, availH / 960, 1.15)
+        );
+        setStageScale({ x: nextScale, y: nextScale });
+        return;
+      }
+
+      // Bản OBS Live (?obs=1): Gỡ bỏ hoàn toàn giới hạn phóng đại 1.15, bỏ viền lề để bung full màn hình PC dọc / OBS
+      const availW = Math.max(100, rawW);
+      const availH = Math.max(100, rawH);
+      const fitScale = Math.max(
+        0.28,
+        Math.min(availW / 540, availH / 960, 6.0)
+      );
+
+      if (stretchFullViewport) {
+        setStageScale({
+          x: Math.max(0.28, Math.min(6.0, availW / 540)),
+          y: Math.max(0.28, Math.min(6.0, availH / 960)),
+        });
+      } else {
+        setStageScale({ x: fitScale, y: fitScale });
+      }
     };
 
     updateScale();
@@ -399,7 +453,7 @@ export const GameStage: React.FC<GameStageProps> = ({
       observer.disconnect();
       window.removeEventListener('resize', updateScale);
     };
-  }, []);
+  }, [isObsLiveMode, stretchFullViewport]);
 
   const fxStateRef = useRef({
     incenseBurner: config.incenseBurner,
@@ -1263,12 +1317,18 @@ export const GameStage: React.FC<GameStageProps> = ({
   return (
     <div
       ref={wrapperRef}
-      className="flex-1 min-w-[280px] h-full flex items-center justify-center p-2 relative overflow-hidden bg-slate-950"
+      className={`flex-1 min-w-[280px] h-full flex items-center justify-center relative overflow-hidden bg-slate-950 ${
+        isObsLiveMode ? 'p-0' : 'p-2'
+      }`}
     >
       <div
         ref={viewportRef}
-        className="w-[540px] h-[960px] aspect-[9/16] relative overflow-hidden shrink-0 origin-center rounded-xl shadow-2xl border border-slate-800"
-        style={{ transform: `scale(${scale})` }}
+        className={`w-[540px] h-[960px] aspect-[9/16] relative overflow-hidden shrink-0 origin-center shadow-2xl ${
+          isObsLiveMode ? 'rounded-none border-0' : 'rounded-xl border border-slate-800'
+        }`}
+        style={{
+          transform: `scale(${stageScale.x.toFixed(4)}, ${stageScale.y.toFixed(4)})`,
+        }}
       >
         {/* World Camera Container (60fps Smooth Interpolated Pan & Zoom Rig) */}
         <div
@@ -1526,64 +1586,46 @@ export const GameStage: React.FC<GameStageProps> = ({
             />
           ))}
 
-          {(() => {
-            const leftSeatIds = new Set<string>();
-            const deskYBySlotId = new Map<string, number>();
-            vipDesks.forEach((d) => {
-              leftSeatIds.add(d.leftSlot.id);
-              deskYBySlotId.set(d.leftSlot.id, d.centerY);
-              if (d.rightSlot) {
-                deskYBySlotId.set(d.rightSlot.id, d.centerY);
+          {pilgrims.map((p) => (
+            <StudentSprite
+              key={p.id}
+              pilgrim={p}
+              customAssets={customAssets}
+              characterScale={config.characterScale ?? 1}
+              useDefaultPngModels={config.useDefaultPngModels !== false}
+              nameTagFontFamily={config.nameTagFontFamily}
+              nameTagScale={config.nameTagScale ?? 1}
+              nameTagMaxChars={config.nameTagMaxChars ?? 16}
+              nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
+              streakTagScale={config.streakTagScale ?? 1}
+              scoreTagScale={config.scoreTagScale ?? 1}
+              scoreTagOffsetY={config.scoreTagOffsetY ?? 0}
+              scoreChangeFontSize={config.scoreChangeFontSize ?? 14}
+              scoreChangeStrokeWidth={config.scoreChangeStrokeWidth ?? 2.5}
+              vfxFlower10Enabled={config.vfxFlower10Enabled !== false}
+              vfxFlower10Scale={config.vfxFlower10Scale ?? 1}
+              vfxFlower10OffsetX={config.vfxFlower10OffsetX ?? 0}
+              vfxFlower10OffsetY={config.vfxFlower10OffsetY ?? 0}
+              chatBubbleFontFamily={config.chatBubbleFontFamily}
+              chatBubbleScale={config.chatBubbleScale ?? 1}
+              chatBubbleMaxChars={config.chatBubbleMaxChars ?? 80}
+              chatBubbleMaxWidth={config.chatBubbleMaxWidth ?? 195}
+              chatBubbleMaxHeight={config.chatBubbleMaxHeight ?? 110}
+              chatBubbleFontSize={config.chatBubbleFontSize ?? 11}
+              chatBubbleOffsetY={config.chatBubbleOffsetY ?? 0}
+              chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
+              isLeftSeatmate={Boolean(
+                p.slotId && seatMeta.leftSeatIds.has(p.slotId)
+              )}
+              deskSeatY={
+                p.slotId ? seatMeta.deskYBySlotId.get(p.slotId) : undefined
               }
-            });
-            normalDesks.forEach((d) => {
-              leftSeatIds.add(d.leftSlot.id);
-              deskYBySlotId.set(d.leftSlot.id, d.centerY);
-              if (d.rightSlot) {
-                deskYBySlotId.set(d.rightSlot.id, d.centerY);
-              }
-            });
-            return pilgrims.map((p) => (
-              <StudentSprite
-                key={p.id}
-                pilgrim={p}
-                customAssets={customAssets}
-                characterScale={config.characterScale ?? 1}
-                useDefaultPngModels={config.useDefaultPngModels !== false}
-                nameTagFontFamily={config.nameTagFontFamily}
-                nameTagScale={config.nameTagScale ?? 1}
-                nameTagMaxChars={config.nameTagMaxChars ?? 16}
-                nameTagOffsetY={config.nameTagOffsetY ?? 0}
-                streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
-                streakTagScale={config.streakTagScale ?? 1}
-                scoreTagScale={config.scoreTagScale ?? 1}
-                scoreTagOffsetY={config.scoreTagOffsetY ?? 0}
-                scoreChangeFontSize={config.scoreChangeFontSize ?? 14}
-                scoreChangeStrokeWidth={config.scoreChangeStrokeWidth ?? 2.5}
-                vfxFlower10Enabled={config.vfxFlower10Enabled !== false}
-                vfxFlower10Scale={config.vfxFlower10Scale ?? 1}
-                vfxFlower10OffsetX={config.vfxFlower10OffsetX ?? 0}
-                vfxFlower10OffsetY={config.vfxFlower10OffsetY ?? 0}
-                chatBubbleFontFamily={config.chatBubbleFontFamily}
-                chatBubbleScale={config.chatBubbleScale ?? 1}
-                chatBubbleMaxChars={config.chatBubbleMaxChars ?? 80}
-                chatBubbleMaxWidth={config.chatBubbleMaxWidth ?? 195}
-                chatBubbleMaxHeight={config.chatBubbleMaxHeight ?? 110}
-                chatBubbleFontSize={config.chatBubbleFontSize ?? 11}
-                chatBubbleOffsetY={config.chatBubbleOffsetY ?? 0}
-                chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
-                isLeftSeatmate={Boolean(
-                  p.slotId && leftSeatIds.has(p.slotId)
-                )}
-                deskSeatY={
-                  p.slotId ? deskYBySlotId.get(p.slotId) : undefined
-                }
-                isSpeakingBubble={speakingPilgrim?.id === p.id}
-                giftModelScales={config.giftModelScales}
-                walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
-              />
-            ));
-          })()}
+              isSpeakingBubble={speakingPilgrim?.id === p.id}
+              giftModelScales={config.giftModelScales}
+              walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
+            />
+          ))}
 
           {/* Layer 3.1: Đàn Heo chạy hù dọa 5 bạn Top đầu */}
           {runningPigs.map((pig) => (
