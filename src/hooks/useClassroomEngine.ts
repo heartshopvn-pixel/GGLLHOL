@@ -5049,7 +5049,20 @@ export function useClassroomEngine() {
             pendingGiftCoins,
           } = p;
           const prevState = state;
+          const hasExpiredTimedUi =
+            Boolean(p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil) ||
+            Boolean(p.scoreCardUntil && nowEpoch >= p.scoreCardUntil) ||
+            Boolean(p.quizResultUntil && nowEpoch >= p.quizResultUntil) ||
+            Boolean(p.floatingScoreUntil && nowEpoch >= p.floatingScoreUntil) ||
+            Boolean(p.comboUntil && nowEpoch >= p.comboUntil) ||
+            Boolean(p.richKidDanceUntil && nowEpoch >= p.richKidDanceUntil) ||
+            Boolean(
+              p.giftActionHighlightUntil &&
+                nowEpoch >= p.giftActionHighlightUntil
+            );
+
           const wasSettledSeated =
+            !hasExpiredTimedUi &&
             prevState === 'pray_seated' &&
             stateTimer >= 2.0 &&
             p.hasSatOnce &&
@@ -5587,6 +5600,33 @@ export function useClassroomEngine() {
             isCarryingGift,
             pendingGiftCoins,
             hasSatOnce: p.hasSatOnce || state === 'pray_seated',
+            chatBubbleUntil:
+              p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
+                ? 0
+                : p.chatBubbleUntil,
+            scoreCardUntil:
+              p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
+                ? 0
+                : p.scoreCardUntil,
+            quizResultUntil:
+              p.quizResultUntil && nowEpoch >= p.quizResultUntil
+                ? 0
+                : p.quizResultUntil,
+            floatingScoreUntil:
+              p.floatingScoreUntil && nowEpoch >= p.floatingScoreUntil
+                ? 0
+                : p.floatingScoreUntil,
+            comboUntil:
+              p.comboUntil && nowEpoch >= p.comboUntil ? 0 : p.comboUntil,
+            richKidDanceUntil:
+              p.richKidDanceUntil && nowEpoch >= p.richKidDanceUntil
+                ? 0
+                : p.richKidDanceUntil,
+            giftActionHighlightUntil:
+              p.giftActionHighlightUntil &&
+              nowEpoch >= p.giftActionHighlightUntil
+                ? 0
+                : p.giftActionHighlightUntil,
           });
         }
 

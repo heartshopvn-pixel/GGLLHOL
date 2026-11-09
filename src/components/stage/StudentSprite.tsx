@@ -390,18 +390,16 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
   const isWaitingStagger = Boolean(
     pilgrim.spawnDelaySec && pilgrim.spawnDelaySec > 0
   );
+  if (isWaitingStagger) {
+    return null;
+  }
 
   return (
     <div
       className="absolute pointer-events-none select-none"
       style={{
-        left: 0,
-        top: 0,
-        transform: `translate3d(${Math.round(pilgrim.x * 10) / 10}px, ${
-          Math.round(renderedY * 10) / 10
-        }px, 0)`,
-        willChange: isWalking ? 'transform' : undefined,
-        opacity: isWaitingStagger ? 0 : 1,
+        left: `${pilgrim.x}px`,
+        top: `${renderedY}px`,
       }}
     >
       {/* THẺ COMBO GẮN LÊN NGƯỜI HỌC SINH KHI TẶNG QUÀ CÓ COMBO */}

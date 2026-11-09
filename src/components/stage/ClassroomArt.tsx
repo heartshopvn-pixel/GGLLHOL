@@ -136,13 +136,11 @@ const DeskItem = React.memo<DeskItemProps>(
       <div
         className="absolute pointer-events-none select-none"
         style={{
-          left: 0,
-          top: 0,
-          width: deskW,
-          height: deskH,
-          transform: `translate3d(${Math.round(centerX - deskW / 2)}px, ${Math.round(
-            deskRenderY - deskH / 2
-          )}px, 0)`,
+          left: `${centerX}px`,
+          top: `${deskRenderY}px`,
+          width: `${deskW}px`,
+          height: `${deskH}px`,
+          transform: 'translate(-50%, -50%)',
           zIndex: zIdx,
         }}
       >

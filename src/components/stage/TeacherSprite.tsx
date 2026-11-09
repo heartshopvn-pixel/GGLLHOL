@@ -125,12 +125,8 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
     <div
       className="absolute pointer-events-none select-none"
       style={{
-        left: 0,
-        top: 0,
-        transform: `translate3d(${Math.round(monk.x * 10) / 10}px, ${
-          Math.round(monk.y * 10) / 10
-        }px, 0)`,
-        willChange: isWalking ? 'transform' : undefined,
+        left: `${monk.x}px`,
+        top: `${monk.y}px`,
       }}
     >
       {/* CHATBOX CẢM ƠN NHẬN QUÀ CỦA CÔ GIÁO (CHỮ HỒNG, VIỀN HỒNG) & THẦY GIÁM THỊ (CHỮ XANH DƯƠNG, VIỀN XANH DƯƠNG) */}
