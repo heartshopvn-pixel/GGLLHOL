@@ -1402,6 +1402,87 @@ class TempleSoundService {
   }
 
   /**
+   * Phát hiệu ứng âm thanh Vỗ Tay Chúc Mừng cả lớp (Applause + Reo hò chiến thắng) ở cuối vòng kiểm tra 15 câu.
+   * Trả về thời lượng vỗ tay (ms) để sau khi tiếng vỗ tay kết thúc sẽ kết thúc vòng và sang game mới.
+   */
+  public playApplauseSfx(volume = 1.0, durationMs = 3400): number {
+    if (this.localTabMuted) return durationMs;
+    try {
+      this.initCtx();
+      if (!this.ctx) return durationMs;
+      const now = this.ctx.currentTime;
+      const safeVol = Math.max(0.05, Math.min(1, volume));
+      const totalSec = Math.max(1.8, Math.min(6.0, durationMs / 1000));
+
+      // Mở đầu bằng hợp âm chuông chiến thắng rộn ràng
+      this.playGrandVictoryFanfare(safeVol * 0.6);
+
+      // Tạo buffer tiếng vỗ tay nhiều lớp (bandpass noise bursts mô phỏng hàng chục học sinh vỗ tay giòn giã)
+      const sampleRate = this.ctx.sampleRate;
+      const clapBufLen = Math.floor(sampleRate * 0.085);
+      const clapBuf = this.ctx.createBuffer(1, clapBufLen, sampleRate);
+      const data = clapBuf.getChannelData(0);
+      for (let i = 0; i < clapBufLen; i++) {
+        const t = i / clapBufLen;
+        const env = Math.pow(1 - t, 2.2) * (t < 0.08 ? t / 0.08 : 1);
+        data[i] = (Math.random() * 2 - 1) * env;
+      }
+
+      const totalClaps = Math.floor(totalSec * 28);
+      const bandFreqs = [950, 1250, 1550, 1900, 2350];
+
+      for (let c = 0; c < totalClaps; c++) {
+        if (!this.ctx) break;
+        const progress = c / totalClaps;
+        // Cường độ tăng nhanh ở đầu, sôi nổi ở giữa và giảm dần ở 25% cuối
+        const crowdEnvelope =
+          progress < 0.12
+            ? progress / 0.12
+            : progress > 0.75
+            ? Math.max(0.08, (1 - progress) / 0.25)
+            : 1.0;
+
+        const jitter = (Math.random() - 0.5) * 0.032;
+        const startOffset = Math.max(
+          0,
+          Math.min(totalSec - 0.08, progress * (totalSec - 0.12) + jitter)
+        );
+        const startTime = now + startOffset;
+
+        const src = this.ctx.createBufferSource();
+        src.buffer = clapBuf;
+        src.playbackRate.setValueAtTime(0.85 + Math.random() * 0.35, startTime);
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(
+          bandFreqs[c % bandFreqs.length] + (Math.random() - 0.5) * 220,
+          startTime
+        );
+        filter.Q.setValueAtTime(1.8 + Math.random() * 1.4, startTime);
+
+        const gain = this.ctx.createGain();
+        const peak =
+          (0.14 + Math.random() * 0.16) * safeVol * crowdEnvelope;
+        gain.gain.setValueAtTime(0.001, startTime);
+        gain.gain.linearRampToValueAtTime(peak, startTime + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.0008, startTime + 0.075);
+
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        src.start(startTime);
+        src.stop(startTime + 0.082);
+      }
+
+      return durationMs;
+    } catch {
+      return durationMs;
+    }
+  }
+
+  /**
    * Phát âm thanh tương ứng với từng món quà trong lớp học (hỗ trợ chèn file MP3 riêng hoặc dùng synth mặc định hợp lý)
    */
   public playGiftEventSound(

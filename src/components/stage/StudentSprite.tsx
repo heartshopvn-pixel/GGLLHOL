@@ -575,52 +575,59 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           transformOrigin: '50% 88%',
         }}
       >
-        {/* VƯƠNG MIỆN TOP 1 TRONG LỚP ĐỘI TRÊN ĐẦU HỌC SINH (Giảm 50% kích thước + Glow sáng bồng bềnh nhẹ nhàng) */}
-        {isTop1InClass && (
+        {/* LY TRÀ SỮA MATCHA LATTE FULL TOPPING (100% / 150% / 200%) KHI ĐƯỢC CÔ TẶNG Ở LUỒNG KẾT THÚC TRÊN BỤC GIẢNG */}
+        {Boolean(pilgrim.winnerMilkTeaScale && pilgrim.winnerMilkTeaScale > 0) && (
           <div
-            className="top1-crown-float-glow absolute left-1/2 pointer-events-none z-35 select-none"
+            className="absolute pointer-events-none select-none z-40"
             style={{
-              top:
-                isSeated && useDefaultPngModels && processedDefaultModelSrc
-                  ? '15px'
-                  : '2px',
+              left: '78%',
+              top: '48%',
+              transform: `translate(-50%, -50%) scale(${(
+                Number(pilgrim.winnerMilkTeaScale || 1) * 0.55
+              ).toFixed(3)})`,
+              transformOrigin: 'center center',
             }}
           >
-            <svg
-              viewBox="0 0 36 26"
-              className="w-[12px] h-[9px] overflow-visible"
-            >
-              <defs>
-                <linearGradient id="top1CrownGold" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#fef9c3" />
-                  <stop offset="45%" stopColor="#facc15" />
-                  <stop offset="100%" stopColor="#eab308" />
-                </linearGradient>
-              </defs>
-              <path
-                d="M4 21 L2 8 L11 14 L18 4 L25 14 L34 8 L32 21 Z"
-                fill="url(#top1CrownGold)"
-                stroke="#713f12"
-                strokeWidth="2.2"
-                strokeLinejoin="round"
+            {customAssets?.milkTeaCupUrl ? (
+              <img
+                src={customAssets.milkTeaCupUrl}
+                alt="Trà sữa Matcha Latte"
+                className="w-10 h-12 object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)]"
               />
-              <rect
-                x="4"
-                y="20"
-                width="28"
-                height="4"
-                rx="1.5"
-                fill="#fde047"
-                stroke="#713f12"
-                strokeWidth="1.8"
-              />
-              <circle cx="2" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
-              <circle cx="18" cy="3" r="2.8" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
-              <circle cx="34" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
-              <circle cx="18" cy="15.5" r="2.3" fill="#fb7185" stroke="#713f12" strokeWidth="1" />
-              <circle cx="10.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
-              <circle cx="25.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
-            </svg>
+            ) : (
+              <svg
+                width="38"
+                height="46"
+                viewBox="0 0 38 46"
+                fill="none"
+                className="drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)]"
+              >
+                <path
+                  d="M23 2L19 14"
+                  stroke="#EC4899"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M8 15C8 9.5 13 6 19 6C25 6 30 9.5 30 15H8Z"
+                  fill="#FEFCE8"
+                  stroke="#1F2937"
+                  strokeWidth="2"
+                />
+                <path
+                  d="M8 15H30L27 41C27 42.5 25.5 44 24 44H14C12.5 44 11 42.5 11 41L8 15Z"
+                  fill="#86EFAC"
+                  stroke="#1F2937"
+                  strokeWidth="2.2"
+                />
+                <path d="M9 16H29L28.3 22H9.7L9 16Z" fill="#ECFCCB" />
+                <circle cx="14" cy="39" r="2.3" fill="#1F2937" />
+                <circle cx="19" cy="40" r="2.3" fill="#1F2937" />
+                <circle cx="24" cy="39" r="2.3" fill="#1F2937" />
+                <circle cx="16.5" cy="35" r="2.2" fill="#1F2937" />
+                <circle cx="21.5" cy="35" r="2.2" fill="#1F2937" />
+              </svg>
+            )}
           </div>
         )}
 
@@ -958,6 +965,74 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           </div>
         )}
       </div>
+
+      {/* VƯƠNG MIỆN TOP 1 TRONG LỚP: Hạ xuống đụng sát đỉnh đầu, luôn ưu tiên ở layer đầu tiên (zIndex: 25000) có thể đè lên cả bảng tên */}
+      {isTop1InClass && (
+        <div
+          className="absolute left-0 top-0 w-16 h-[70px] pointer-events-none select-none"
+          style={{
+            zIndex: 25000,
+            transform: `translate(-50%, ${
+              isRichKidDancing
+                ? `${-88 - Math.abs(Math.sin(pilgrim.animTime * 14)) * 12}%`
+                : '-88%'
+            }) scale(${finalScale.toFixed(3)}) ${
+              isRichKidDancing
+                ? `rotate(${Math.sin(pilgrim.animTime * 14) * 9}deg)`
+                : walkWobbleDeg !== 0
+                ? `rotate(${walkWobbleDeg.toFixed(2)}deg)`
+                : ''
+            }`,
+            transformOrigin: '50% 88%',
+          }}
+        >
+          <div
+            className="top1-crown-float-glow absolute left-1/2 pointer-events-none select-none"
+            style={{
+              top:
+                isSeated && useDefaultPngModels && processedDefaultModelSrc
+                  ? '22px'
+                  : '9px',
+            }}
+          >
+            <svg
+              viewBox="0 0 36 26"
+              className="w-[12px] h-[9px] overflow-visible"
+            >
+              <defs>
+                <linearGradient id="top1CrownGold" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#fef9c3" />
+                  <stop offset="45%" stopColor="#facc15" />
+                  <stop offset="100%" stopColor="#eab308" />
+                </linearGradient>
+              </defs>
+              <path
+                d="M4 21 L2 8 L11 14 L18 4 L25 14 L34 8 L32 21 Z"
+                fill="url(#top1CrownGold)"
+                stroke="#713f12"
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+              />
+              <rect
+                x="4"
+                y="20"
+                width="28"
+                height="4"
+                rx="1.5"
+                fill="#fde047"
+                stroke="#713f12"
+                strokeWidth="1.8"
+              />
+              <circle cx="2" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="18" cy="3" r="2.8" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="34" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="18" cy="15.5" r="2.3" fill="#fb7185" stroke="#713f12" strokeWidth="1" />
+              <circle cx="10.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
+              <circle cx="25.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
+            </svg>
+          </div>
+        </div>
+      )}
 
       {/* BẢNG TÊN HỌC SINH + HỆ THỐNG ICON BUFF & THẺ SHOW SỐ ĐIỂM PHÍA TRÊN THẺ TÊN
           Lưu ý: Thẻ tên pill được cố định tuyệt đối tại top = feetBottomOffsetPx + nameTagOffsetY.
@@ -1359,6 +1434,8 @@ function areStudentSpritePropsEqual(
     a.giftActionHighlightUntil !== b.giftActionHighlightUntil ||
     a.isPunishedInCurrentRound !== b.isPunishedInCurrentRound ||
     a.punishmentMultiplier !== b.punishmentMultiplier ||
+    a.podiumRank !== b.podiumRank ||
+    a.winnerMilkTeaScale !== b.winnerMilkTeaScale ||
     a.hasShield !== b.hasShield ||
     a.correctStreak !== b.correctStreak
   ) {

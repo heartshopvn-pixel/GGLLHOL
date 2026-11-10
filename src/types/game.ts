@@ -135,6 +135,7 @@ export interface FlyingMilkTeaFX {
   targetY: number;
   createdAt: number;
   durationMs: number;
+  scale?: number;
 }
 
 export interface ZombieDamageEntry {
@@ -272,6 +273,7 @@ export type ClassBoardLessonPhase =
   | 'answer_flash'      // Luồng 4: Đọc câu trả lời - Bảng câu trả lời [Nói xong chuyển luồng next]
   | 'result_summary'    // Luồng 5: Đọc kết quả & Cập nhật chỗ ngồi ngay khi bắt đầu luồng 5 [Nói xong chuyển luồng next]
   | 'ranking_board'     // Luồng 6: Đọc xếp hạng - Bảng xếp hạng trong lớp [Nói xong kết thúc luồng]
+  | 'round_end'         // Luồng Kết Thúc: Ở câu cuối cùng (câu 15) thay cho Luồng 6, vinh danh Top 1, 2, 3 lên bục giảng, tặng 3 ly trà sữa 200%/150%/100%, vỗ tay và reset điểm sang vòng mới
   | 'record_notice'     // Luồng Kỷ Lục: Khi Top 1 Kỷ lục hôm nay thay đổi -> Chèn luồng khen ngợi [Nói xong chuyển luồng next]
   | 'punishment_notice' // Luồng Thông Báo Phạt (sau Luồng 6 nếu có quà 5 / 10 / 10+)
   | 'reveal';
@@ -288,12 +290,22 @@ export interface ClassBoardRuntimeState {
   engine: ClassBoardEngineId;
   isRunning: boolean;
   roundSeq?: number;
+  roundQuestionIndex?: number; // Chỉ số câu hỏi trong vòng 15 câu (0..14)
   questionIndex: number;
   totalQuestions?: number;
   currentQuestion?: EnglishQuizItem;
   phase: ClassBoardLessonPhase;
-  lessonStepNumber?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  lessonStepNumber?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
   lessonStartText?: string;
+  roundEndNoticeText?: string;
+  podiumWinners?: Array<{
+    username: string;
+    points: number;
+    rank: 1 | 2 | 3;
+    avatarUrl?: string | null;
+    avatarColor?: string;
+    pilgrimId?: number;
+  }>;
   recordNoticeText?: string;
   recordBreaker?: DailyRecordEntry & {
     prevUsername?: string;
@@ -532,6 +544,7 @@ export interface GameConfig {
   lessonFlow5ConditionalTemplates?: LessonFlow5ConditionalTemplates;
   lessonRankingTtsTemplate?: string;
   lessonFlow6ConditionalTemplates?: LessonFlow6ConditionalTemplates;
+  lessonRoundEndTtsTemplate?: string;
   lessonRecordFlowEnabled?: boolean;
   lessonRecordTtsTemplate?: string;
   lessonRecordTtsTemplates?: string[];
@@ -820,6 +833,8 @@ export interface PilgrimData {
   punishmentSpotIndex?: number;
   punishmentSpotPos?: Point2D;
   isPunishedInCurrentRound?: boolean;
+  podiumRank?: 1 | 2 | 3;
+  winnerMilkTeaScale?: number;
   isDetachedFlowerRunner?: boolean;
   leaveAfterGiftAction?: boolean;
   giftActionBusyUntil?: number;

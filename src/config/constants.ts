@@ -887,7 +887,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   ],
 
   lessonStartTtsText:
-    'Chào mừng các em đến với tiết Tiếng Anh lớp 12A1! Các em hãy chú ý lên bảng và bình luận đáp án thật nhanh để giành ghế ngồi trong lớp nhé!',
+    'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
   lessonPrepareTtsText: 'Chuẩn bị',
   lessonPrepareTtsTexts: [
     'Chuẩn bị',
@@ -958,6 +958,8 @@ export const DEFAULT_CONFIG: GameConfig = {
       'Huyền thoại của lớp! Hơn 30 vòng liên tiếp giữ vững Top 1 bảng xếp hạng gọi tên [Top1Rank] với [ĐiểmTop1] điểm!',
     ],
   },
+  lessonRoundEndTtsTemplate:
+    'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Tặng 3 bạn 3 ly trà sữa mat cha lat te phun tóp ping, mấy cưng ở dưới vỗ tay nào !',
   lessonRecordFlowEnabled: true,
   lessonRecordTtsTemplate:
     'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu Kỷ lục hôm nay với [ĐiểmKỷLục] điểm! Cả lớp cho một tràng pháo tay thật lớn nào!',
