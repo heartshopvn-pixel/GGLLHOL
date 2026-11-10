@@ -650,6 +650,11 @@ export interface GameConfig {
   zombieSupervisorPos?: Point2D;
   zombieHeartBatchIntervalMs?: number;
   zombieNpcAutoAttack?: boolean;
+  zombieMaxFlyingProjectiles?: number; // Giới hạn số đạn bay tối đa trong mỗi đợt / trên màn hình
+  zombieNormalProjectileDurationSec?: number; // Thời gian đạn thường bay (Thả tim Hộp Bút & Quà 1 xu - không áp dụng cho đạn 5, 10, 10+)
+  zombieGift5ProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 5 xu (Ghế Ngồi + Khóa Camera)
+  zombieGift10ProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 10 xu (Đứa Bàn Bên + Khóa Camera)
+  zombieGift10PlusProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 10+ xu (Siêu Quà 10+ + Khóa Camera)
   zombieGrowlMp3Url?: string | null;
   zombieGrowlMp3Title?: string;
   zombieBgmEnabled?: boolean;

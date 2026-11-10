@@ -548,7 +548,9 @@ export const GameStage: React.FC<GameStageProps> = ({
         st.zombieProjectiles.find(
           (p) => p.id === st.cameraFocus.projectileId
         ) ||
-        st.zombieProjectiles.find((p) => p.kind === 'desk_mate');
+        st.zombieProjectiles.find(
+          (p) => p.kind === 'desk_mate' || p.kind === 'chair'
+        );
       if (targetProj) {
         const elapsed = Date.now() - targetProj.createdAt;
         const p = Math.max(
@@ -560,10 +562,8 @@ export const GameStage: React.FC<GameStageProps> = ({
         const linearY =
           targetProj.startY + (targetProj.targetY - targetProj.startY) * p;
         const arcHeight =
-          targetProj.kind === 'desk_mate'
+          targetProj.kind === 'desk_mate' || targetProj.kind === 'chair'
             ? 95
-            : targetProj.kind === 'chair'
-            ? 75
             : 50;
         const curY = linearY - Math.sin(p * Math.PI) * arcHeight;
 
@@ -574,7 +574,11 @@ export const GameStage: React.FC<GameStageProps> = ({
         const maxY = 960 - 480 / desiredZoom;
         desiredX = Math.max(minX, Math.min(maxX, curX + offsetX));
         desiredY = Math.max(minY, Math.min(maxY, curY + offsetY * 0.25));
-        activeTargetId = -9004;
+        let projHash = 0;
+        for (let i = 0; i < targetProj.id.length; i++) {
+          projHash = (projHash * 31 + targetProj.id.charCodeAt(i)) | 0;
+        }
+        activeTargetId = -900000 - (Math.abs(projHash) % 99999);
       } else if (st.zombieEntity?.visible) {
         desiredZoom = unifiedZoom;
         const minX = 270 / desiredZoom;

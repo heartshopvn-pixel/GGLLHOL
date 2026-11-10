@@ -187,7 +187,13 @@ interface DevStudioProps {
   onStopZombieEvent?: () => void;
   onKillZombieImmediately?: () => void;
   onTestZombieAttack?: (
-    kind: 'heart_seated' | 'heart_queue' | 'book' | 'chair' | 'desk_mate',
+    kind:
+      | 'heart_seated'
+      | 'heart_queue'
+      | 'book'
+      | 'chair'
+      | 'desk_mate'
+      | 'desk_mate_10plus',
     customUsername?: string
   ) => void;
   compactRemoteStage?: boolean;

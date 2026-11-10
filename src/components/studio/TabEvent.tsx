@@ -34,7 +34,13 @@ interface TabEventProps {
   onStopZombieEvent?: () => void;
   onKillZombieImmediately?: () => void;
   onTestZombieAttack?: (
-    kind: 'heart_seated' | 'heart_queue' | 'book' | 'chair' | 'desk_mate',
+    kind:
+      | 'heart_seated'
+      | 'heart_queue'
+      | 'book'
+      | 'chair'
+      | 'desk_mate'
+      | 'desk_mate_10plus',
     customUsername?: string
   ) => void;
 }
@@ -259,6 +265,45 @@ export const TabEvent: React.FC<TabEventProps> = ({
             >
               <Square className="w-3.5 h-3.5" />
               <span>Dừng / Tiếp tục tiết</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  zombieNpcAutoAttack: config.zombieNpcAutoAttack === false,
+                })
+              }
+              className={`col-span-2 px-3 py-2 rounded-lg text-[11px] font-extrabold border flex items-center justify-between gap-2 cursor-pointer transition shadow ${
+                config.zombieNpcAutoAttack !== false
+                  ? 'bg-emerald-950/90 hover:bg-emerald-900/90 border-emerald-400 text-emerald-200'
+                  : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-300'
+              }`}
+              title="Cho phép các NPC trong lớp và hàng chờ tự động giả lập thả tim ném Hộp Bút xen kẽ nối đuôi nhau vào Zombie (Không tính điểm vào Bảng Chiến Công)"
+            >
+              <span className="flex items-center gap-1.5">
+                <Heart
+                  className={`w-3.5 h-3.5 ${
+                    config.zombieNpcAutoAttack !== false
+                      ? 'text-pink-400 fill-pink-400 animate-pulse'
+                      : 'text-stone-400'
+                  }`}
+                />
+                <span>
+                  {config.zombieNpcAutoAttack !== false
+                    ? '🤖 ĐANG BẬT TỰ ĐỘNG ĐÁNH: NPC Tự Giả Lập Thả Tim (Xen Kẽ Lớp ↔ Chờ)'
+                    : '🤖 ĐANG TẮT TỰ ĐỘNG ĐÁNH: Bấm để NPC tự giả lập thả tim'}
+                </span>
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-mono font-black ${
+                  config.zombieNpcAutoAttack !== false
+                    ? 'bg-emerald-400 text-stone-950'
+                    : 'bg-stone-800 text-stone-400'
+                }`}
+              >
+                {config.zombieNpcAutoAttack !== false ? 'AUTO ON' : 'OFF'}
+              </span>
             </button>
           </div>
         </div>
@@ -652,6 +697,231 @@ export const TabEvent: React.FC<TabEventProps> = ({
             />
           </label>
         </div>
+
+        {/* Điều chỉnh Tốc Độ Đạn Bay (Thời gian đạn bay từ bàn học / cửa lớp tới khi chạm Zombie) */}
+        <div className="p-2.5 rounded-lg bg-stone-950/95 border border-amber-500/40 space-y-2">
+          <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-1.5">
+            <div>
+              <div className="text-[11px] font-extrabold text-amber-300 flex items-center gap-1.5">
+                <Crosshair className="w-3.5 h-3.5 text-amber-400" />
+                <span>
+                  Tốc Độ Đạn Bay & Cơ Chế Khóa Camera Đạn Quà (5 • 10 • 10+ xu)
+                </span>
+              </div>
+              <p className="text-[9.5px] text-stone-400">
+                Đạn xuất phát từ đúng tọa độ (x, y) bàn học • Đạn chạm Zombie mới trừ máu • Giá trị nhỏ = bay nhanh
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  zombieMaxFlyingProjectiles: 16,
+                  zombieNormalProjectileDurationSec: 0.55,
+                  zombieGift5ProjectileDurationSec: 1.15,
+                  zombieGift10ProjectileDurationSec: 1.4,
+                  zombieGift10PlusProjectileDurationSec: 1.7,
+                })
+              }
+              className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9.5px] font-semibold text-stone-300 flex items-center gap-1 shrink-0 cursor-pointer"
+              title="Khôi phục giới hạn số đạn & tốc độ bay mặc định"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Mặc định</span>
+            </button>
+          </div>
+
+          {/* 0. Giới hạn số đạn bay tối đa trên sân / mỗi đợt */}
+          <div className="p-2 rounded-lg bg-stone-900/90 border border-emerald-500/35 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <span className="text-[10.5px] font-extrabold text-emerald-300">
+                  🎯 Giới hạn số đạn bay tối đa (Mỗi đợt / Trên màn hình)
+                </span>
+                <span className="block text-[9px] text-stone-400">
+                  Sát thương dư tự động gộp vào đạn đang bay (không mất máu & điểm)
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={config.zombieMaxFlyingProjectiles ?? 16}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      zombieMaxFlyingProjectiles: Math.max(
+                        1,
+                        Math.min(60, parseInt(e.target.value, 10) || 16)
+                      ),
+                    })
+                  }
+                  className="w-14 px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono font-bold text-emerald-300 text-right"
+                />
+                <span className="text-[10px] text-stone-400">viên</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={60}
+              step={1}
+              value={config.zombieMaxFlyingProjectiles ?? 16}
+              onChange={(e) =>
+                onUpdateConfig({
+                  zombieMaxFlyingProjectiles:
+                    parseInt(e.target.value, 10) || 16,
+                })
+              }
+              className="w-full accent-emerald-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+          </div>
+
+          {/* 1. Tốc độ đạn thường (Không áp dụng cho đạn 5, 10, 10+) */}
+          <div className="p-2 rounded-lg bg-stone-900/90 border border-sky-500/35 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <span className="text-[10.5px] font-extrabold text-sky-300">
+                  ✏️ Tốc độ Đạn Thường (Thả Tim Hộp Bút & Quà 1 xu)
+                </span>
+                <span className="block text-[9px] text-stone-400">
+                  Không áp dụng cho đạn quà 5, 10, 10+ xu
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="number"
+                  min={0.15}
+                  max={3.0}
+                  step={0.05}
+                  value={config.zombieNormalProjectileDurationSec ?? 0.55}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      zombieNormalProjectileDurationSec: Math.max(
+                        0.15,
+                        Math.min(3.0, parseFloat(e.target.value) || 0.55)
+                      ),
+                    })
+                  }
+                  className="w-14 px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono font-bold text-sky-300 text-right"
+                />
+                <span className="text-[10px] text-stone-400">giây</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0.15}
+              max={2.0}
+              step={0.05}
+              value={config.zombieNormalProjectileDurationSec ?? 0.55}
+              onChange={(e) =>
+                onUpdateConfig({
+                  zombieNormalProjectileDurationSec:
+                    parseFloat(e.target.value) || 0.55,
+                })
+              }
+              className="w-full accent-sky-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+          </div>
+
+          {/* 2. Tốc độ riêng cho 3 loại Đạn Quà Tặng Khóa Camera (5, 10, 10+ xu) */}
+          <div className="grid grid-cols-3 gap-1.5">
+            <div className="p-2 rounded-lg bg-stone-900/90 border border-orange-500/40 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-extrabold text-orange-300">
+                  🪑 Đạn 5 xu
+                </span>
+                <span className="text-[9px] font-mono text-orange-200">
+                  Khóa Cam
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={0.25}
+                  max={5.0}
+                  step={0.05}
+                  value={config.zombieGift5ProjectileDurationSec ?? 1.15}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      zombieGift5ProjectileDurationSec: Math.max(
+                        0.25,
+                        Math.min(5.0, parseFloat(e.target.value) || 1.15)
+                      ),
+                    })
+                  }
+                  className="w-full px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono font-bold text-orange-300 text-right"
+                />
+                <span className="text-[9.5px] text-stone-400">s</span>
+              </div>
+            </div>
+
+            <div className="p-2 rounded-lg bg-stone-900/90 border border-purple-500/40 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-extrabold text-purple-300">
+                  😱 Đạn 10 xu
+                </span>
+                <span className="text-[9px] font-mono text-purple-200">
+                  Khóa Cam
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={0.25}
+                  max={5.0}
+                  step={0.05}
+                  value={config.zombieGift10ProjectileDurationSec ?? 1.4}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      zombieGift10ProjectileDurationSec: Math.max(
+                        0.25,
+                        Math.min(5.0, parseFloat(e.target.value) || 1.4)
+                      ),
+                    })
+                  }
+                  className="w-full px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono font-bold text-purple-300 text-right"
+                />
+                <span className="text-[9.5px] text-stone-400">s</span>
+              </div>
+            </div>
+
+            <div className="p-2 rounded-lg bg-stone-900/90 border border-yellow-500/40 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-extrabold text-yellow-300">
+                  👑 Đạn 10+ xu
+                </span>
+                <span className="text-[9px] font-mono text-yellow-200">
+                  Khóa Cam
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={0.25}
+                  max={5.0}
+                  step={0.05}
+                  value={config.zombieGift10PlusProjectileDurationSec ?? 1.7}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      zombieGift10PlusProjectileDurationSec: Math.max(
+                        0.25,
+                        Math.min(5.0, parseFloat(e.target.value) || 1.7)
+                      ),
+                    })
+                  }
+                  className="w-full px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono font-bold text-yellow-300 text-right"
+                />
+                <span className="text-[9.5px] text-stone-400">s</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[9.5px] text-amber-200/90 bg-amber-950/30 border border-amber-500/25 rounded px-2 py-1">
+            🎥 <strong>Hàng chờ Camera Đạn Quà 5, 10, 10+ xu:</strong> Khi đang có viên đạn quà bay trên sân, lượt đạn quà mới sẽ chờ viên hiện tại chạm Zombie xong mới phóng tiếp và chuyển Camera qua viên đạn quà kế tiếp.
+          </div>
+        </div>
       </section>
 
       {/* 2B. THẺ CẤU HÌNH SỰ KIỆN ZOMBIE: ĐIỀU CHỈNH FORMAT LỜI THOẠI & THỜI GIAN CÁC LUỒNG (1 -> 6) */}
@@ -1021,12 +1291,56 @@ export const TabEvent: React.FC<TabEventProps> = ({
           </span>
         </div>
 
+        {/* Nút Bật/Tắt Tự Động Đánh (NPC Giả Lập Thả Tim Xen Kẽ) ngay trong khu vực Test */}
+        <button
+          type="button"
+          onClick={() =>
+            onUpdateConfig({
+              zombieNpcAutoAttack: config.zombieNpcAutoAttack === false,
+            })
+          }
+          className={`w-full p-2.5 rounded-lg border flex items-center justify-between gap-2 transition cursor-pointer shadow ${
+            config.zombieNpcAutoAttack !== false
+              ? 'bg-emerald-950/85 hover:bg-emerald-900/85 border-emerald-400 text-emerald-100'
+              : 'bg-stone-950 hover:bg-stone-800 border-stone-700 text-stone-300'
+          }`}
+        >
+          <div className="text-left">
+            <div className="text-[11px] font-extrabold flex items-center gap-1.5">
+              <Heart
+                className={`w-3.5 h-3.5 ${
+                  config.zombieNpcAutoAttack !== false
+                    ? 'text-pink-400 fill-pink-400 animate-pulse'
+                    : 'text-stone-400'
+                }`}
+              />
+              <span>
+                {config.zombieNpcAutoAttack !== false
+                  ? '🤖 Tự Động Đánh Đang BẬT (NPC lớp & hàng chờ tự thả tim xen kẽ)'
+                  : '🤖 Bật Tự Động Đánh (Cho NPC tự giả lập thả tim xem thử)'}
+              </span>
+            </div>
+            <div className="text-[9.5px] text-stone-400 mt-0.5">
+              Tự động phóng mưa đạn Hộp Bút nối đuôi nhau giữa Trong Lớp ↔ Hàng Chờ ở Luồng 5 (Không tính vào Bảng Chiến Công)
+            </div>
+          </div>
+          <span
+            className={`px-2.5 py-1 rounded-md text-[10.5px] font-mono font-black shrink-0 ${
+              config.zombieNpcAutoAttack !== false
+                ? 'bg-emerald-400 text-stone-950'
+                : 'bg-stone-800 text-stone-400 border border-stone-700'
+            }`}
+          >
+            {config.zombieNpcAutoAttack !== false ? 'ĐANG BẬT' : 'ĐANG TẮT'}
+          </span>
+        </button>
+
         <div className="flex items-center gap-2">
           <input
             type="text"
             value={testAttackerName}
             onChange={(e) => setTestAttackerName(e.target.value)}
-            placeholder="Tên người chơi test (để trống = chọn ngẫu nhiên)..."
+            placeholder="Tên người chơi test thủ công (để trống = chọn ngẫu nhiên)..."
             className="flex-1 px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-xs text-stone-200 focus:outline-none focus:border-amber-400"
           />
         </div>
@@ -1100,11 +1414,11 @@ export const TabEvent: React.FC<TabEventProps> = ({
             className="p-2 rounded-lg bg-orange-950/50 hover:bg-orange-900/60 border border-orange-400/50 text-left transition cursor-pointer"
           >
             <div className="flex items-center justify-between text-[11px] font-bold text-orange-200">
-              <span>🪑 Quà 5 Coin</span>
-              <span className="font-mono text-emerald-300">+500đ</span>
+              <span>🪑 Quà 5 Coin (Khóa Cam)</span>
+              <span className="font-mono text-emerald-300">-500 HP</span>
             </div>
             <div className="text-[9.5px] text-stone-400">
-              Ném Ghế Ngồi / Icon Quà
+              Ném Ghế Ngồi • Khóa Camera theo đạn
             </div>
           </button>
 
@@ -1116,19 +1430,34 @@ export const TabEvent: React.FC<TabEventProps> = ({
                 testAttackerName.trim() || undefined
               )
             }
-            className="col-span-2 p-2 rounded-lg bg-purple-950/60 hover:bg-purple-900/70 border border-purple-400/60 flex items-center justify-between transition cursor-pointer"
+            className="p-2 rounded-lg bg-purple-950/60 hover:bg-purple-900/70 border border-purple-400/60 text-left transition cursor-pointer"
           >
-            <div>
-              <div className="text-[11px] font-extrabold text-purple-200">
-                😱 Quà 10 Coin: Ném Đứa Bàn Bên :) (Meme)
-              </div>
-              <div className="text-[9.5px] text-stone-300">
-                10 coin = 1000 sát thương • Gắn thẻ tên xoay & Khóa Camera
-              </div>
+            <div className="flex items-center justify-between text-[11px] font-extrabold text-purple-200">
+              <span>😱 Quà 10 Coin (Khóa Cam)</span>
+              <span className="font-mono text-yellow-300">-1000 HP</span>
             </div>
-            <span className="px-2 py-1 rounded bg-purple-500/30 border border-purple-300/50 font-mono text-xs font-black text-yellow-300">
-              -1000 HP
-            </span>
+            <div className="text-[9.5px] text-stone-300">
+              Ném Đứa Bàn Bên • Khóa Camera riêng
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              onTestZombieAttack?.(
+                'desk_mate_10plus',
+                testAttackerName.trim() || undefined
+              )
+            }
+            className="p-2 rounded-lg bg-yellow-950/60 hover:bg-yellow-900/70 border border-yellow-400/70 text-left transition cursor-pointer"
+          >
+            <div className="flex items-center justify-between text-[11px] font-extrabold text-yellow-200">
+              <span>👑 Quà 10+ Coin (Khóa Cam)</span>
+              <span className="font-mono text-amber-300">-2000 HP</span>
+            </div>
+            <div className="text-[9.5px] text-stone-300">
+              Siêu Quà 10+ • Tốc độ riêng & Khóa Cam
+            </div>
           </button>
         </div>
 

@@ -229,6 +229,14 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
 
     const update = () => {
       const elapsed = Date.now() - proj.createdAt;
+      if (elapsed < 0) {
+        if (containerRef.current && containerRef.current.style.opacity !== '0') {
+          containerRef.current.style.opacity = '0';
+        }
+        rafId = requestAnimationFrame(update);
+        return;
+      }
+
       const p = Math.max(0, Math.min(1, elapsed / safeDur));
 
       const curX = proj.startX + (proj.targetX - proj.startX) * p;
@@ -247,6 +255,7 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
       const spinDeg = p * totalSpin;
 
       if (containerRef.current) {
+        containerRef.current.style.opacity = p >= 1 ? '0' : '1';
         containerRef.current.style.left = `${curX.toFixed(1)}px`;
         containerRef.current.style.top = `${curY.toFixed(1)}px`;
       }
@@ -517,7 +526,8 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
       style={{
         left: `${proj.startX}px`,
         top: `${proj.startY}px`,
-        zIndex: 920,
+        opacity: Date.now() < proj.createdAt ? 0 : 1,
+        zIndex: 22500,
       }}
     >
       {/* Đuôi đạn gắn chính xác vào tâm (0, 0) của model đạn */}
@@ -595,7 +605,7 @@ const ZombieSpikyDamageBubbleInner: React.FC<ZombieSpikyDamageBubbleProps> = ({
       style={{
         left: `${fx.x}px`,
         top: `${fx.y}px`,
-        zIndex: 960,
+        zIndex: 23000,
         transform: `translate(-50%, -50%) scale(${0.5 * (fx.scale || 1)})`,
         opacity: 1,
       }}
