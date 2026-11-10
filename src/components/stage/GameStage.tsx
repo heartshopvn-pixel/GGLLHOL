@@ -1303,6 +1303,45 @@ export const GameStage: React.FC<GameStageProps> = ({
       doorCrowd.find((p) => p.id === cameraFocus.pilgrimId)
     : undefined;
 
+  // Tìm học sinh Top 1 đang ngồi trong lớp để đội vương miện trên đầu (không áp dụng cho Top 1 tốc độ / ngoài hành lang)
+  const top1InClassPilgrimId = useMemo(() => {
+    const donorPtsMap = new Map<string, number>();
+    for (const d of lotusDonors || []) {
+      if (!d.username) continue;
+      donorPtsMap.set(d.username.trim().toLowerCase(), d.coins || 0);
+    }
+    for (const w of classBoardState?.classWinners || []) {
+      if (!w.username) continue;
+      const k = w.username.trim().toLowerCase();
+      const cur = donorPtsMap.get(k) ?? 0;
+      if ((w.points || 0) > cur) {
+        donorPtsMap.set(k, w.points || 0);
+      }
+    }
+
+    let bestId: number | null = null;
+    let bestPts = -1;
+    for (const p of pilgrims) {
+      if (
+        p.state === 'leave_side_to_aisle' ||
+        p.state === 'leave_down_exit' ||
+        !p.username
+      ) {
+        continue;
+      }
+      const key = p.username.trim().toLowerCase();
+      const pts = Math.max(
+        donorPtsMap.get(key) ?? 0,
+        p.currentScoreDisplay ?? 0
+      );
+      if (pts > bestPts) {
+        bestPts = pts;
+        bestId = p.id;
+      }
+    }
+    return bestId;
+  }, [pilgrims, lotusDonors, classBoardState?.classWinners]);
+
   const speakingLowerName = (speakingMeta?.username || '').trim().toLowerCase();
   const speakingPilgrim =
     isTtsSpeaking && speakingMeta
@@ -1545,6 +1584,8 @@ export const GameStage: React.FC<GameStageProps> = ({
               chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
               isLeftSeatmate={false}
               isSpeakingBubble={speakingPilgrim?.id === p.id}
+              isTop1InClass={false}
+              studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />
@@ -1581,6 +1622,8 @@ export const GameStage: React.FC<GameStageProps> = ({
               chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
               isLeftSeatmate={false}
               isSpeakingBubble={false}
+              isTop1InClass={false}
+              studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />
@@ -1622,6 +1665,8 @@ export const GameStage: React.FC<GameStageProps> = ({
                 p.slotId ? seatMeta.deskYBySlotId.get(p.slotId) : undefined
               }
               isSpeakingBubble={speakingPilgrim?.id === p.id}
+              isTop1InClass={p.id === top1InClassPilgrimId}
+              studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />

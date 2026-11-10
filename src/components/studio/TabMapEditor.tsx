@@ -384,7 +384,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 opKey: 'waitingQueueOpacity',
                 defaultFont: 10,
                 defaultOp: config.hudLayout.hudOpacity ?? 0.88,
-                label: 'Bảng Hàng Chờ Vào Lớp (1, 2, 3...)',
+                label: 'Bảng Hàng Chờ Học Ké (Avatar 4 cột)',
               },
               {
                 visKey: 'showDailyRecordBox',
@@ -568,34 +568,212 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 </div>
 
                 {visKey === 'showWaitingQueueBox' && (
-                  <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-800/70">
-                    <span className="text-[10px] text-cyan-300 font-semibold">
-                      Hiển thị Rank (3/5/10/15):
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {([3, 5, 10, 15] as const).map((rankPreset) => {
-                        const activeMaxRank =
-                          config.hudLayout.waitingQueueMaxRanks ?? 10;
-                        const isSelected = activeMaxRank === rankPreset;
-                        return (
-                          <button
-                            key={rankPreset}
-                            type="button"
-                            onClick={() =>
-                              onUpdateHudLayout({
-                                waitingQueueMaxRanks: rankPreset,
-                              })
-                            }
-                            className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition ${
-                              isSelected
-                                ? 'bg-cyan-400 text-stone-950 font-extrabold shadow'
-                                : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700'
-                            }`}
-                          >
-                            Top {rankPreset}
-                          </button>
-                        );
-                      })}
+                  <div className="space-y-1.5 pt-1.5 border-t border-stone-800/70">
+                    {/* Hàng 1: Số người hiển thị (8/16/20/24/28) */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-cyan-300 font-semibold">
+                        Số người hiển thị (8/16/20/24/28):
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {([8, 16, 20, 24, 28] as const).map((rankPreset) => {
+                          const activeMaxRank =
+                            config.hudLayout.waitingQueueMaxRanks ?? 8;
+                          const isSelected = activeMaxRank === rankPreset;
+                          return (
+                            <button
+                              key={rankPreset}
+                              type="button"
+                              onClick={() =>
+                                onUpdateHudLayout({
+                                  waitingQueueMaxRanks: rankPreset,
+                                })
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition ${
+                                isSelected
+                                  ? 'bg-cyan-400 text-stone-950 font-extrabold shadow'
+                                  : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700'
+                              }`}
+                            >
+                              {rankPreset}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Hàng 2: Màu nền bảng (Trắng / Đen / Nâu / Xám) */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-cyan-300 font-semibold">
+                        Màu nền bảng (Nền trắng → Tiêu đề đen):
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {(
+                          [
+                            { id: 'white', label: 'Trắng', dot: 'bg-white border-stone-400' },
+                            { id: 'black', label: 'Đen', dot: 'bg-slate-950 border-cyan-400' },
+                            { id: 'brown', label: 'Nâu', dot: 'bg-amber-950 border-amber-400' },
+                            { id: 'gray', label: 'Xám', dot: 'bg-slate-600 border-slate-300' },
+                          ] as const
+                        ).map((bgOpt) => {
+                          const curBg = config.hudLayout.waitingQueueBgColor || 'black';
+                          const isSelected = curBg === bgOpt.id;
+                          return (
+                            <button
+                              key={bgOpt.id}
+                              type="button"
+                              onClick={() =>
+                                onUpdateHudLayout({
+                                  waitingQueueBgColor: bgOpt.id,
+                                })
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer transition border ${
+                                isSelected
+                                  ? 'bg-cyan-400 text-stone-950 border-cyan-300 shadow'
+                                  : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border-stone-700'
+                              }`}
+                            >
+                              <span
+                                className={`w-2.5 h-2.5 rounded-full border shrink-0 ${bgOpt.dot}`}
+                              />
+                              <span>{bgOpt.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Hàng 3: Chỉnh kích thước Avatar trong hàng chờ */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-cyan-300 font-semibold">
+                        Kích thước Avatar hàng chờ:
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              waitingQueueAvatarScale: Math.max(
+                                0.5,
+                                Number(
+                                  (
+                                    (config.hudLayout.waitingQueueAvatarScale ?? 1) -
+                                    0.05
+                                  ).toFixed(2)
+                                )
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={1.8}
+                          step={0.05}
+                          value={config.hudLayout.waitingQueueAvatarScale ?? 1}
+                          onChange={(e) =>
+                            onUpdateHudLayout({
+                              waitingQueueAvatarScale:
+                                parseFloat(e.target.value) || 1,
+                            })
+                          }
+                          className="w-24 accent-cyan-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              waitingQueueAvatarScale: Math.min(
+                                1.8,
+                                Number(
+                                  (
+                                    (config.hudLayout.waitingQueueAvatarScale ?? 1) +
+                                    0.05
+                                  ).toFixed(2)
+                                )
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          +
+                        </button>
+                        <span className="w-10 text-right text-[10.5px] font-mono font-bold text-cyan-300 tabular-nums">
+                          {Math.round(
+                            (config.hudLayout.waitingQueueAvatarScale ?? 1) * 100
+                          )}
+                          %
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Hàng 4: Chỉnh kích thước Số điểm & Thẻ điểm scale theo */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-amber-300 font-semibold">
+                        Cỡ số điểm &amp; Thẻ điểm (Scale):
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              waitingQueueScoreScale: Math.max(
+                                0.5,
+                                Number(
+                                  (
+                                    (config.hudLayout.waitingQueueScoreScale ?? 1) -
+                                    0.05
+                                  ).toFixed(2)
+                                )
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={1.8}
+                          step={0.05}
+                          value={config.hudLayout.waitingQueueScoreScale ?? 1}
+                          onChange={(e) =>
+                            onUpdateHudLayout({
+                              waitingQueueScoreScale:
+                                parseFloat(e.target.value) || 1,
+                            })
+                          }
+                          className="w-24 accent-amber-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              waitingQueueScoreScale: Math.min(
+                                1.8,
+                                Number(
+                                  (
+                                    (config.hudLayout.waitingQueueScoreScale ?? 1) +
+                                    0.05
+                                  ).toFixed(2)
+                                )
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          +
+                        </button>
+                        <span className="w-10 text-right text-[10.5px] font-mono font-bold text-amber-300 tabular-nums">
+                          {Math.round(
+                            (config.hudLayout.waitingQueueScoreScale ?? 1) * 100
+                          )}
+                          %
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}

@@ -687,6 +687,23 @@ export const TabControl: React.FC<TabControlProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  studentLevelExpEnabled: !config.studentLevelExpEnabled,
+                })
+              }
+              title="Bật/tắt hiển thị thẻ Cấp độ (Lv) và điểm kinh nghiệm (+EXP) của học sinh"
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition select-none ${
+                config.studentLevelExpEnabled
+                  ? 'bg-sky-500/25 border-sky-400 text-sky-200'
+                  : 'bg-stone-950 border-stone-700 text-stone-400 hover:bg-stone-800'
+              }`}
+            >
+              <span>🎖️ Cấp độ (Lv/EXP): {config.studentLevelExpEnabled ? 'Bật' : 'Tắt'}</span>
+            </button>
+
             <label
               title="Cho phép hình ảnh Cô Giáo và khung chat của cô ưu tiên nằm đè lên trên Bảng Lớp để không bị che"
               className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-stone-950 border border-pink-500/40 text-[10px] text-pink-200 cursor-pointer select-none"
@@ -2443,16 +2460,6 @@ export const TabControl: React.FC<TabControlProps> = ({
             </span>
           </div>
         </div>
-
-        <input
-          type="text"
-          value={hud.noticeBoardTitle ?? 'Bảng Tin Lớp 12A1'}
-          onChange={(e) =>
-            onUpdateHudLayout({ noticeBoardTitle: e.target.value })
-          }
-          placeholder="Tiêu đề bảng tin lớp..."
-          className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-800 text-xs text-amber-200 font-semibold focus:outline-none focus:border-amber-500"
-        />
 
         <textarea
           rows={2}

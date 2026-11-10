@@ -73,6 +73,8 @@ interface StudentSpriteProps {
   isLeftSeatmate?: boolean;
   deskSeatY?: number;
   isSpeakingBubble?: boolean;
+  isTop1InClass?: boolean;
+  studentLevelExpEnabled?: boolean;
   giftModelScales?: GiftModelScalesConfig;
   walkWobbleIntensity?: number;
 }
@@ -161,6 +163,8 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
   isLeftSeatmate = false,
   deskSeatY,
   isSpeakingBubble = false,
+  isTop1InClass = false,
+  studentLevelExpEnabled = false,
   giftModelScales = DEFAULT_GIFT_MODEL_SCALES,
   walkWobbleIntensity = 1.0,
 }) => {
@@ -571,6 +575,54 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           transformOrigin: '50% 88%',
         }}
       >
+        {/* VƯƠNG MIỆN TOP 1 TRONG LỚP ĐỘI TRÊN ĐẦU HỌC SINH (Giảm 50% kích thước + Glow sáng bồng bềnh nhẹ nhàng) */}
+        {isTop1InClass && (
+          <div
+            className="top1-crown-float-glow absolute left-1/2 pointer-events-none z-35 select-none"
+            style={{
+              top:
+                isSeated && useDefaultPngModels && processedDefaultModelSrc
+                  ? '15px'
+                  : '2px',
+            }}
+          >
+            <svg
+              viewBox="0 0 36 26"
+              className="w-[12px] h-[9px] overflow-visible"
+            >
+              <defs>
+                <linearGradient id="top1CrownGold" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#fef9c3" />
+                  <stop offset="45%" stopColor="#facc15" />
+                  <stop offset="100%" stopColor="#eab308" />
+                </linearGradient>
+              </defs>
+              <path
+                d="M4 21 L2 8 L11 14 L18 4 L25 14 L34 8 L32 21 Z"
+                fill="url(#top1CrownGold)"
+                stroke="#713f12"
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+              />
+              <rect
+                x="4"
+                y="20"
+                width="28"
+                height="4"
+                rx="1.5"
+                fill="#fde047"
+                stroke="#713f12"
+                strokeWidth="1.8"
+              />
+              <circle cx="2" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="18" cy="3" r="2.8" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="34" cy="7" r="2.4" fill="#fef9c3" stroke="#713f12" strokeWidth="1.3" />
+              <circle cx="18" cy="15.5" r="2.3" fill="#fb7185" stroke="#713f12" strokeWidth="1" />
+              <circle cx="10.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
+              <circle cx="25.5" cy="16.5" r="1.7" fill="#38bdf8" stroke="#713f12" strokeWidth="0.9" />
+            </svg>
+          </div>
+        )}
 
         {/* Quà tặng / Bó hoa hồng ôm trước ngực (giữa nhân vật) khi học sinh đang đi tặng Cô Giáo / Thầy Giám Thị */}
         {isHoldingGiftUp && pilgrim.state !== 'throw_flower_at_teacher' && (
@@ -1075,7 +1127,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                 )}
 
                 {/* FLOATING TEXT EXP: nằm ngay phía trên số điểm cộng (+điểm) */}
-                {expDelta > 0 && (
+                {studentLevelExpEnabled && expDelta > 0 && (
                   <div
                     className="score-delta-vibrate font-mono font-black leading-none whitespace-nowrap mb-0.5 relative z-10"
                     style={{
@@ -1168,12 +1220,14 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                     style={{ backgroundColor: pilgrim.avatarColor }}
                   />
                 )}
-                <span
-                  className={`px-1 py-0.5 rounded border font-mono font-black text-[7.5px] leading-none shrink-0 ${levelBadgeClass}`}
-                  title={`Cấp ${studentLevel} (${curExp} EXP)`}
-                >
-                  Lv.{studentLevel}
-                </span>
+                {studentLevelExpEnabled && (
+                  <span
+                    className={`px-1 py-0.5 rounded border font-mono font-black text-[7.5px] leading-none shrink-0 ${levelBadgeClass}`}
+                    title={`Cấp ${studentLevel} (${curExp} EXP)`}
+                  >
+                    Lv.{studentLevel}
+                  </span>
+                )}
                 <span
                   className={`text-[9.5px] font-bold tracking-tight py-0.5 ${
                     pilgrim.isGoldenPriority || isRichKidDancing
@@ -1230,6 +1284,8 @@ function areStudentSpritePropsEqual(
     prev.isLeftSeatmate !== next.isLeftSeatmate ||
     prev.deskSeatY !== next.deskSeatY ||
     prev.isSpeakingBubble !== next.isSpeakingBubble ||
+    prev.isTop1InClass !== next.isTop1InClass ||
+    prev.studentLevelExpEnabled !== next.studentLevelExpEnabled ||
     prev.characterScale !== next.characterScale ||
     prev.useDefaultPngModels !== next.useDefaultPngModels ||
     prev.nameTagFontFamily !== next.nameTagFontFamily ||

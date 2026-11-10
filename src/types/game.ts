@@ -387,6 +387,9 @@ export interface HudLayoutConfig {
   showNewPilgrimToast?: boolean;
   lotusLeaderboardMaxRanks?: number;
   waitingQueueMaxRanks?: number;
+  waitingQueueBgColor?: 'black' | 'white' | 'brown' | 'gray';
+  waitingQueueAvatarScale?: number;
+  waitingQueueScoreScale?: number;
   lotusFloatingScoreFontSize?: number;
   hudOpacity?: number;
   noticeBoardOpacity?: number;
@@ -617,6 +620,7 @@ export interface GameConfig {
   scoreTagDurationSec?: number;
   scoreChangeFontSize?: number;
   scoreChangeStrokeWidth?: number;
+  studentLevelExpEnabled?: boolean;
   vfxFlower10Enabled?: boolean;
   vfxFlower10Scale?: number;
   vfxFlower10OffsetX?: number;

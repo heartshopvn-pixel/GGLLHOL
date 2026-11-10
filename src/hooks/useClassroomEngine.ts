@@ -497,6 +497,16 @@ export function useClassroomEngine() {
             hudLayout: {
               ...DEFAULT_CONFIG.hudLayout,
               ...(parsed.config.hudLayout || {}),
+              waitingQueueTitle:
+                !parsed.config.hudLayout?.waitingQueueTitle ||
+                parsed.config.hudLayout?.waitingQueueTitle === 'Hàng Chờ Vào Lớp'
+                  ? 'Hàng chờ học ké'
+                  : parsed.config.hudLayout.waitingQueueTitle,
+              waitingQueueMaxRanks: [8, 16, 20, 24, 28].includes(
+                Number(parsed.config.hudLayout?.waitingQueueMaxRanks)
+              )
+                ? Number(parsed.config.hudLayout.waitingQueueMaxRanks)
+                : 8,
               guideItems: hasNewGiftGuide
                 ? savedGuideItems
                 : DEFAULT_GUIDE_ITEMS,
@@ -1356,8 +1366,8 @@ export function useClassroomEngine() {
       });
       waitingPoolRef.current = rebuiltMap;
 
-      // Bóc tách Top 20 người có Rank cao nhất để load vào bảng Hàng Chờ UI và nhóm đứng chùm cửa lớp
-      const topSlice = allEntries.slice(0, 20).map((item) => ({ ...item }));
+      // Bóc tách Top 40 người có Rank cao nhất để load vào bảng Hàng Chờ Học Ké UI (8/16/32/36/40) và nhóm đứng chùm cửa lớp
+      const topSlice = allEntries.slice(0, 40).map((item) => ({ ...item }));
       waitingQueueRef.current = topSlice;
       setWaitingQueue(topSlice);
       setQueueCount(rebuiltMap.size);
@@ -8711,79 +8721,56 @@ export function useClassroomEngine() {
 
         const fallbackDur5 = enqueued5 ? 15000 : 3800;
 
-        // Trong Luồng 5 (Đọc kết quả): Khi đọc đến tên của bạn trả lời nhanh nhất thì khóa camera vào bạn đó,
-        // và NGAY KHI ĐỌC XONG CÂU (onFinishEventItem / !isPlayingEvent) thì bỏ khóa camera ngay lập tức (không khóa theo thời gian cố định).
+        // Khóa camera vào bạn trả lời nhanh nhất TRONG LỚP trong 2s ngay khi mới vào Luồng 5
         if (flow5CameraLockTimerRef.current !== null) {
           window.clearTimeout(flow5CameraLockTimerRef.current);
           flow5CameraLockTimerRef.current = null;
         }
         flow5LockedStudentIdRef.current = null;
 
-        if (fastestLower && enqueued5) {
-          const flow5EnteredAtMs = Date.now();
-          const nameCharIdx = summarySpeech.toLowerCase().indexOf(fastestLower);
-          const prefixChars =
-            nameCharIdx >= 0
-              ? nameCharIdx
-              : Math.floor(summarySpeech.length * 0.55);
-          const delayToTop1NameMs = Math.max(
-            0,
-            Math.min(
-              4500,
-              Math.round(
-                (prefixChars / (16 * (cfg.ttsRate || 1.05))) * 1000
-              )
-            )
+        const fastestClassLower = (cWinners[0]?.username || '')
+          .trim()
+          .toLowerCase();
+        if (fastestClassLower && !zombieEventStateRef.current.isActive) {
+          const fastestClassTarget = pilgrimsRef.current.find(
+            (p) =>
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit' &&
+              p.username.trim().toLowerCase() === fastestClassLower
           );
-
-          flow5CameraLockTimerRef.current = window.setTimeout(() => {
-            flow5CameraLockTimerRef.current = null;
-            if (
-              classBoardStateRef.current.phase !== 'result_summary' ||
-              classBoardStateRef.current.ttsFinishedForPhase ||
-              zombieEventStateRef.current.isActive
-            ) {
-              return;
-            }
-            const top1Target =
-              pilgrimsRef.current.find(
-                (p) =>
-                  p.state !== 'leave_side_to_aisle' &&
-                  p.state !== 'leave_down_exit' &&
-                  p.username.trim().toLowerCase() === fastestLower
-              ) ||
-              doorCrowdRef.current.find(
-                (p) => p.username.trim().toLowerCase() === fastestLower
-              );
-            if (!top1Target) return;
-
+          if (fastestClassTarget) {
             const nowCam = Date.now();
-            flow5LockedStudentIdRef.current = top1Target.id;
+            const zoomDurationMs = 2000;
+            flow5LockedStudentIdRef.current = fastestClassTarget.id;
             setCameraFocus((prevCam) => {
-              // Cho phép các camera khác xuất hiện cùng lúc cướp quyền điều khiển camera
               if (prevCam.lockedUntil && nowCam < prevCam.lockedUntil) {
                 return prevCam;
               }
-              if (
-                prevCam.pilgrimId &&
-                prevCam.startedAt &&
-                prevCam.startedAt >= flow5EnteredAtMs &&
-                nowCam < prevCam.until
-              ) {
-                return prevCam;
-              }
               return {
-                pilgrimId: top1Target.id,
+                pilgrimId: fastestClassTarget.id,
                 focusRole: null,
-                username: top1Target.username,
+                username: fastestClassTarget.username,
                 reason: 'comment',
-                isBot: top1Target.isBot,
+                isBot: fastestClassTarget.isBot,
                 startedAt: nowCam,
-                until: nowCam + fallbackDur5,
+                until: nowCam + zoomDurationMs,
                 lockedUntil: undefined,
               };
             });
-          }, delayToTop1NameMs);
+
+            flow5CameraLockTimerRef.current = window.setTimeout(() => {
+              flow5CameraLockTimerRef.current = null;
+              if (flow5LockedStudentIdRef.current === fastestClassTarget.id) {
+                flow5LockedStudentIdRef.current = null;
+              }
+              setCameraFocus((prevCam) =>
+                prevCam.pilgrimId === fastestClassTarget.id &&
+                !prevCam.lockedUntil
+                  ? { pilgrimId: null, focusRole: null, until: 0 }
+                  : prevCam
+              );
+            }, zoomDurationMs);
+          }
         }
 
         const resultSummaryState: ClassBoardRuntimeState = {
@@ -8814,7 +8801,6 @@ export function useClassroomEngine() {
       // CHUYỂN TỪ LUỒNG 5 (result_summary) -> LUỒNG 6 (ranking_board: Đọc xếp hạng & Hiện BXH Trong Lớp)
       // ============================================================================
       if (prev.phase === 'result_summary') {
-        // Khi hết Luồng 5 -> bỏ lock camera Top 1 của Luồng 5 (nếu chưa bị camera khác cướp)
         if (flow5CameraLockTimerRef.current !== null) {
           window.clearTimeout(flow5CameraLockTimerRef.current);
           flow5CameraLockTimerRef.current = null;

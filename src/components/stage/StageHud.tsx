@@ -367,7 +367,10 @@ const StageHudInner: React.FC<StageHudProps> = ({
     showNoticeBoardBox = false,
     showToastBox = true,
     lotusLeaderboardMaxRanks = 5,
-    waitingQueueMaxRanks = 10,
+    waitingQueueMaxRanks = 8,
+    waitingQueueBgColor = 'black',
+    waitingQueueAvatarScale = 1,
+    waitingQueueScoreScale = 1,
     hudOpacity = 0.9,
     noticeBoardOpacity,
     grandEventOpacity,
@@ -393,7 +396,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const safeWaitingQueueFontSize = Math.max(7, Math.min(22, waitingQueueFontSize || 9.5));
   const safeToastFontSize = Math.max(7, Math.min(24, toastFontSize || 10));
   const safeLotusLeaderboardMaxRanks = Math.max(1, Math.min(20, lotusLeaderboardMaxRanks || 5));
-  const safeWaitingQueueMaxRanks = Math.max(1, Math.min(15, waitingQueueMaxRanks || 10));
+  const safeWaitingQueueMaxRanks = Math.max(1, Math.min(28, waitingQueueMaxRanks || 8));
 
   const defaultOp = clampOpacity(hudOpacity, 0.9);
   const opClassBoard = clampOpacity(classBoardOpacity, 0.42);
@@ -466,7 +469,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
     x: 364,
     y: 58,
     width: 166,
-    height: 86,
+    height: 106,
   };
 
   const safeNoticeBoardBox = noticeBoardBox || {
@@ -677,7 +680,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
             <span className="text-stone-400 italic truncate">Chưa có</span>
           </div>
           <span className="font-mono text-stone-500 text-[8.5px] shrink-0">
-            +{defaultPts}đ
+            +{defaultPts}
           </span>
         </div>
       );
@@ -722,7 +725,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
 
         <div className="flex items-center gap-1 shrink-0 font-mono">
           <span className="px-1 py-0.1 rounded bg-emerald-500/35 border border-emerald-300/70 text-emerald-200 font-black text-[8.5px]">
-            +{pts}đ
+            +{pts}
           </span>
           <span className="text-amber-200 text-[8px] font-semibold">
             ({Number(w.elapsedSec || 0).toFixed(1)}s)
@@ -1683,20 +1686,8 @@ const StageHudInner: React.FC<StageHudProps> = ({
               </div>
             </>
           ) : (
-            /* Engine 2: Bảng Thông Báo Tự Do */
+            /* Engine 2: Bảng Thông Báo Tự Do (Chỉ hiển thị nội dung, bỏ tiêu đề) */
             <div className="flex flex-col h-full justify-between">
-              <div
-                className="flex items-center gap-1.5 pb-1 shrink-0"
-                style={{
-                  borderBottom: '1px dashed rgba(254, 240, 138, 0.3)',
-                  fontSize: `${safeClassBoardFontSize}px`,
-                }}
-              >
-                <BellRing className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                <span className="font-extrabold tracking-wide text-amber-200 truncate">
-                  {noticeBoardTitle || 'Bảng Lớp 12A1'}
-                </span>
-              </div>
               <div
                 className="my-auto text-center text-white font-bold leading-relaxed whitespace-pre-line break-words px-2"
                 style={{ fontSize: `${safeClassBoardFontSize + 1}px` }}
@@ -1965,97 +1956,230 @@ const StageHudInner: React.FC<StageHudProps> = ({
         </div>
       )}
 
-      {/* 3.5. BẢNG HÀNG CHỜ VÀO LỚP (Ẩn trong khi sự kiện xảy ra, kết thúc hiện lên lại; chỉ hiển thị Rank - Tên - đ) */}
-      {showWaitingQueueBox && !isZombieEventActive && (
-        <div
-          onMouseDown={(e) => editLayoutMode && onStartDragHudBox('waitingQueueBox', e)}
-          onTouchStart={(e) => editLayoutMode && onStartDragHudBox('waitingQueueBox', e)}
-          className={`absolute z-30 rounded-lg border px-2 py-1.5 flex flex-col justify-between ${dragringClass}`}
-          style={{
-            left: `${safeWaitingQueueBox.x}px`,
-            top: `${safeWaitingQueueBox.y}px`,
-            width: `${safeWaitingQueueBox.width}px`,
-            height: `${safeWaitingQueueBox.height}px`,
-            ...buildBoxSurfaceStyle(opWaitingQueue, '34, 211, 238'),
-          }}
-        >
+      {/* 3.5. BẢNG HÀNG CHỜ HỌC KÉ (Ẩn trong khi sự kiện xảy ra; hiển thị lưới 4 cột Avatar lớn gắn thẻ điểm bên dưới, chỉ gắn tròn hạng 1-4 ở góc avatar) */}
+      {showWaitingQueueBox && !isZombieEventActive && (() => {
+        const displayQueueTitle =
+          !waitingQueueTitle || waitingQueueTitle === 'Hàng Chờ Vào Lớp'
+            ? 'Hàng chờ học ké'
+            : waitingQueueTitle;
+        const safeAvatarScale = Math.max(
+          0.4,
+          Math.min(2.2, Number(waitingQueueAvatarScale ?? 1))
+        );
+        const safeScoreScale = Math.max(
+          0.4,
+          Math.min(2.5, Number(waitingQueueScoreScale ?? 1))
+        );
+        const baseAvatarPx = Math.floor((safeWaitingQueueBox.width - 20) / 4) * 0.9;
+        const avatarSizePx = Math.max(
+          14,
+          Math.min(76, Math.round(baseAvatarPx * safeAvatarScale))
+        );
+        const rankBadgeSizePx = Math.max(
+          10,
+          Math.min(24, Math.round(avatarSizePx * 0.4))
+        );
+        const scoreFontPx = Math.max(
+          5.5,
+          Math.min(
+            24,
+            Number(((safeWaitingQueueFontSize - 1.5) * safeScoreScale).toFixed(1))
+          )
+        );
+        const scorePadX = Math.max(2.5, Number((scoreFontPx * 0.46).toFixed(1)));
+        const scorePadY = Math.max(0.5, Number((scoreFontPx * 0.14).toFixed(1)));
+        const scoreRadiusPx = Math.max(2.5, Number((scoreFontPx * 0.38).toFixed(1)));
+        const scoreMarginTopPx = -Math.max(
+          3,
+          Math.min(12, Math.round(avatarSizePx * 0.16))
+        );
+
+        const isWhiteBg = waitingQueueBgColor === 'white';
+        const bgRgb =
+          waitingQueueBgColor === 'white'
+            ? '255, 255, 255'
+            : waitingQueueBgColor === 'brown'
+            ? '69, 26, 3'
+            : waitingQueueBgColor === 'gray'
+            ? '71, 85, 105'
+            : '15, 23, 42';
+        const borderRgb =
+          waitingQueueBgColor === 'white'
+            ? '148, 163, 184'
+            : waitingQueueBgColor === 'brown'
+            ? '245, 158, 11'
+            : waitingQueueBgColor === 'gray'
+            ? '203, 213, 225'
+            : '34, 211, 238';
+        const titleColorClass = isWhiteBg
+          ? 'text-stone-950'
+          : waitingQueueBgColor === 'brown'
+          ? 'text-amber-200'
+          : waitingQueueBgColor === 'gray'
+          ? 'text-slate-100'
+          : 'text-cyan-200';
+        const surfaceStyle = buildBoxSurfaceStyle(
+          opWaitingQueue,
+          borderRgb,
+          0.65,
+          bgRgb
+        );
+        if (isWhiteBg && opWaitingQueue > 0.2) {
+          surfaceStyle.textShadow = 'none';
+        }
+
+        return (
           <div
-            className="flex items-center justify-between gap-1 pb-0.5 mb-1 shrink-0"
+            onMouseDown={(e) => editLayoutMode && onStartDragHudBox('waitingQueueBox', e)}
+            onTouchStart={(e) => editLayoutMode && onStartDragHudBox('waitingQueueBox', e)}
+            className={`absolute z-30 rounded-lg border px-1.5 py-1 flex flex-col justify-between ${dragringClass}`}
             style={{
-              fontSize: `${safeWaitingQueueFontSize}px`,
-              borderBottom:
-                opWaitingQueue > 0.05
-                  ? `1px solid rgba(34, 211, 238, ${(0.3 * opWaitingQueue).toFixed(2)})`
-                  : '1px solid transparent',
+              left: `${safeWaitingQueueBox.x}px`,
+              top: `${safeWaitingQueueBox.y}px`,
+              width: `${safeWaitingQueueBox.width}px`,
+              height: `${safeWaitingQueueBox.height}px`,
+              ...surfaceStyle,
             }}
           >
-            <div className="flex items-center gap-1 min-w-0">
-              <span className="font-extrabold tracking-wide text-cyan-200 truncate">
-                {waitingQueueTitle || 'Hàng Chờ Vào Lớp'}
+            <div
+              className="flex items-center justify-start gap-1 pb-0.5 mb-1 shrink-0 px-0.5"
+              style={{
+                fontSize: `${safeWaitingQueueFontSize}px`,
+                borderBottom:
+                  opWaitingQueue > 0.05
+                    ? isWhiteBg
+                      ? `1px solid rgba(15, 23, 42, ${(0.22 * opWaitingQueue).toFixed(2)})`
+                      : `1px solid rgba(${borderRgb}, ${(0.32 * opWaitingQueue).toFixed(2)})`
+                    : '1px solid transparent',
+              }}
+            >
+              <span className={`font-extrabold tracking-wide truncate ${titleColorClass}`}>
+                {displayQueueTitle}
               </span>
             </div>
-            <span className="font-mono font-extrabold text-amber-300 shrink-0">
-              ({typeof queueCount === 'number' ? queueCount : waitingQueue.length})
-            </span>
-          </div>
 
-          <div
-            className="space-y-0.5 flex-1 flex flex-col justify-start overflow-y-auto"
-            style={{ fontSize: `${Math.max(7.5, safeWaitingQueueFontSize - 0.5)}px` }}
-          >
-            {waitingQueue.length > 0 ? (
-              waitingQueue.slice(0, safeWaitingQueueMaxRanks).map((item, idx) => (
-                <div
-                  key={`${item.username}-${idx}`}
-                  className={`flex items-center justify-between gap-1 leading-tight px-1 py-0.5 rounded ${
-                    item.isGoldenPriority
-                      ? 'bg-amber-500/25 border border-yellow-300/75 text-yellow-200 shadow-[0_0_8px_rgba(250,204,21,0.35)]'
-                      : 'text-stone-100'
-                  }`}
-                >
-                  <div className="flex items-center gap-1 min-w-0 truncate">
-                    <b
-                      className={`font-mono shrink-0 ${
-                        item.isGoldenPriority ? 'text-yellow-300' : 'text-cyan-300'
-                      }`}
-                    >
-                      {item.isGoldenPriority ? '👑' : `#${item.rank || idx + 1}`}
-                    </b>
-                    <span
-                      className={`truncate ${
-                        item.isGoldenPriority
-                          ? 'text-yellow-300 font-black drop-shadow-[0_1px_4px_rgba(250,204,21,0.65)]'
-                          : ''
-                      }`}
-                    >
-                      {item.username}
-                    </span>
-                  </div>
-                  <span className="font-mono font-bold text-yellow-300 text-[8.5px] shrink-0">
-                    {item.points || 0}đ
-                  </span>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col">
+              {waitingQueue.length > 0 ? (
+                <div className="grid grid-cols-4 gap-x-1 gap-y-1.5 items-start content-start justify-items-center py-0.5">
+                  {waitingQueue.slice(0, safeWaitingQueueMaxRanks).map((item, idx) => {
+                    const rankNum = item.rank || idx + 1;
+                    const isTop4Rank = rankNum >= 1 && rankNum <= 4;
+                    const rankCircleClass = item.isGoldenPriority
+                      ? 'bg-gradient-to-br from-yellow-200 via-yellow-400 to-amber-500 text-stone-950 border-white shadow-[0_0_6px_rgba(250,204,21,0.95)]'
+                      : rankNum === 1
+                      ? 'bg-yellow-300 text-stone-950 border-yellow-100 shadow-[0_0_5px_rgba(250,204,21,0.9)]'
+                      : rankNum === 2
+                      ? 'bg-cyan-300 text-stone-950 border-cyan-100'
+                      : rankNum === 3
+                      ? 'bg-amber-400 text-stone-950 border-amber-100'
+                      : 'bg-emerald-400 text-stone-950 border-emerald-100';
+
+                    const avatarBorderClass = item.isGoldenPriority
+                      ? 'border-2 border-yellow-300 ring-2 ring-amber-400/90 shadow-[0_0_10px_rgba(250,204,21,0.95)]'
+                      : rankNum === 1
+                      ? 'border-2 border-yellow-300 shadow-[0_0_5px_rgba(250,204,21,0.55)]'
+                      : rankNum === 2
+                      ? 'border-[1.5px] border-cyan-300'
+                      : rankNum === 3
+                      ? 'border-[1.5px] border-amber-400'
+                      : rankNum === 4
+                      ? 'border-[1.5px] border-emerald-400'
+                      : isWhiteBg
+                      ? 'border border-slate-400/80'
+                      : 'border border-white/45';
+
+                    return (
+                      <div
+                        key={`${item.username}-${idx}`}
+                        title={`#${rankNum} ${item.username} (${item.points || 0})`}
+                        className="flex flex-col items-center justify-start min-w-0 w-full"
+                      >
+                        <div
+                          className="relative shrink-0"
+                          style={{
+                            width: `${avatarSizePx}px`,
+                            height: `${avatarSizePx}px`,
+                          }}
+                        >
+                          {item.avatarUrl ? (
+                            <img
+                              src={item.avatarUrl}
+                              alt={item.username}
+                              referrerPolicy="no-referrer"
+                              className={`w-full h-full rounded-full object-cover bg-slate-900 ${avatarBorderClass}`}
+                            />
+                          ) : (
+                            <div
+                              className={`w-full h-full rounded-full flex items-center justify-center font-black text-white select-none bg-cyan-800 ${avatarBorderClass}`}
+                              style={{
+                                fontSize: `${Math.max(9, Math.round(avatarSizePx * 0.42))}px`,
+                              }}
+                            >
+                              {(item.username || 'H').charAt(0).toUpperCase()}
+                            </div>
+                          )}
+
+                          {/* Hình tròn nhỏ gắn lên góc avatar: chỉ hiển thị cho Hạng 1, 2, 3, 4 (hoặc người tặng quà Hóa Vàng) */}
+                          {(isTop4Rank || item.isGoldenPriority) && (
+                            <span
+                              className={`absolute -top-0.5 -left-0.5 rounded-full font-mono font-black flex items-center justify-center border leading-none z-10 ${rankCircleClass}`}
+                              style={{
+                                width: `${rankBadgeSizePx}px`,
+                                height: `${rankBadgeSizePx}px`,
+                                fontSize: `${Math.max(7, Math.round(rankBadgeSizePx * 0.62))}px`,
+                              }}
+                            >
+                              {item.isGoldenPriority ? '👑' : rankNum}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Thẻ điểm gắn ngay phía dưới avatar (bỏ đơn vị đ, tự động scale kích thước thẻ theo cỡ chữ điểm) */}
+                        <div
+                          className={`z-10 border font-mono font-extrabold leading-none whitespace-nowrap shadow-[0_1px_3px_rgba(0,0,0,0.95)] ${
+                            item.isGoldenPriority
+                              ? 'bg-amber-950/95 border-yellow-300 text-yellow-200 shadow-[0_0_6px_rgba(250,204,21,0.85)]'
+                              : 'bg-slate-950/95 border-cyan-400/75 text-yellow-300'
+                          }`}
+                          style={{
+                            marginTop: `${scoreMarginTopPx}px`,
+                            fontSize: `${scoreFontPx}px`,
+                            padding: `${scorePadY}px ${scorePadX}px`,
+                            borderRadius: `${scoreRadiusPx}px`,
+                          }}
+                        >
+                          {item.points || 0}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))
-            ) : (
-              <div className="my-auto text-center text-stone-400 italic leading-tight">
-                Comment &quot;vào lớp&quot; để xếp hàng
-              </div>
+              ) : (
+                <div
+                  className={`my-auto text-center italic leading-tight px-1 ${
+                    isWhiteBg ? 'text-stone-600' : 'text-stone-400'
+                  }`}
+                  style={{ fontSize: `${Math.max(7.5, safeWaitingQueueFontSize - 0.5)}px` }}
+                >
+                  Comment &quot;vào lớp&quot; để xếp hàng
+                </div>
+              )}
+            </div>
+
+            {editLayoutMode && (
+              <>
+                <CornerResizeHandles
+                  boxKey="waitingQueueBox"
+                  onStartResizeHudBox={onStartResizeHudBox}
+                />
+                <span className="absolute -top-5 right-0 px-1.5 py-0.5 rounded bg-cyan-400 text-stone-950 text-[9px] font-bold flex items-center gap-0.5 whitespace-nowrap shadow">
+                  <Move className="w-2.5 h-2.5" /> {displayQueueTitle} ({safeWaitingQueueBox.width}×{safeWaitingQueueBox.height})
+                </span>
+              </>
             )}
           </div>
-
-          {editLayoutMode && (
-            <>
-              <CornerResizeHandles
-                boxKey="waitingQueueBox"
-                onStartResizeHudBox={onStartResizeHudBox}
-              />
-              <span className="absolute -top-5 right-0 px-1.5 py-0.5 rounded bg-cyan-400 text-stone-950 text-[9px] font-bold flex items-center gap-0.5 whitespace-nowrap shadow">
-                <Move className="w-2.5 h-2.5" /> {waitingQueueTitle || 'Hàng Chờ'} ({safeWaitingQueueBox.width}×{safeWaitingQueueBox.height})
-              </span>
-            </>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* 4. BẢNG TIN LỚP HỌC (Tạm ẩn khi sự kiện Zombie, khi khóa Camera, hoặc khi có người đứng chịu phạt trên lớp) */}
       {showNoticeBoardBox &&
@@ -2077,27 +2201,12 @@ const StageHudInner: React.FC<StageHudProps> = ({
           }}
         >
           <div
-            className="flex items-center gap-1 pb-0.5 mb-1 shrink-0"
-            style={{
-              fontSize: `${safeNoticeFontSize}px`,
-              borderBottom:
-                opNotice > 0.05
-                  ? `1px solid rgba(245, 158, 11, ${(0.3 * opNotice).toFixed(2)})`
-                  : '1px solid transparent',
-            }}
-          >
-            <BellRing className="w-3 h-3 text-amber-400 shrink-0" />
-            <span className="font-extrabold tracking-wide text-amber-300 truncate">
-              {noticeBoardTitle || 'Bảng Tin Lớp'}
-            </span>
-          </div>
-          <div
-            className="flex-1 overflow-hidden text-stone-100 leading-snug whitespace-pre-line break-words"
+            className="flex-1 overflow-hidden text-stone-100 leading-snug whitespace-pre-line break-words flex items-center"
             style={{
               fontSize: `${safeNoticeFontSize}px`,
             }}
           >
-            {noticeBoardContent}
+            <div className="w-full">{noticeBoardContent}</div>
           </div>
 
           {editLayoutMode && (

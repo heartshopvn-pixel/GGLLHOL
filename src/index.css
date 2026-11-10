@@ -484,4 +484,26 @@
   will-change: opacity;
 }
 
+/* Hiệu ứng vương miện Top 1 lớp bồng bềnh nhẹ nhàng và phát sáng vàng rực trên đỉnh đầu */
+@keyframes top1CrownFloatGlow {
+  0%, 100% {
+    transform: translate(-50%, -85%) translateY(0px);
+    filter: drop-shadow(0 0 3.5px rgba(254, 240, 138, 0.95))
+            drop-shadow(0 0 7px rgba(250, 204, 21, 0.7))
+            drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
+  }
+  50% {
+    transform: translate(-50%, -85%) translateY(-2.5px);
+    filter: drop-shadow(0 0 5px rgba(254, 249, 195, 1))
+            drop-shadow(0 0 10px rgba(250, 204, 21, 0.95))
+            drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
+  }
+}
+
+.top1-crown-float-glow {
+  animation: top1CrownFloatGlow 2.2s ease-in-out infinite;
+  will-change: transform, filter;
+}
+
+
 
