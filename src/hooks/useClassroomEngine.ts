@@ -5152,23 +5152,7 @@ export function useClassroomEngine() {
             }
           } else if (state === 'pray_seated') {
             prayTimer += dt;
-            // Học sinh trong lớp ngồi cố định, chỉ rời lớp khi bị loại ở giây thứ 18 sau câu hỏi (hoặc khi tắt bảng lớp chạy chế độ tự do)
-            const bStateNow = classBoardStateRef.current;
-            const isQuizMode =
-              (bStateNow.engine || cfg.hudLayout.classBoardEngine || 'english_quiz') ===
-              'english_quiz';
-            const isCurrentlySpoken =
-              soundEngine.getEventQueueSnapshot().activeItem?.meta?.pilgrimId === p.id;
-            if (
-              !isQuizMode &&
-              !bStateNow.isRunning &&
-              prayTimer >= p.totalPrayDuration &&
-              !isCurrentlySpoken
-            ) {
-              if (p.slotId) freedSlotIds.push(p.slotId);
-              state = 'leave_side_to_aisle';
-              stateTimer = 0;
-            }
+            // Học sinh trong lớp ngồi cố định tại bàn, tuyệt đối KHÔNG tự ý rời lớp khi tạm dừng tiết học hoặc chuyển sang Bảng Thông Báo
           } else if (state === 'walk_to_teacher_gift') {
             // Học sinh cầm hoa trước ngực đi tới vị trí bên cạnh Giáo viên (cạnh trái hoặc phải, không chạm giáo viên)
             const moveSpeed = cfg.studentGiftSpeed ?? Math.max(p.speed, 185);
