@@ -315,10 +315,10 @@ function sampleRandomQuestions(
 
 /**
  * Xây dựng bộ đề thi 15 phút (15 câu) chia làm 4 tầng độ khó tăng dần theo đúng yêu cầu:
- * - Câu 1..5 (5 câu đầu): Trích ngẫu nhiên từ bộ 500 từ vựng cơ bản (ưu tiên bộ 500 từ trong quizDecks nếu người dùng đã tải lên).
- * - Câu 6..10 (5 câu tiếp): Trích ngẫu nhiên từ list 300 từ vựng trung bình (300_tu_vung_tieng_anh_trung_binh.txt).
- * - Câu 11..13 (3 câu tiếp): Trích ngẫu nhiên từ list 200 từ vựng khó vừa phải (200_tu_vung_tieng_anh_kho_vua_phai.txt).
- * - Câu 14..15 (2 câu cuối): Trích ngẫu nhiên từ list 200 từ vựng khó nâng cao (200_tu_vung_tieng_anh_kho_nang_cao.txt).
+ * - Câu 1..9 (9 câu đầu): Trích ngẫu nhiên từ bộ 500 từ vựng dễ / cơ bản (ưu tiên bộ 500 từ trong quizDecks nếu người dùng đã tải lên).
+ * - Câu 10..12 (3 câu kế): Trích ngẫu nhiên từ list 300 từ vựng trung bình (300_tu_vung_tieng_anh_trung_binh.txt).
+ * - Câu 13..14 (2 câu kế): Trích ngẫu nhiên từ list 200 từ vựng khó vừa phải (200_tu_vung_tieng_anh_kho_vua_phai.txt).
+ * - Câu 15 (1 câu cuối): Trích ngẫu nhiên từ list 200 từ vựng khó nâng cao (200_tu_vung_tieng_anh_kho_nang_cao.txt).
  */
 export function build15MinuteTieredRoundQuestions(
   cfg?: GameConfig,
@@ -335,7 +335,7 @@ export function build15MinuteTieredRoundQuestions(
     ) ||
     decks.find((d) => d.id === 'deck-500-co-ban');
   const pool500 =
-    deck500 && deck500.questions.length >= 5
+    deck500 && deck500.questions.length >= 9
       ? deck500.questions
       : VOCAB_500_BASIC_ITEMS;
 
@@ -349,7 +349,7 @@ export function build15MinuteTieredRoundQuestions(
         d.name.toLowerCase().includes('trung bình')
     );
   const pool300 =
-    deck300 && deck300.questions.length >= 5
+    deck300 && deck300.questions.length >= 3
       ? deck300.questions
       : VOCAB_300_MEDIUM_ITEMS;
 
@@ -363,7 +363,7 @@ export function build15MinuteTieredRoundQuestions(
         d.name.toLowerCase().includes('khó vừa phải')
     );
   const pool200Moderate =
-    deck200Moderate && deck200Moderate.questions.length >= 3
+    deck200Moderate && deck200Moderate.questions.length >= 2
       ? deck200Moderate.questions
       : VOCAB_200_MODERATELY_HARD_ITEMS;
 
@@ -377,7 +377,7 @@ export function build15MinuteTieredRoundQuestions(
         d.name.toLowerCase().includes('khó nâng cao')
     );
   const pool200Advanced =
-    deck200Advanced && deck200Advanced.questions.length >= 2
+    deck200Advanced && deck200Advanced.questions.length >= 1
       ? deck200Advanced.questions
       : VOCAB_200_ADVANCED_HARD_ITEMS;
 
@@ -386,28 +386,28 @@ export function build15MinuteTieredRoundQuestions(
     usedEnLower.add(excludeEnLower.trim().toLowerCase());
   }
 
-  // Trích ngẫu nhiên theo đúng cơ cấu 5 + 5 + 3 + 2 = 15 câu
+  // Trích ngẫu nhiên theo đúng cơ cấu 9 + 3 + 2 + 1 = 15 câu
   const tier1 = sampleRandomQuestions(
     pool500,
-    5,
+    9,
     usedEnLower,
     deck500?.name || '500_tu_vung_co_ban.txt'
   );
   const tier2 = sampleRandomQuestions(
     pool300,
-    5,
+    3,
     usedEnLower,
     deck300?.name || '300_tu_vung_tieng_anh_trung_binh.txt'
   );
   const tier3 = sampleRandomQuestions(
     pool200Moderate,
-    3,
+    2,
     usedEnLower,
     deck200Moderate?.name || '200_tu_vung_tieng_anh_kho_vua_phai.txt'
   );
   const tier4 = sampleRandomQuestions(
     pool200Advanced,
-    2,
+    1,
     usedEnLower,
     deck200Advanced?.name || '200_tu_vung_tieng_anh_kho_nang_cao.txt'
   );

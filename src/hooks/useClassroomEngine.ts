@@ -569,10 +569,18 @@ export function useClassroomEngine() {
                 : DEFAULT_GUIDE_ITEMS,
             },
           };
+          const isOld5532Queue =
+            Array.isArray(mergedCfg.customQuizQuestions) &&
+            mergedCfg.customQuizQuestions.length === 15 &&
+            Boolean(
+              mergedCfg.customQuizQuestions[5]?.deckName &&
+                mergedCfg.customQuizQuestions[5].deckName.includes('300')
+            );
           const hasTiered15Queue =
             Array.isArray(mergedCfg.customQuizQuestions) &&
             mergedCfg.customQuizQuestions.length > 0 &&
-            mergedCfg.customQuizQuestions.some((q) => Boolean(q?.deckName));
+            mergedCfg.customQuizQuestions.some((q) => Boolean(q?.deckName)) &&
+            !isOld5532Queue;
           if (!hasTiered15Queue) {
             mergedCfg.customQuizQuestions =
               build15MinuteTieredRoundQuestions(mergedCfg);

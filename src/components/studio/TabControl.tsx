@@ -1201,13 +1201,13 @@ export const TabControl: React.FC<TabControlProps> = ({
                           customQuizQuestions: tiered15,
                         });
                         setQuizImportFeedback(
-                          '🎯 Đã trích ngẫu nhiên 15 câu chuẩn (5 câu 500 từ + 5 câu 300 TB + 3 câu 200 Khó vừa + 2 câu 200 Nâng cao)!'
+                          '🎯 Đã trích ngẫu nhiên 15 câu chuẩn (9 câu 500 từ dễ + 3 câu 300 TB + 2 câu 200 Khó vừa + 1 câu 200 Nâng cao)!'
                         );
                       }}
-                      title="Trích ngẫu nhiên 15 câu theo đúng cấu trúc: 5 câu đầu bộ 500 từ + 5 câu bộ 300 trung bình + 3 câu bộ 200 khó vừa + 2 câu cuối bộ 200 khó nâng cao"
+                      title="Trích ngẫu nhiên 15 câu theo đúng cấu trúc: 9 câu đầu bộ 500 từ dễ + 3 câu bộ 300 trung bình + 2 câu bộ 200 khó vừa + 1 câu cuối bộ 200 khó nâng cao"
                       className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
                     >
-                      🎯 Trích 15 câu (5+5+3+2)
+                      🎯 Trích 15 câu (9+3+2+1)
                     </button>
                     <button
                       type="button"
