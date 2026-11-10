@@ -542,7 +542,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const totalDurMs = Math.max(1000, classBoardState?.totalDurationMs || 15000);
   const remMs = Math.max(0, classBoardState?.timeLeftMs ?? totalDurMs);
   const timeRatio = isBoardRunning ? Math.max(0, Math.min(1, remMs / totalDurMs)) : 1;
-  const timePercent = Math.round(timeRatio * 100);
+  const timePercent = Math.max(0, Math.min(100, Math.round(timeRatio * 1000) / 10));
   const remSec = Math.ceil(remMs / 1000);
   const boardWinners = classBoardState?.winners || [];
   const classWinners =
@@ -1637,7 +1637,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 {/* Thanh đếm ngược */}
                 <div className="w-full h-2 rounded-full bg-slate-950/80 border border-white/25 overflow-hidden p-0.5">
                   <div
-                    className={`h-full rounded-full transition-all duration-200 ${
+                    className={`h-full rounded-full transition-[width] duration-100 ease-linear ${
                       isAnswerFlashPhase || isLegacyRevealed
                         ? 'bg-gradient-to-r from-emerald-400 via-lime-300 to-emerald-400'
                         : timePercent > 50

@@ -1995,17 +1995,14 @@ export function useClassroomEngine() {
           }
         }
       } else if (!snap.isPlayingEvent) {
+        if (flow5CameraLockTimerRef.current !== null) {
+          window.clearTimeout(flow5CameraLockTimerRef.current);
+          flow5CameraLockTimerRef.current = null;
+        }
+        flow5LockedStudentIdRef.current = null;
         setCameraFocus((prev) => {
           const nowCheck = Date.now();
           if (prev.lockedUntil && nowCheck < prev.lockedUntil) return prev;
-          if (
-            classBoardStateRef.current.phase === 'result_summary' &&
-            flow5LockedStudentIdRef.current !== null &&
-            prev.pilgrimId === flow5LockedStudentIdRef.current &&
-            nowCheck < prev.until
-          ) {
-            return prev;
-          }
           if (prev.reason === 'manual' && nowCheck < prev.until) return prev;
           if (prev.focusRole && nowCheck < prev.until) return prev;
           return { pilgrimId: null, focusRole: null, until: 0 };
@@ -2588,11 +2585,38 @@ export function useClassroomEngine() {
         setClassBoardState(nextAsking);
       }
 
+      if (
+        stepLabel.startsWith('Luồng 5') ||
+        (token &&
+          curBoard.activeFlowToken === token &&
+          curBoard.phase === 'result_summary')
+      ) {
+        if (flow5CameraLockTimerRef.current !== null) {
+          window.clearTimeout(flow5CameraLockTimerRef.current);
+          flow5CameraLockTimerRef.current = null;
+        }
+        const lockedTop1Id = flow5LockedStudentIdRef.current;
+        flow5LockedStudentIdRef.current = null;
+        setCameraFocus((prevCam) => {
+          if (prevCam.lockedUntil && Date.now() < prevCam.lockedUntil) {
+            return prevCam;
+          }
+          if (
+            (lockedTop1Id !== null && prevCam.pilgrimId === lockedTop1Id) ||
+            prevCam.reason === 'comment'
+          ) {
+            return { pilgrimId: null, focusRole: null, until: 0 };
+          }
+          return prevCam;
+        });
+      }
+
       if (token && curBoard.activeFlowToken === token) {
+        const latestBoard = classBoardStateRef.current;
         const nextBoard: ClassBoardRuntimeState = {
-          ...curBoard,
+          ...latestBoard,
           ttsFinishedForPhase: true,
-          ttsFinishedAtElapsedMs: curBoard.elapsedPhaseMs || 0,
+          ttsFinishedAtElapsedMs: latestBoard.elapsedPhaseMs || 0,
         };
         classBoardStateRef.current = nextBoard;
         setClassBoardState(nextBoard);
@@ -2972,8 +2996,27 @@ export function useClassroomEngine() {
             };
           });
 
+        const liveBoard = classBoardStateRef.current;
+        const liveTimeLeft =
+          liveBoard.phaseEndAt && liveBoard.isRunning
+            ? Math.max(0, liveBoard.phaseEndAt - Date.now())
+            : liveBoard.timeLeftMs;
+        const liveElapsed =
+          liveBoard.phaseEndAt &&
+          liveBoard.totalDurationMs &&
+          liveBoard.isRunning
+            ? Math.max(0, liveBoard.totalDurationMs - liveTimeLeft)
+            : liveBoard.elapsedPhaseMs;
+
         const nextState: ClassBoardRuntimeState = {
           ...prev,
+          lessonStepNumber: liveBoard.lessonStepNumber,
+          idleChatTriggered: liveBoard.idleChatTriggered,
+          activeFlowToken: liveBoard.activeFlowToken,
+          ttsFinishedForPhase: liveBoard.ttsFinishedForPhase,
+          timeLeftMs: liveTimeLeft,
+          elapsedPhaseMs: liveElapsed,
+          phaseEndAt: liveBoard.phaseEndAt,
           winners: nextWinners,
           classWinners: nextClassWinners,
           outsideWinners: nextOutsideWinners,
@@ -7804,8 +7847,17 @@ export function useClassroomEngine() {
         prev.currentQuestion?.en?.trim().toLowerCase() !==
         curQ.en.trim().toLowerCase();
 
+      const liveBoard = classBoardStateRef.current;
+      const liveTimeLeftMs =
+        durationSettingChanged && !nextIsRunning
+          ? nextDurMs
+          : liveBoard.phaseEndAt && nextIsRunning
+          ? Math.max(0, liveBoard.phaseEndAt - Date.now())
+          : liveBoard.timeLeftMs;
+
       const nextState: ClassBoardRuntimeState = {
         ...prev,
+        ...liveBoard,
         engine: nextEngine,
         isRunning: nextIsRunning,
         questionIndex: safeIdx,
@@ -7816,12 +7868,16 @@ export function useClassroomEngine() {
           prev.lessonStartText ||
           'Chào mừng các em đến với tiết Tiếng Anh lớp 12A1! Các em hãy chú ý lên bảng và bình luận đáp án thật nhanh để giành ghế ngồi trong lớp nhé!',
         totalDurationMs: nextTotalDurationMs,
-        timeLeftMs: nextTimeLeftMs,
+        timeLeftMs: liveTimeLeftMs,
+        phaseEndAt:
+          durationSettingChanged && nextIsRunning
+            ? Date.now() + liveTimeLeftMs
+            : liveBoard.phaseEndAt,
       };
       classBoardStateRef.current = nextState;
 
       if (questionWordChanged && nextIsRunning && prev.phase === 'asking') {
-        scheduleQuizNpcAnswers(0, nextTimeLeftMs);
+        scheduleQuizNpcAnswers(0, liveTimeLeftMs);
       }
       return nextState;
     });
@@ -8180,13 +8236,14 @@ export function useClassroomEngine() {
         (peersNow.obsPeers > 0 ||
           (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
 
-      // Đồng bộ theo Mốc Thời Gian Tuyệt Đối (phaseEndAt) trên Tab Điều Khiển để không bao giờ bị trôi/lệch nhịp dù trình duyệt có giảm nhịp nền
+      // Đồng bộ theo Mốc Thời Gian Tuyệt Đối (phaseEndAt) trên cả Tab Master và Tab Điều Khiển để đồng hồ Luồng 1, 2, 3 luôn mượt tuyệt đối, không bị giật/trôi khi NPC chat hoặc trình duyệt khựng nhẹ
+      const nowWallMs = Date.now();
       const nextLeft =
-        isPassiveFollowerTab && prev.phaseEndAt
-          ? Math.max(0, prev.phaseEndAt - Date.now())
+        prev.phaseEndAt && prev.phaseEndAt > 0
+          ? Math.max(0, prev.phaseEndAt - nowWallMs)
           : Math.max(0, prev.timeLeftMs - dtMs);
       const nextElapsed =
-        isPassiveFollowerTab && prev.phaseEndAt && prev.totalDurationMs
+        prev.phaseEndAt && prev.phaseEndAt > 0 && prev.totalDurationMs
           ? Math.max(0, prev.totalDurationMs - nextLeft)
           : (prev.elapsedPhaseMs || 0) + dtMs;
 
@@ -8323,7 +8380,10 @@ export function useClassroomEngine() {
         classBoardStateRef.current = tickState;
         const crossedHintThreshold =
           (prev.elapsedPhaseMs || 0) < 5000 && nextElapsed >= 5000;
+        const isActiveCountdownPhase =
+          prev.phase === 'asking' || prev.phase === 'preparing';
         const shouldCommitBoardRender =
+          isActiveCountdownPhase ||
           nextStepNum !== prev.lessonStepNumber ||
           nextIdleTriggered !== prev.idleChatTriggered ||
           nextActiveToken !== prev.activeFlowToken ||
@@ -8369,6 +8429,7 @@ export function useClassroomEngine() {
           elapsedPhaseMs: 0,
           timeLeftMs: prepDurMs,
           totalDurationMs: prepDurMs,
+          phaseEndAt: Date.now() + prepDurMs,
           showResultEngine: false,
           seatUpdateTriggered: false,
         };
@@ -8428,6 +8489,7 @@ export function useClassroomEngine() {
           elapsedPhaseMs: 0,
           timeLeftMs: askDurMs,
           totalDurationMs: askDurMs,
+          phaseEndAt: Date.now() + askDurMs,
           totalQuestions: quizList.length,
           currentQuestion: curQuiz,
           showResultEngine: false,
@@ -8498,6 +8560,7 @@ export function useClassroomEngine() {
           elapsedPhaseMs: 0,
           timeLeftMs: fallbackDur4,
           totalDurationMs: fallbackDur4,
+          phaseEndAt: Date.now() + fallbackDur4,
           showResultEngine: false,
           seatUpdateTriggered: false,
           totalQuestions: quizList.length,
@@ -8648,37 +8711,36 @@ export function useClassroomEngine() {
 
         const fallbackDur5 = enqueued5 ? 15000 : 3800;
 
-        // Trong Luồng 5 (Đọc kết quả): Khi đọc đến tên của bạn Top 1 thì lock camera vào bạn Top 1,
-        // hết Luồng 5 thì bỏ lock. Camera này không gắn lockedUntil nên có thể bị cướp bởi các camera khác xuất hiện cùng lúc.
+        // Trong Luồng 5 (Đọc kết quả): Khi đọc đến tên của bạn trả lời nhanh nhất thì khóa camera vào bạn đó,
+        // và NGAY KHI ĐỌC XONG CÂU (onFinishEventItem / !isPlayingEvent) thì bỏ khóa camera ngay lập tức (không khóa theo thời gian cố định).
         if (flow5CameraLockTimerRef.current !== null) {
           window.clearTimeout(flow5CameraLockTimerRef.current);
           flow5CameraLockTimerRef.current = null;
         }
         flow5LockedStudentIdRef.current = null;
 
-        if (fastestLower) {
+        if (fastestLower && enqueued5) {
           const flow5EnteredAtMs = Date.now();
           const nameCharIdx = summarySpeech.toLowerCase().indexOf(fastestLower);
           const prefixChars =
             nameCharIdx >= 0
               ? nameCharIdx
               : Math.floor(summarySpeech.length * 0.55);
-          const delayToTop1NameMs = enqueued5
-            ? Math.max(
-                0,
-                Math.min(
-                  4500,
-                  Math.round(
-                    (prefixChars / (16 * (cfg.ttsRate || 1.05))) * 1000
-                  )
-                )
+          const delayToTop1NameMs = Math.max(
+            0,
+            Math.min(
+              4500,
+              Math.round(
+                (prefixChars / (16 * (cfg.ttsRate || 1.05))) * 1000
               )
-            : 250;
+            )
+          );
 
           flow5CameraLockTimerRef.current = window.setTimeout(() => {
             flow5CameraLockTimerRef.current = null;
             if (
               classBoardStateRef.current.phase !== 'result_summary' ||
+              classBoardStateRef.current.ttsFinishedForPhase ||
               zombieEventStateRef.current.isActive
             ) {
               return;
@@ -8733,6 +8795,7 @@ export function useClassroomEngine() {
           elapsedPhaseMs: 0,
           timeLeftMs: fallbackDur5,
           totalDurationMs: fallbackDur5,
+          phaseEndAt: Date.now() + fallbackDur5,
           showResultEngine: true,
           seatUpdateTriggered: true,
           totalQuestions: quizList.length,
@@ -8889,6 +8952,7 @@ export function useClassroomEngine() {
           elapsedPhaseMs: 0,
           timeLeftMs: fallbackDur6,
           totalDurationMs: fallbackDur6,
+          phaseEndAt: Date.now() + fallbackDur6,
           showResultEngine: true,
           seatUpdateTriggered: true,
           totalQuestions: quizList.length,
@@ -9025,6 +9089,7 @@ export function useClassroomEngine() {
             elapsedPhaseMs: 0,
             timeLeftMs: fallbackDurRecord,
             totalDurationMs: fallbackDurRecord,
+            phaseEndAt: Date.now() + fallbackDurRecord,
             showResultEngine: false,
             seatUpdateTriggered: true,
             recordNoticeText: recordSpeech,
@@ -9184,6 +9249,7 @@ export function useClassroomEngine() {
             elapsedPhaseMs: 0,
             timeLeftMs: fallbackDurPunish,
             totalDurationMs: fallbackDurPunish,
+            phaseEndAt: Date.now() + fallbackDurPunish,
             showResultEngine: false,
             seatUpdateTriggered: true,
             punishmentNoticeText: punishSpeech,
@@ -9292,6 +9358,7 @@ export function useClassroomEngine() {
         elapsedPhaseMs: 0,
         timeLeftMs: prepDurMs,
         totalDurationMs: prepDurMs,
+        phaseEndAt: Date.now() + prepDurMs,
         winners: [],
         classWinners: [],
         outsideWinners: [],
@@ -9988,6 +10055,7 @@ export function useClassroomEngine() {
             elapsedPhaseMs: 0,
             timeLeftMs: prepDurMs,
             totalDurationMs: prepDurMs,
+            phaseEndAt: Date.now() + prepDurMs,
             winners: [],
             classWinners: [],
             outsideWinners: [],
@@ -10838,8 +10906,10 @@ export function useClassroomEngine() {
               p.patch.customQuizQuestions.length > 0
             ) {
               setClassBoardState((prev) => {
-                const updated = {
+                const liveBoard = classBoardStateRef.current;
+                const updated: ClassBoardRuntimeState = {
                   ...prev,
+                  ...liveBoard,
                   totalQuestions: p.patch.customQuizQuestions.length,
                 };
                 classBoardStateRef.current = updated;
@@ -13485,6 +13555,7 @@ export function useClassroomEngine() {
         elapsedPhaseMs: 0,
         timeLeftMs: prepDurMs,
         totalDurationMs: prepDurMs,
+        phaseEndAt: Date.now() + prepDurMs,
       };
       classBoardStateRef.current = resumedBoard;
       setClassBoardState(resumedBoard);
