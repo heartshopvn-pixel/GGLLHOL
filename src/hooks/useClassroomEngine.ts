@@ -3296,10 +3296,31 @@ export function useClassroomEngine() {
   // HỆ THỐNG SỰ KIỆN "ZOMBIE TẤN CÔNG" (LUỒNG SỰ KIỆN 1 -> 6)
   // ============================================================================
   const recordZombieDamageContribution = useCallback(
-    (username: string, addedDamage: number, isSeated: boolean, avatarColor?: string, avatarUrl?: string | null) => {
-      if (!username || addedDamage <= 0) return;
+    (
+      username: string,
+      addedDamage: number,
+      isSeated: boolean,
+      avatarColor?: string,
+      avatarUrl?: string | null,
+      isBot?: boolean
+    ) => {
+      if (!username || addedDamage <= 0 || isBot) return;
       const cleanName = username.trim();
       const lower = cleanName.toLowerCase();
+
+      // Nếu là NPC tấn công (trong lớp hoặc trong hàng chờ) thì KHÔNG tính điểm vào Bảng Chiến Công
+      const seatedMatch = pilgrimsRef.current.find(
+        (p) =>
+          p.username.trim().toLowerCase() === lower &&
+          Boolean(p.slotId) &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      );
+      if (seatedMatch?.isBot) return;
+
+      const queueMatch = waitingPoolRef.current.get(lower);
+      if (queueMatch?.isBot) return;
+
       const map = zombieDamageMapRef.current;
       const existing = map.get(lower);
       if (existing) {
@@ -3340,19 +3361,21 @@ export function useClassroomEngine() {
       isSeated: boolean;
       avatarColor?: string;
       avatarUrl?: string | null;
+      isBot?: boolean;
       skipIndividualScoreRecord?: boolean;
     }) => {
       const zEv = zombieEventStateRef.current;
       if (!zEv.isActive || zEv.phase !== 'z_flow_5_combat' || zEv.hp <= 0) return;
 
       const dmg = Math.max(1, Math.round(opts.damage));
-      if (!opts.skipIndividualScoreRecord) {
+      if (!opts.skipIndividualScoreRecord && !opts.isBot) {
         recordZombieDamageContribution(
           opts.attackerUsername,
           dmg,
           opts.isSeated,
           opts.avatarColor,
-          opts.avatarUrl
+          opts.avatarUrl,
+          opts.isBot
         );
       }
 
@@ -3627,7 +3650,7 @@ export function useClassroomEngine() {
 
   // Bắt đầu ngay Luồng 1 của Sự kiện "Zombie tấn công"
   const startZombieEventFlowNow = useCallback(
-    (wasRunningLesson?: boolean) => {
+    (wasRunningLesson?: boolean, broadcastSync = true) => {
       const cfg = configRef.current;
       if (cfg.zombieEventEnabled === false) {
         return;
@@ -3649,7 +3672,9 @@ export function useClassroomEngine() {
         };
         classBoardStateRef.current = pausedBoard;
         setClassBoardState(pausedBoard);
-        syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: pausedBoard });
+        if (broadcastSync) {
+          syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: pausedBoard });
+        }
       }
 
       zombieDamageMapRef.current.clear();
@@ -3726,26 +3751,39 @@ export function useClassroomEngine() {
       // Mở camera toàn cảnh lớp học ở Luồng 1
       setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
 
-      // Luồng 1: Cô giáo chỉ đọc dòng chữ nhỏ (không đọc chữ to tiêu đề)
+      // Luồng 1: Cô giáo đọc cả chữ to tiêu đề bảng lẫn dòng chữ nhỏ cảnh báo
+      const introTitleSpeech = (
+        cfg.zombieFlow1Title || 'Sự kiện đẩy lùi Zombie'
+      )
+        .replace(/\[Cấp\]/gi, String(level))
+        .trim();
       const introSubSpeech = (
         cfg.zombieFlow1Subtitle ||
         'Zombie tiến vào lớp học, hãy bảo vệ cô giáo và đẩy lùi zombie để tiếp tục tiết học'
-      ).replace(/\[Cấp\]/gi, String(level));
+      )
+        .replace(/\[Cấp\]/gi, String(level))
+        .trim();
+      const fullIntroSpeech = [introTitleSpeech, introSubSpeech]
+        .filter(Boolean)
+        .join('. ');
+
       const flowToken1 = `z_flow_1_${Date.now()}`;
       soundEngine.playBell((cfg.ttsVolume || 1) * 0.8, null, true);
 
-      const enqueued1 = soundEngine.enqueueLessonFlowItems(
-        [
-          {
-            text: introSubSpeech,
-            lang: 'vi',
-            speakerRole: 'abbot',
-            lessonFlowToken: flowToken1,
-            lessonStepLabel: 'Sự kiện Zombie - Luồng 1: Cảnh báo',
-          },
-        ],
-        cfg
-      );
+      const enqueued1 = soundEngine.isRemoteSlaveMode()
+        ? Boolean(cfg.ttsEnabled)
+        : soundEngine.enqueueLessonFlowItems(
+            [
+              {
+                text: fullIntroSpeech,
+                lang: 'vi',
+                speakerRole: 'abbot',
+                lessonFlowToken: flowToken1,
+                lessonStepLabel: 'Sự kiện Zombie - Luồng 1: Cảnh báo',
+              },
+            ],
+            cfg
+          );
 
       const minDur1Ms = Math.max(
         500,
@@ -3771,7 +3809,12 @@ export function useClassroomEngine() {
       };
       zombieEventStateRef.current = nextZState;
       setZombieEventState(nextZState);
-      syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: nextZState });
+      if (broadcastSync) {
+        syncService.sendCommand('TRIGGER_ZOMBIE_EVENT', {
+          wasRunningLesson: shouldResume,
+        });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: nextZState });
+      }
       pushToast('🧟 SỰ KIỆN ĐẨY LÙI ZOMBIE BẮT ĐẦU!', true);
     },
     [pushToast]
@@ -3799,11 +3842,13 @@ export function useClassroomEngine() {
       const cfg = configRef.current;
       const now = Date.now();
       const giftMeta = resolveClassroomGiftKind(opts.giftName, opts.coins ?? 1);
+      const isZombieEventRunningNow = zombieEventStateRef.current.isActive;
+      let pickedFromNpcFallback = false;
 
-      // Xác định tên người tặng quà (nếu nút Test để trống tên và chọn preferSeatedIfBlank thì ưu tiên chọn 1 học sinh đang ngồi trong lớp;
-      // nếu chọn Ngoài Lớp / Hàng Chờ mà để trống tên thì ưu tiên chọn người trong hàng chờ hoặc tên chưa có trong lớp)
+      // Xác định tên người tặng quà:
+      // - Khi đang diễn ra Sự kiện Zombie (lớp học thường full người thật), nếu test tặng quà (để trống tên) thì luôn nhập vào người ngẫu nhiên trong HÀNG CHỜ để tấn công Zombie!
       let rawName = (opts.username || '').trim();
-      if (!rawName && opts.preferSeatedIfBlank) {
+      if (!rawName && opts.preferSeatedIfBlank && !isZombieEventRunningNow) {
         const seatedStudents = pilgrimsRef.current.filter(
           (p) =>
             Boolean(p.slotId) &&
@@ -3816,7 +3861,7 @@ export function useClassroomEngine() {
               .username;
         }
       }
-      if (!rawName && !opts.preferSeatedIfBlank) {
+      if (!rawName && (!opts.preferSeatedIfBlank || isZombieEventRunningNow)) {
         const seatedSet = new Set(
           pilgrimsRef.current
             .filter(
@@ -3835,6 +3880,7 @@ export function useClassroomEngine() {
             queueCandidates[Math.floor(Math.random() * queueCandidates.length)]
               .username;
         } else {
+          pickedFromNpcFallback = true;
           const names =
             npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
           const outsideNames = names.filter(
@@ -3847,6 +3893,7 @@ export function useClassroomEngine() {
         }
       }
       if (!rawName) {
+        pickedFromNpcFallback = true;
         const names =
           npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
         rawName = names[Math.floor(Math.random() * names.length)];
@@ -3862,6 +3909,24 @@ export function useClassroomEngine() {
       const safeName = safety.safeUsername || rawName;
       const safeComment = safety.safePrayer || '';
       const lowerUser = safeName.trim().toLowerCase();
+
+      // Kiểm tra xem người chơi hiện có trong Lớp hoặc Hàng Chờ không (và có phải NPC không)
+      const existingInClass = pilgrimsRef.current.find(
+        (p) =>
+          p.username.trim().toLowerCase() === lowerUser &&
+          Boolean(p.slotId) &&
+          !p.leaveAfterGiftAction &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      );
+      const pool = waitingPoolRef.current;
+      const existingInQueue = pool.get(lowerUser);
+      const isAttackerBot = Boolean(
+        opts.isBot ||
+          existingInClass?.isBot ||
+          existingInQueue?.isBot ||
+          pickedFromNpcFallback
+      );
 
       // Tính toán Combo tặng quà cho người chơi:
       // - Nếu truyền trực tiếp opts.comboCount > 1 (từ TikTok repeatCount hoặc nút Test Combo)
@@ -3891,19 +3956,9 @@ export function useClassroomEngine() {
           coins: opts.coins ?? giftMeta.coins,
           comboCount: effectiveCombo,
           avatarUrl: opts.avatarUrl || null,
-          isBot: Boolean(opts.isBot),
+          isBot: isAttackerBot,
         });
       }
-
-      // Kiểm tra xem người chơi hiện có trong Lớp không (không tính người đang rời lớp hoặc đang hoàn tất ném hoa trước khi rời lớp)
-      const existingInClass = pilgrimsRef.current.find(
-        (p) =>
-          p.username.trim().toLowerCase() === lowerUser &&
-          Boolean(p.slotId) &&
-          !p.leaveAfterGiftAction &&
-          p.state !== 'leave_side_to_aisle' &&
-          p.state !== 'leave_down_exit'
-      );
 
       const rawGiftCoins = Math.max(1, Number(opts.coins ?? giftMeta.coins));
       const grantsShield = rawGiftCoins >= 5 || giftMeta.coins >= 5;
@@ -3915,7 +3970,7 @@ export function useClassroomEngine() {
       if (existingInClass) {
         const bonusPts = giftMeta.bonusPoints;
         // Riêng quà tặng hoa cho Cô/Thầy: chỉ cộng điểm thưởng khi ném hoa trúng Cô/Thầy
-        if (!isFlowerGift) {
+        if (!isFlowerGift && !(isZombieEventRunningNow && isAttackerBot)) {
           addLotusPointsToDonor(safeName, bonusPts);
         }
 
@@ -3928,7 +3983,7 @@ export function useClassroomEngine() {
           setPilgrims(withShield);
         }
 
-        // Nếu thuộc nhóm quà phạt đặc biệt (5 / 10 / 10+) -> chỉ ghi nhận ngay khi không ở trong Event Zombie (nếu đang trong Event Zombie thì lúc thực thi hành động quà từ hàng chờ sau Event mới ghi nhận)
+        // Nếu thuộc nhóm quà phạt đặc biệt (5 / 10 / 10+) -> chỉ ghi nhận ngay khi không ở trong Event Zombie
         if (
           !zombieEventStateRef.current.isActive &&
           (giftMeta.id === 'heart' ||
@@ -3939,6 +3994,7 @@ export function useClassroomEngine() {
         }
 
         // Nếu đang trong Luồng 5 Chiến Đấu Zombie -> Bắn ngay 1 viên đạn quà tặng (1 coin = 100 sát thương) từ vị trí ngồi của học sinh!
+        // (Nếu là NPC tấn công thì không tính điểm vào Bảng Chiến Công)
         if (
           zombieEventStateRef.current.isActive &&
           zombieEventStateRef.current.phase === 'z_flow_5_combat'
@@ -3956,7 +4012,13 @@ export function useClassroomEngine() {
             isSeated: true,
             avatarColor: existingInClass.avatarColor,
             avatarUrl: existingInClass.avatarUrl,
+            isBot: isAttackerBot,
+            skipIndividualScoreRecord: isAttackerBot,
           });
+        }
+
+        if (isZombieEventRunningNow && isAttackerBot) {
+          return;
         }
 
         const existingUserQueue =
@@ -4031,11 +4093,8 @@ export function useClassroomEngine() {
       }
 
       // TRƯỜNG HỢP 2 & 3: Người chơi ĐANG TRONG HÀNG CHỜ hoặc CHƯA CÓ TRONG LỚP / HÀNG CHỜ
-      // -> Đẩy lên Top Đầu Hàng Chờ và Hóa Vàng Tên (khóa nằm trên đầu, ưu tiên vào lớp hơn cả Top 1 hàng chờ)
-      const pool = waitingPoolRef.current;
-      const existingInQueue = pool.get(lowerUser);
       const bonusPts = giftMeta.bonusPoints;
-      if (!isFlowerGift) {
+      if (!isFlowerGift && !(isZombieEventRunningNow && isAttackerBot)) {
         addLotusPointsToDonor(safeName, bonusPts);
       }
 
@@ -4043,23 +4102,25 @@ export function useClassroomEngine() {
       const resolvedAvatar =
         opts.avatarUrl ||
         existingInQueue?.avatarUrl ||
-        (opts.isBot
+        (isAttackerBot
           ? npcAvatarsRef.current[
               Math.floor(Math.random() * npcAvatarsRef.current.length)
             ]
           : null);
 
       if (existingInQueue) {
-        existingInQueue.isGoldenPriority = true;
-        existingInQueue.goldenPriorityAt =
-          existingInQueue.goldenPriorityAt || now;
-        existingInQueue.isBot = false;
-        if (!isFlowerGift) {
+        if (!isAttackerBot) {
+          existingInQueue.isGoldenPriority = true;
+          existingInQueue.goldenPriorityAt =
+            existingInQueue.goldenPriorityAt || now;
+          existingInQueue.isBot = false;
+        }
+        if (!isFlowerGift && !(isZombieEventRunningNow && isAttackerBot)) {
           existingInQueue.points = (existingInQueue.points || 0) + bonusPts;
         }
         existingInQueue.coins = (existingInQueue.coins || 0) + giftMeta.coins;
         existingInQueue.avatarUrl = resolvedAvatar;
-        if (grantsShield) {
+        if (grantsShield && !isAttackerBot) {
           existingInQueue.hasShield = true;
         }
         recomputeWaitingQueueLazy();
@@ -4069,53 +4130,27 @@ export function useClassroomEngine() {
           username: safeName,
           prayer: safeComment || `Tặng ${giftMeta.giftLabel}`,
           gender: resolvedGender,
-          isVip: true,
+          isVip: !isAttackerBot,
           coins: giftMeta.coins,
-          isBot: false,
+          isBot: isAttackerBot,
           avatarUrl: resolvedAvatar,
           addedAt: now,
-          points: isFlowerGift ? 0 : bonusPts,
+          points:
+            isFlowerGift || (isZombieEventRunningNow && isAttackerBot)
+              ? 0
+              : bonusPts,
           rank: 1,
-          answeredCorrectInRound: true,
+          answeredCorrectInRound: !isAttackerBot,
           lastElapsedSec: 0.1,
           idleRounds: 0,
-          isGoldenPriority: true,
-          goldenPriorityAt: now,
-          hasShield: grantsShield,
+          isGoldenPriority: !isAttackerBot,
+          goldenPriorityAt: !isAttackerBot ? now : undefined,
+          hasShield: grantsShield && !isAttackerBot,
         });
         recomputeWaitingQueueLazy();
       }
 
-      // Nếu đang trong Luồng 5 Chiến Đấu Zombie -> Người tặng quà (dù ở hàng chờ hay vừa mới thêm vào hàng chờ & hóa vàng tên)
-      // đều được tính sát thương và bắn ngay 1 viên đạn quà tặng từ vị trí ngẫu nhiên trong đám đông hàng chờ (doorCrowd)!
-      if (
-        zombieEventStateRef.current.isActive &&
-        zombieEventStateRef.current.phase === 'z_flow_5_combat'
-      ) {
-        const rawCoins = Math.max(1, Number(opts.coins ?? giftMeta.coins));
-        const projKind: ZombieProjectileKind =
-          rawCoins >= 10 ? 'desk_mate' : rawCoins >= 5 ? 'chair' : 'book';
-        const crowdList = doorCrowdRef.current;
-        const randomCrowdMember =
-          crowdList.length > 0
-            ? crowdList[Math.floor(Math.random() * crowdList.length)]
-            : null;
-        const fallbackCrowdPos = cfg.doorCrowdPos || LEFT_DOOR_POS;
-
-        fireZombieAttackProjectile({
-          attackerUsername: safeName,
-          startX: randomCrowdMember ? randomCrowdMember.x : fallbackCrowdPos.x,
-          startY:
-            (randomCrowdMember ? randomCrowdMember.y : fallbackCrowdPos.y) - 18,
-          damage: rawCoins * 100,
-          kind: projKind,
-          giftId: giftMeta.id,
-          isSeated: false,
-          avatarUrl: resolvedAvatar,
-        });
-      }
-
-      // Đồng bộ ngay đám đông hàng chờ ngoài cửa (doorCrowdRef) để luôn có người trong hàng chờ nhận thẻ tên
+      // Đồng bộ ngay đám đông hàng chờ ngoài cửa (doorCrowdRef) để luôn có người trong hàng chờ nhận thẻ tên và ném đạn từ cửa lớp
       const crowdPos = cfg.doorCrowdPos || LEFT_DOOR_POS;
       const maxCluster = Math.max(1, cfg.doorCrowdCount ?? 7);
       let currentCrowd = [...doorCrowdRef.current];
@@ -4165,15 +4200,47 @@ export function useClassroomEngine() {
           username: safeName,
           gender: resolvedGender,
           avatarUrl: resolvedAvatar || targetMember.avatarUrl,
-          isVip: true,
-          isBot: false,
-          isGoldenPriority: true,
-          hasShield: grantsShield ? true : targetMember.hasShield,
+          isVip: !isAttackerBot ? true : targetMember.isVip,
+          isBot: isAttackerBot,
+          isGoldenPriority: !isAttackerBot ? true : targetMember.isGoldenPriority,
+          hasShield:
+            grantsShield && !isAttackerBot ? true : targetMember.hasShield,
           giftActionHighlightUntil: now + 6000,
         };
         currentCrowd[chosenCrowdIdx] = boundCrowdMember;
         doorCrowdRef.current = currentCrowd;
         setDoorCrowd(currentCrowd);
+      }
+
+      // Nếu đang trong Luồng 5 Chiến Đấu Zombie -> Bắn ngay 1 viên đạn quà tặng từ vị trí của người trong hàng chờ ngoài cửa (boundCrowdMember)!
+      // (Nếu là NPC tấn công thì chỉ gây sát thương phụ trợ giết Boss, KHÔNG tính điểm vào Bảng Chiến Công!)
+      if (
+        zombieEventStateRef.current.isActive &&
+        zombieEventStateRef.current.phase === 'z_flow_5_combat'
+      ) {
+        const rawCoins = Math.max(1, Number(opts.coins ?? giftMeta.coins));
+        const projKind: ZombieProjectileKind =
+          rawCoins >= 10 ? 'desk_mate' : rawCoins >= 5 ? 'chair' : 'book';
+        const fallbackCrowdPos = cfg.doorCrowdPos || LEFT_DOOR_POS;
+
+        fireZombieAttackProjectile({
+          attackerUsername: safeName,
+          startX: boundCrowdMember ? boundCrowdMember.x : fallbackCrowdPos.x,
+          startY:
+            (boundCrowdMember ? boundCrowdMember.y : fallbackCrowdPos.y) - 18,
+          damage: rawCoins * 100,
+          kind: projKind,
+          giftId: giftMeta.id,
+          isSeated: false,
+          avatarUrl: resolvedAvatar,
+          isBot: isAttackerBot,
+          skipIndividualScoreRecord: isAttackerBot,
+        });
+      }
+
+      // Nếu là NPC tấn công trong Sự kiện Zombie (phụ trợ âm thầm seeding giết Boss) -> kết thúc ngay, không xếp hàng chờ hành động sau Event
+      if (isZombieEventRunningNow && isAttackerBot) {
+        return;
       }
 
       // Nếu là Tặng hoa cho cô (rose) hoặc Tặng hoa cho thầy (icecream) khi học sinh không có trong lớp:
@@ -9321,7 +9388,7 @@ export function useClassroomEngine() {
     recomputeWaitingQueueLazy,
   ]);
 
-  // Tự động cho NPC trong lớp & hàng chờ phụ thả tim ném hộp bút vào Zombie khi đang ở Luồng 5 Chiến Đấu (nếu bật zombieNpcAutoAttack)
+  // Tự động cho NPC phụ trợ âm thầm thả tim ném hộp bút vào Zombie khi đang ở Luồng 5 Chiến Đấu (nếu bật zombieNpcAutoAttack - KHÔNG tính điểm vào Bảng Chiến Công)
   useEffect(() => {
     if (
       !zombieEventState.isActive ||
@@ -9337,6 +9404,19 @@ export function useClassroomEngine() {
         return;
       }
 
+      const seatedSet = new Set(
+        pilgrimsRef.current
+          .filter(
+            (p) =>
+              Boolean(p.slotId) &&
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit'
+          )
+          .map((p) => p.username.trim().toLowerCase())
+      );
+      const queueBots = Array.from(waitingPoolRef.current.values()).filter(
+        (q) => q.isBot && !seatedSet.has(q.username.trim().toLowerCase())
+      );
       const seatedBots = pilgrimsRef.current.filter(
         (p) =>
           p.isBot &&
@@ -9344,10 +9424,29 @@ export function useClassroomEngine() {
           p.state !== 'leave_side_to_aisle' &&
           p.state !== 'leave_down_exit'
       );
-      if (seatedBots.length > 0) {
+
+      const botLikes = 15 + Math.floor(Math.random() * 35);
+
+      if (queueBots.length > 0 && doorCrowdRef.current.length > 0) {
+        const chosenQBot =
+          queueBots[Math.floor(Math.random() * queueBots.length)];
+        const crowdList = doorCrowdRef.current;
+        const repIdx = Math.floor(Math.random() * crowdList.length);
+        const rep = crowdList[repIdx];
+        fireZombieAttackProjectile({
+          attackerUsername: chosenQBot.username,
+          startX: rep.x,
+          startY: rep.y - 18,
+          damage: botLikes,
+          kind: 'pencil_case',
+          isSeated: false,
+          isBot: true,
+          skipIndividualScoreRecord: true,
+          avatarUrl: chosenQBot.avatarUrl,
+        });
+      } else if (seatedBots.length > 0) {
         const chosenBot =
           seatedBots[Math.floor(Math.random() * seatedBots.length)];
-        const botLikes = 15 + Math.floor(Math.random() * 35);
         fireZombieAttackProjectile({
           attackerUsername: chosenBot.username,
           startX: chosenBot.x,
@@ -9355,8 +9454,23 @@ export function useClassroomEngine() {
           damage: botLikes,
           kind: 'pencil_case',
           isSeated: true,
+          isBot: true,
+          skipIndividualScoreRecord: true,
           avatarColor: chosenBot.avatarColor,
           avatarUrl: chosenBot.avatarUrl,
+        });
+      } else if (doorCrowdRef.current.length > 0) {
+        const crowdList = doorCrowdRef.current;
+        const rep = crowdList[Math.floor(Math.random() * crowdList.length)];
+        fireZombieAttackProjectile({
+          attackerUsername: rep.username || 'NPC Hàng Chờ',
+          startX: rep.x,
+          startY: rep.y - 18,
+          damage: botLikes,
+          kind: 'pencil_case',
+          isSeated: false,
+          isBot: true,
+          skipIndividualScoreRecord: true,
         });
       }
     }, 1600);
@@ -9499,52 +9613,88 @@ export function useClassroomEngine() {
   // Xử lý sự kiện Thả Tim từ TikTok Live hoặc nút Test:
   // YÊU CẦU #7: Trong tình trạng bình thường (Không có Event lớp học), KHÔNG đọc/xử lý thêm event thả tim của người chơi để tối ưu hiệu năng!
   // Chỉ khi có Event lớp học đang ở Luồng 5 Chiến Đấu mới đọc thông tin thả tim của người chơi (trong lớp hoặc trong hàng chờ).
-  // (Riêng khi bấm nút Test Thả Tim NPC __RANDOM_NPC__: chọn ngẫu nhiên 1 NPC bất kỳ trong lớp và hàng chờ để thực hiện hành động thả tim!)
+  // Đặc biệt: Trong sự kiện Zombie, khi test thả tim (không nhập tên cụ thể hoặc bấm nút Test Thả Tim) -> nhập vào người ngẫu nhiên trong HÀNG CHỜ mà tấn công!
+  // Và nếu người tấn công là NPC (isBot === true) thì KHÔNG tính điểm vào Bảng Chiến Công!
   const handleTriggerLike = useCallback(
     (count = 15, username = 'Học Sinh', broadcastSync = true) => {
-      const isRandomNpcTest = username === '__RANDOM_NPC__';
+      const isRandomNpcTest =
+        username === '__RANDOM_NPC__' || !(username || '').trim();
       let resolvedUsername = (username || '').trim();
+      const isZombieActiveNow = zombieEventStateRef.current.isActive;
 
       if (isRandomNpcTest) {
-        const seatedBots = pilgrimsRef.current.filter(
-          (p) =>
-            p.isBot &&
-            Boolean(p.slotId) &&
-            p.state !== 'leave_side_to_aisle' &&
-            p.state !== 'leave_down_exit'
+        const seatedSet = new Set(
+          pilgrimsRef.current
+            .filter(
+              (p) =>
+                Boolean(p.slotId) &&
+                p.state !== 'leave_side_to_aisle' &&
+                p.state !== 'leave_down_exit'
+            )
+            .map((p) => p.username.trim().toLowerCase())
         );
-        const queueBots = Array.from(waitingPoolRef.current.values()).filter(
-          (q) => q.isBot
+        const queueOutside = Array.from(waitingPoolRef.current.values()).filter(
+          (q) => !seatedSet.has(q.username.trim().toLowerCase())
         );
-        const allCandidates: Array<{ username: string; isSeated: boolean }> = [
-          ...seatedBots.map((b) => ({ username: b.username, isSeated: true })),
-          ...queueBots.map((q) => ({ username: q.username, isSeated: false })),
-        ];
 
-        if (allCandidates.length === 0) {
-          const anySeated = pilgrimsRef.current.filter(
+        if (isZombieActiveNow) {
+          // Trong sự kiện Zombie: bình thường lớp đã full người thật -> luôn nhập vào người ngẫu nhiên trong HÀNG CHỜ để tấn công!
+          const realQueueCandidates = queueOutside.filter((q) => !q.isBot);
+          const candidatePool =
+            realQueueCandidates.length > 0 ? realQueueCandidates : queueOutside;
+
+          if (candidatePool.length > 0) {
+            const picked =
+              candidatePool[Math.floor(Math.random() * candidatePool.length)];
+            resolvedUsername = picked.username;
+          } else {
+            const fallbackPool =
+              npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
+            resolvedUsername =
+              fallbackPool[Math.floor(Math.random() * fallbackPool.length)] ||
+              'Bạn Hàng Chờ';
+          }
+        } else {
+          const seatedBots = pilgrimsRef.current.filter(
             (p) =>
+              p.isBot &&
               Boolean(p.slotId) &&
               p.state !== 'leave_side_to_aisle' &&
               p.state !== 'leave_down_exit'
           );
-          const anyQueue = Array.from(waitingPoolRef.current.values());
-          allCandidates.push(
-            ...anySeated.map((p) => ({ username: p.username, isSeated: true })),
-            ...anyQueue.map((q) => ({ username: q.username, isSeated: false }))
-          );
-        }
+          const queueBots = queueOutside.filter((q) => q.isBot);
+          const allCandidates: Array<{ username: string; isSeated: boolean }> = [
+            ...seatedBots.map((b) => ({ username: b.username, isSeated: true })),
+            ...queueBots.map((q) => ({ username: q.username, isSeated: false })),
+          ];
 
-        if (allCandidates.length > 0) {
-          const picked =
-            allCandidates[Math.floor(Math.random() * allCandidates.length)];
-          resolvedUsername = picked.username;
-        } else {
-          const fallbackPool =
-            npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
-          resolvedUsername =
-            fallbackPool[Math.floor(Math.random() * fallbackPool.length)] ||
-            'NPC Học Sinh';
+          if (allCandidates.length === 0) {
+            const anySeated = pilgrimsRef.current.filter(
+              (p) =>
+                Boolean(p.slotId) &&
+                p.state !== 'leave_side_to_aisle' &&
+                p.state !== 'leave_down_exit'
+            );
+            allCandidates.push(
+              ...anySeated.map((p) => ({ username: p.username, isSeated: true })),
+              ...queueOutside.map((q) => ({
+                username: q.username,
+                isSeated: false,
+              }))
+            );
+          }
+
+          if (allCandidates.length > 0) {
+            const picked =
+              allCandidates[Math.floor(Math.random() * allCandidates.length)];
+            resolvedUsername = picked.username;
+          } else {
+            const fallbackPool =
+              npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
+            resolvedUsername =
+              fallbackPool[Math.floor(Math.random() * fallbackPool.length)] ||
+              'NPC Học Sinh';
+          }
         }
       }
 
@@ -9561,10 +9711,10 @@ export function useClassroomEngine() {
       );
       const queueMatch = waitingPoolRef.current.get(lowerUser);
 
-      // Khi bấm nút Test Thả Tim NPC: hiển thị hiệu ứng bong bóng thả tim trên NPC đó
+      // Khi bấm nút Test Thả Tim: hiển thị hiệu ứng bong bóng thả tim trên học sinh / đám đông cửa lớp
       if (isRandomNpcTest) {
         const nowMs = Date.now();
-        if (seatedMatch) {
+        if (seatedMatch && !isZombieActiveNow) {
           const nextPilgrims = pilgrimsRef.current.map((p) =>
             p.id === seatedMatch.id
               ? {
@@ -9577,13 +9727,30 @@ export function useClassroomEngine() {
           );
           pilgrimsRef.current = nextPilgrims;
           setPilgrims(nextPilgrims);
+        } else if (doorCrowdRef.current.length > 0) {
+          const crowdCopy = [...doorCrowdRef.current];
+          let crowdIdx = crowdCopy.findIndex(
+            (c) => c.username.trim().toLowerCase() === lowerUser
+          );
+          if (crowdIdx < 0) {
+            crowdIdx = Math.floor(Math.random() * crowdCopy.length);
+          }
+          crowdCopy[crowdIdx] = {
+            ...crowdCopy[crowdIdx],
+            username: cleanUser,
+            prayer: `❤️ Thả ${count} tim!`,
+            hasComment: true,
+            chatBubbleUntil: nowMs + 2800,
+          };
+          doorCrowdRef.current = crowdCopy;
+          setDoorCrowd(crowdCopy);
         }
         if (
           !zombieEventStateRef.current.isActive ||
           zombieEventStateRef.current.phase !== 'z_flow_5_combat'
         ) {
           pushToast(
-            `❤️ NPC ${cleanUser} (${seatedMatch ? 'Trong lớp' : 'Hàng chờ'}) vừa thả ${count} tim!`,
+            `❤️ ${cleanUser} (${seatedMatch && !isZombieActiveNow ? 'Trong lớp' : 'Hàng chờ'}) vừa thả ${count} tim!`,
             false
           );
           if (broadcastSync) {
@@ -9609,7 +9776,8 @@ export function useClassroomEngine() {
       }
 
       const zBatch = zombieHeartBatchRef.current;
-      if (seatedMatch) {
+      // Nếu đang test thả tim trong sự kiện Zombie thì ưu tiên bắn từ Hàng Chờ (đám đông cửa lớp)
+      if (seatedMatch && !isRandomNpcTest) {
         zBatch.seatedByUser.set(
           seatedMatch.username,
           (zBatch.seatedByUser.get(seatedMatch.username) || 0) + count
@@ -9618,6 +9786,11 @@ export function useClassroomEngine() {
         zBatch.queueByUser.set(
           queueMatch.username,
           (zBatch.queueByUser.get(queueMatch.username) || 0) + count
+        );
+      } else if (seatedMatch) {
+        zBatch.seatedByUser.set(
+          seatedMatch.username,
+          (zBatch.seatedByUser.get(seatedMatch.username) || 0) + count
         );
       }
 
@@ -9641,6 +9814,7 @@ export function useClassroomEngine() {
           }
 
           // 1. Học sinh ngồi trong lớp: mỗi bạn bắn 1 viên đạn Hộp Bút từ đúng vị trí ngồi của mình (1 tim = 1 sát thương)
+          // Nếu là NPC (st.isBot === true) thì KHÔNG tính điểm vào Bảng Chiến Công!
           seatedEntries.forEach(([uName, likesCount]) => {
             const st = pilgrimsRef.current.find(
               (p) =>
@@ -9651,6 +9825,7 @@ export function useClassroomEngine() {
                 p.state !== 'leave_down_exit'
             );
             if (st && likesCount > 0) {
+              const isStBot = Boolean(st.isBot);
               fireZombieAttackProjectile({
                 attackerUsername: st.username,
                 startX: st.x,
@@ -9658,13 +9833,15 @@ export function useClassroomEngine() {
                 damage: likesCount,
                 kind: 'pencil_case',
                 isSeated: true,
+                isBot: isStBot,
+                skipIndividualScoreRecord: isStBot,
                 avatarColor: st.avatarColor,
                 avatarUrl: st.avatarUrl,
               });
             }
           });
 
-          // 2. Học sinh trong hàng chờ: cộng điểm riêng cho từng bạn vào BXH điểm số, và chọn 1 người đại diện ở đám đông cửa lớp bắn 1 viên đạn Hộp Bút tổng sát thương!
+          // 2. Học sinh trong hàng chờ: cộng điểm riêng cho từng người thật (không tính NPC) vào Bảng Chiến Công, và chọn người đại diện ở đám đông cửa lớp bắn đạn Hộp Bút!
           if (queueEntries.length > 0) {
             let totalQueueLikes = 0;
             queueEntries.forEach(([qName, qLikes]) => {
@@ -9673,33 +9850,43 @@ export function useClassroomEngine() {
                 const qItem = waitingPoolRef.current.get(
                   qName.trim().toLowerCase()
                 );
-                recordZombieDamageContribution(
-                  qName,
-                  qLikes,
-                  false,
-                  undefined,
-                  qItem?.avatarUrl
-                );
+                const isQBot = Boolean(qItem?.isBot);
+                if (!isQBot) {
+                  recordZombieDamageContribution(
+                    qName,
+                    qLikes,
+                    false,
+                    undefined,
+                    qItem?.avatarUrl,
+                    false
+                  );
+                }
               }
             });
 
             if (totalQueueLikes > 0) {
+              const firstQueueUser = queueEntries[0][0];
               const crowdList = doorCrowdRef.current;
-              const rep =
-                crowdList.length > 0
+              const matchedCrowd =
+                crowdList.find(
+                  (c) =>
+                    c.username.trim().toLowerCase() ===
+                    firstQueueUser.trim().toLowerCase()
+                ) ||
+                (crowdList.length > 0
                   ? crowdList[Math.floor(Math.random() * crowdList.length)]
-                  : null;
+                  : null);
               const fallbackPos =
                 configRef.current.doorCrowdPos || LEFT_DOOR_POS;
 
               fireZombieAttackProjectile({
-                attackerUsername: queueEntries[0][0],
-                startX: rep ? rep.x : fallbackPos.x,
-                startY: (rep ? rep.y : fallbackPos.y) - 18,
+                attackerUsername: firstQueueUser,
+                startX: matchedCrowd ? matchedCrowd.x : fallbackPos.x,
+                startY: (matchedCrowd ? matchedCrowd.y : fallbackPos.y) - 18,
                 damage: totalQueueLikes,
                 kind: 'pencil_case',
                 isSeated: false,
-                skipIndividualScoreRecord: true, // Đã cộng riêng cho từng bạn trong hàng chờ ở trên
+                skipIndividualScoreRecord: true, // Đã cộng riêng cho từng bạn người thật trong hàng chờ ở trên
               });
             }
           }
@@ -10103,7 +10290,7 @@ export function useClassroomEngine() {
           }
           break;
         case 'TRIGGER_ZOMBIE_EVENT':
-          startZombieEventFlowNow(Boolean(p.wasRunningLesson));
+          startZombieEventFlowNow(Boolean(p.wasRunningLesson), false);
           break;
         case 'UPDATE_NPC_LISTS':
           if (Array.isArray(p.npcNames) && p.npcNames.length > 0) {
@@ -11684,7 +11871,23 @@ export function useClassroomEngine() {
           allowedGifts[Math.floor(Math.random() * allowedGifts.length)];
         const giftMeta = resolveClassroomGiftKind(chosenGiftId, 1);
 
-        // Ưu tiên chọn NPC đang ngồi trong lớp để thấy hiệu ứng quà ngay lập tức; nếu chưa có thì lấy tên NPC ngẫu nhiên
+        // Khi đang diễn ra sự kiện Zombie: chọn NPC trong hàng chờ để phụ trợ âm thầm giết Boss Zombie (không tính điểm vào Bảng Chiến Công)
+        // Khi bình thường: ưu tiên chọn NPC đang ngồi trong lớp để thấy hiệu ứng quà ngay lập tức
+        const seatedSet = new Set(
+          pilgrimsRef.current
+            .filter(
+              (p) =>
+                Boolean(p.slotId) &&
+                p.state !== 'leave_side_to_aisle' &&
+                p.state !== 'leave_down_exit'
+            )
+            .map((p) => p.username.trim().toLowerCase())
+        );
+        const queueBotPilgrims = Array.from(
+          waitingPoolRef.current.values()
+        ).filter(
+          (q) => q.isBot && !seatedSet.has(q.username.trim().toLowerCase())
+        );
         const seatedBotPilgrims = pilgrimsRef.current.filter(
           (p) =>
             p.isBot &&
@@ -11702,7 +11905,15 @@ export function useClassroomEngine() {
         let chosenName = '';
         let chosenAvatar: string | null = null;
 
-        if (seatedBotPilgrims.length > 0) {
+        if (zombieEventStateRef.current.isActive && queueBotPilgrims.length > 0) {
+          const pickedQ =
+            queueBotPilgrims[Math.floor(Math.random() * queueBotPilgrims.length)];
+          chosenName = pickedQ.username;
+          chosenAvatar = pickedQ.avatarUrl || null;
+        } else if (
+          !zombieEventStateRef.current.isActive &&
+          seatedBotPilgrims.length > 0
+        ) {
           const picked =
             seatedBotPilgrims[
               Math.floor(Math.random() * seatedBotPilgrims.length)
@@ -11722,6 +11933,7 @@ export function useClassroomEngine() {
           coins: giftMeta.coins,
           avatarUrl: chosenAvatar,
           isBot: true,
+          preferSeatedIfBlank: false,
           broadcastSync: true,
         });
 
@@ -12492,6 +12704,7 @@ export function useClassroomEngine() {
   }, [getSortedZombieTopDamagers, pushToast]);
 
   // Nút Test bắn đạn vào Zombie trong Dev-Event
+  // Trong trường hợp bình thường lớp sẽ full người thật -> khi test thả tim, tặng quà để tấn công Zombie (không nhập tên cụ thể) thì nhập vào người ngẫu nhiên trong HÀNG CHỜ mà tấn công!
   const handleTestZombieAttack = useCallback(
     (
       kind: 'heart_seated' | 'heart_queue' | 'book' | 'chair' | 'desk_mate',
@@ -12508,33 +12721,43 @@ export function useClassroomEngine() {
         return;
       }
 
-      if (kind === 'heart_seated') {
-        const seatedList = pilgrimsRef.current.filter(
-          (p) =>
-            Boolean(p.slotId) &&
-            p.state !== 'leave_side_to_aisle' &&
-            p.state !== 'leave_down_exit'
-        );
-        const st =
-          seatedList.find(
+      const trimmedCustom = (customUsername || '').trim();
+      const seatedSet = new Set(
+        pilgrimsRef.current
+          .filter(
             (p) =>
-              customUsername &&
-              p.username.toLowerCase() === customUsername.trim().toLowerCase()
-          ) ||
-          seatedList[Math.floor(Math.random() * seatedList.length)];
-        if (st) {
-          handleTriggerLike(50, st.username, true);
-        }
-        return;
-      }
+              Boolean(p.slotId) &&
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit'
+          )
+          .map((p) => p.username.trim().toLowerCase())
+      );
+      const qListOutside = Array.from(waitingPoolRef.current.values()).filter(
+        (q) => !seatedSet.has(q.username.trim().toLowerCase())
+      );
+      const realQueueList = qListOutside.filter((q) => !q.isBot);
 
-      if (kind === 'heart_queue') {
-        const qList = Array.from(waitingPoolRef.current.values());
-        const qUser =
-          qList.length > 0
-            ? qList[Math.floor(Math.random() * qList.length)].username
-            : customUsername?.trim() || 'Bạn Hàng Chờ';
-        if (qList.length === 0) {
+      if (kind === 'heart_seated' || kind === 'heart_queue') {
+        if (trimmedCustom) {
+          handleTriggerLike(
+            kind === 'heart_seated' ? 50 : 80,
+            trimmedCustom,
+            true
+          );
+          return;
+        }
+
+        // Khi không nhập tên cụ thể: nhập vào người ngẫu nhiên trong HÀNG CHỜ mà tấn công!
+        const pool = realQueueList.length > 0 ? realQueueList : qListOutside;
+        let qUser =
+          pool.length > 0
+            ? pool[Math.floor(Math.random() * pool.length)].username
+            : '';
+
+        if (!qUser) {
+          qUser =
+            SAMPLE_NAMES[Math.floor(Math.random() * SAMPLE_NAMES.length)] ||
+            'Bạn Hàng Chờ';
           enqueueStudentToWaitingQueue({
             username: qUser,
             prayer: 'vào lớp',
@@ -12543,7 +12766,7 @@ export function useClassroomEngine() {
             isBot: false,
           });
         }
-        handleTriggerLike(80, qUser, true);
+        handleTriggerLike(kind === 'heart_seated' ? 50 : 80, '__RANDOM_NPC__', true);
         return;
       }
 
@@ -12558,10 +12781,10 @@ export function useClassroomEngine() {
         desk_mate: 'Thả heo',
       };
       handleTriggerClassroomGift({
-        username: customUsername?.trim() || undefined,
+        username: trimmedCustom || undefined,
         giftName: giftNameMap[kind],
         coins: coinsMap[kind],
-        preferSeatedIfBlank: Math.random() < 0.65,
+        preferSeatedIfBlank: false,
         broadcastSync: true,
       });
     },

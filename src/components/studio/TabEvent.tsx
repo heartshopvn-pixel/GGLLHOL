@@ -709,7 +709,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
         <div className="p-2.5 rounded-lg bg-stone-950/90 border border-red-500/30 space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] font-extrabold text-red-300">
-              Luồng 1: Hiện cảnh báo trên bảng & Cô Thảo đọc chữ nhỏ
+              Luồng 1: Hiện cảnh báo trên bảng & Cô Thảo đọc tiêu đề + nội dung
             </span>
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-stone-400">T.gian tối thiểu:</span>
@@ -734,7 +734,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           </div>
           <div className="space-y-1">
             <label className="text-[10px] text-stone-400 block">
-              Chữ to tiêu đề trên bảng (Không đọc âm thanh):
+              Chữ to tiêu đề trên bảng (Cô Thảo đọc mở đầu Luồng 1):
             </label>
             <input
               type="text"
@@ -747,7 +747,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           </div>
           <div className="space-y-1">
             <label className="text-[10px] text-stone-400 block">
-              Chữ nhỏ trên bảng + Lời đọc của Cô Thảo:
+              Chữ nhỏ trên bảng + Lời đọc tiếp theo của Cô Thảo:
             </label>
             <textarea
               rows={2}

@@ -1727,7 +1727,7 @@ export const StageHud: React.FC<StageHudProps> = ({
         </div>
       )}
       {/* 1. BIỂN TÊN LỚP HỌC (LỚP 12A1 - THPT CHUYÊN) */}
-      {showTempleSign && (
+      {showTempleSign && !isZombieEventActive && (
         <div
           onMouseDown={(e) => editLayoutMode && onStartDragHudBox('templeSign', e)}
           onTouchStart={(e) => editLayoutMode && onStartDragHudBox('templeSign', e)}
@@ -2260,7 +2260,7 @@ export const StageHud: React.FC<StageHudProps> = ({
       )}
 
       {/* 8. BẢNG NOTE 1 ("Đây là trò chơi 2D.") */}
-      {showNote1Box && (
+      {showNote1Box && !isZombieEventActive && (
         <div
           onMouseDown={(e) => editLayoutMode && onStartDragHudBox('note1Box', e)}
           onTouchStart={(e) => editLayoutMode && onStartDragHudBox('note1Box', e)}
