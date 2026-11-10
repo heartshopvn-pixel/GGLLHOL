@@ -15,6 +15,7 @@ import {
   RectBounds,
   TempleMonkData,
 } from '../types/game';
+import { BUILT_IN_TIERED_QUIZ_DECKS } from './vocabDecks';
 
 export const DEFAULT_BG_IMAGE =
   './assets/aistudio/a5c97e27-3fbf-4c87-b5fa-36b9fd61be24_37000eba.jpg';
@@ -1441,23 +1442,7 @@ export const DEFAULT_QUIZ_DECKS: Array<{
   id: string;
   name: string;
   questions: EnglishQuizItem[];
-}> = [
-  {
-    id: 'deck-12a1',
-    name: '12A1_CoBan.txt',
-    questions: ENGLISH_QUIZ_QUESTIONS.slice(0, 30),
-  },
-  {
-    id: 'deck-ielts',
-    name: 'IELTS_TuVung.txt',
-    questions: ENGLISH_QUIZ_QUESTIONS.slice(30, 65),
-  },
-  {
-    id: 'deck-nangcao',
-    name: '12A1_NangCao.txt',
-    questions: ENGLISH_QUIZ_QUESTIONS.slice(65, 100),
-  },
-];
+}> = BUILT_IN_TIERED_QUIZ_DECKS;
 
 export const INITIAL_DONORS: DonorEntry[] = [];
 

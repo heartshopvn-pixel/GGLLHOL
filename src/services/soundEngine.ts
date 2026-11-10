@@ -521,6 +521,13 @@ class TempleSoundService {
     if (this.remoteSlaveMode === active) return;
     this.remoteSlaveMode = active;
     if (active) {
+      const pendingItemsToNotify: TTSQueueItem[] = [];
+      if (this.activeEventItem) {
+        pendingItemsToNotify.push(this.activeEventItem);
+      }
+      if (this.ttsQueue.length > 0) {
+        pendingItemsToNotify.push(...this.ttsQueue);
+      }
       this.stopBgmInternal();
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -545,6 +552,9 @@ class TempleSoundService {
       this.isSpeaking = false;
       this.isSpeakingDharma = false;
       this.currentEventText = '';
+      for (const item of pendingItemsToNotify) {
+        this.notifyItemFinished(item);
+      }
     } else {
       this.remoteMasterQueueSnapshot = null;
       if (this.latestConfig && !this.localTabMuted) {
@@ -2752,9 +2762,34 @@ class TempleSoundService {
       }
     }, 2200);
 
-    void this.getOrFetchAudioBlobUrl(url, 2000).then((blobUrl) => {
+    // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
+    const estimatedPlayMs = Math.max(
+      5500,
+      Math.min(20000, text.split(/\s+/).length * 460 + 3200)
+    );
+    let playbackWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
+      fallbackTriggered = true;
+      clearTimeout(lagTimeout);
+      cleanupAudio();
+      onDone();
+    }, estimatedPlayMs);
+
+    const clearNodeTimers = () => {
+      clearTimeout(lagTimeout);
+      if (playbackWatchdog) {
+        clearTimeout(playbackWatchdog);
+        playbackWatchdog = null;
+      }
+    };
+
+    void this.getOrFetchAudioBlobUrl(url, 2000).then((blobUrl) => {
+      if (fallbackTriggered || token !== this.speechTokenSeq) {
+        clearNodeTimers();
+        return;
+      }
       if (!blobUrl) {
+        clearNodeTimers();
         fallbackOnce('Không kết nối được cổng Node.js (#3) ➔ Chuyển sang #2 Google Stream');
         return;
       }
@@ -2765,6 +2800,26 @@ class TempleSoundService {
       this.currentAudio = audio;
       const { effectiveRate, preservePitch } =
         this.computeStreamPlaybackRateAndPitch(voice, config);
+
+      const refreshPlaybackWatchdogFromDuration = () => {
+        if (
+          Number.isFinite(audio.duration) &&
+          audio.duration > 0 &&
+          audio.duration < 120
+        ) {
+          if (playbackWatchdog) clearTimeout(playbackWatchdog);
+          const exactMs =
+            Math.ceil((audio.duration / Math.max(0.5, effectiveRate)) * 1000) +
+            1500;
+          playbackWatchdog = setTimeout(() => {
+            if (fallbackTriggered || token !== this.speechTokenSeq) return;
+            fallbackTriggered = true;
+            clearNodeTimers();
+            cleanupAudio();
+            onDone();
+          }, Math.max(2200, exactMs));
+        }
+      };
 
       // QUAN TRỌNG: Gán audio.src trước, sau đó mới gán defaultPlaybackRate & playbackRate
       // vì theo chuẩn HTML5, gán audio.src sẽ reset playbackRate về defaultPlaybackRate (1.0)
@@ -2783,6 +2838,7 @@ class TempleSoundService {
           preservePitch,
           config.ttsVolume
         );
+        refreshPlaybackWatchdogFromDuration();
       };
 
       audio.onplaying = () => {
@@ -2794,6 +2850,7 @@ class TempleSoundService {
           preservePitch,
           config.ttsVolume
         );
+        refreshPlaybackWatchdogFromDuration();
         this.ttsDiagnostic = {
           ...this.ttsDiagnostic,
           configuredEngineLabel: this.getConfiguredEngineLabel(config),
@@ -2816,16 +2873,18 @@ class TempleSoundService {
       audio.onended = () => {
         if (fallbackTriggered || token !== this.speechTokenSeq) return;
         fallbackTriggered = true;
-        clearTimeout(lagTimeout);
+        clearNodeTimers();
         cleanupAudio();
         onDone();
       };
 
       audio.onerror = () => {
+        clearNodeTimers();
         fallbackOnce('Luồng âm thanh Node.js (#3) bị đứt khi đang tải');
       };
 
       audio.play().catch(() => {
+        clearNodeTimers();
         fallbackOnce('Không thể khởi chạy Audio từ Node.js (#3)');
       });
     });
@@ -2914,10 +2973,35 @@ class TempleSoundService {
       }
     }, timeoutBudget);
 
+    // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
+    const estimatedPlayMs = Math.max(
+      5500,
+      Math.min(20000, shortText.split(/\s+/).length * 460 + 3200)
+    );
+    let playbackWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      if (fallbackTriggered || token !== this.speechTokenSeq) return;
+      fallbackTriggered = true;
+      clearTimeout(lagTimeout);
+      cleanupAudio();
+      onDone();
+    }, estimatedPlayMs);
+
+    const clearStreamTimers = () => {
+      clearTimeout(lagTimeout);
+      if (playbackWatchdog) {
+        clearTimeout(playbackWatchdog);
+        playbackWatchdog = null;
+      }
+    };
+
     void this.getOrFetchAudioBlobUrl(proxyUrl, timeoutBudget - 150).then(
       (blobUrl) => {
-        if (fallbackTriggered || token !== this.speechTokenSeq) return;
+        if (fallbackTriggered || token !== this.speechTokenSeq) {
+          clearStreamTimers();
+          return;
+        }
         if (!blobUrl) {
+          clearStreamTimers();
           fallbackOnce('Cả 2 máy chủ Google GTX & TW-OB đều không phản hồi ➔ Chuyển sang #1 Web Speech');
           return;
         }
@@ -2937,6 +3021,27 @@ class TempleSoundService {
               }
             : this.computeStreamPlaybackRateAndPitch(voice, config);
 
+        const refreshPlaybackWatchdogFromDuration = () => {
+          if (
+            Number.isFinite(audio.duration) &&
+            audio.duration > 0 &&
+            audio.duration < 120
+          ) {
+            if (playbackWatchdog) clearTimeout(playbackWatchdog);
+            const exactMs =
+              Math.ceil(
+                (audio.duration / Math.max(0.5, effectiveRate)) * 1000
+              ) + 1500;
+            playbackWatchdog = setTimeout(() => {
+              if (fallbackTriggered || token !== this.speechTokenSeq) return;
+              fallbackTriggered = true;
+              clearStreamTimers();
+              cleanupAudio();
+              onDone();
+            }, Math.max(2200, exactMs));
+          }
+        };
+
         // QUAN TRỌNG: Gán audio.src trước, sau đó mới gán defaultPlaybackRate & playbackRate
         // vì theo chuẩn HTML5, gán audio.src sẽ reset playbackRate về defaultPlaybackRate (1.0)
         audio.src = blobUrl;
@@ -2954,6 +3059,7 @@ class TempleSoundService {
             preservePitch,
             config.ttsVolume
           );
+          refreshPlaybackWatchdogFromDuration();
         };
 
         audio.onplaying = () => {
@@ -2965,6 +3071,7 @@ class TempleSoundService {
             preservePitch,
             config.ttsVolume
           );
+          refreshPlaybackWatchdogFromDuration();
 
           const srcLabel =
             meta?.source === 'ram-cache'
@@ -3028,16 +3135,18 @@ class TempleSoundService {
         audio.onended = () => {
           if (fallbackTriggered || token !== this.speechTokenSeq) return;
           fallbackTriggered = true;
-          clearTimeout(lagTimeout);
+          clearStreamTimers();
           cleanupAudio();
           onDone();
         };
 
         audio.onerror = () => {
+          clearStreamTimers();
           fallbackOnce('File âm thanh từ Google Stream (#2) bị đứt giữa chừng');
         };
 
         audio.play().catch(() => {
+          clearStreamTimers();
           fallbackOnce('Trình duyệt chặn hoặc lỗi giải mã luồng Google Stream (#2)');
         });
       }

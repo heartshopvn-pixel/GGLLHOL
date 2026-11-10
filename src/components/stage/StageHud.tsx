@@ -560,6 +560,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const isAnswerFlashPhase = boardPhase === 'answer_flash';
   const isResultSummaryPhase = boardPhase === 'result_summary';
   const isRankingBoardPhase = boardPhase === 'ranking_board';
+  const isRoundEndPhase = boardPhase === 'round_end';
   const isRecordNoticePhase = boardPhase === 'record_notice';
   const isPunishmentNoticePhase = boardPhase === 'punishment_notice';
   const isLegacyRevealed = boardPhase === 'reveal';
@@ -569,6 +570,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
     (activeEngine === 'english_quiz' &&
       (isResultSummaryPhase ||
         isRankingBoardPhase ||
+        isRoundEndPhase ||
         (isLegacyRevealed && Boolean(classBoardState?.showResultEngine))));
 
   // Thời gian đã trôi qua trong pha hiện tại (ms)
@@ -579,6 +581,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const showTotalScoreBoard =
     showResultBoardView &&
     (isRankingBoardPhase ||
+      isRoundEndPhase ||
       (activeEngine === 'result_board' && elapsedPhaseMs >= 4000) ||
       (isLegacyRevealed && elapsedPhaseMs >= 4000));
 
@@ -739,15 +742,24 @@ const StageHudInner: React.FC<StageHudProps> = ({
     const rankNum = scorePageStartRank + slotIdx + 1;
     const entry = combinedTotalRankings[scorePageStartRank + slotIdx];
 
-    // Chỉ highlight duy nhất bạn Top 1
+    // Ở Luồng 6 chỉ highlight Top 1; ở Luồng Kết Thúc (round_end) highlight cả 3 bạn Top 1, Top 2, Top 3
+    const isHighlightedTop = isRoundEndPhase ? rankNum <= 3 : rankNum === 1;
     const cardToneClass =
       rankNum === 1
         ? 'bg-amber-500/30 border-yellow-300 rank-top1-blink'
+        : isHighlightedTop && rankNum === 2
+        ? 'bg-cyan-500/25 border-cyan-300 rank-top1-blink'
+        : isHighlightedTop && rankNum === 3
+        ? 'bg-orange-500/25 border-amber-400 rank-top1-blink'
         : 'bg-slate-950/65 border-white/25';
 
     const rankBadgeClass =
       rankNum === 1
         ? 'bg-yellow-300 text-stone-950 border-yellow-100'
+        : isHighlightedTop && rankNum === 2
+        ? 'bg-cyan-200 text-slate-950 border-white'
+        : isHighlightedTop && rankNum === 3
+        ? 'bg-amber-400 text-stone-950 border-amber-200'
         : 'bg-white text-slate-950 border-slate-200';
 
     const scoreFontSize = Math.max(10.5, safeClassBoardFontSize - 1);
@@ -870,12 +882,14 @@ const StageHudInner: React.FC<StageHudProps> = ({
         Date.now() < cameraLockEndMs
     );
 
-  // Khi có học sinh đang đi lên hoặc đứng chịu phạt trên lớp -> tạm ẩn Bảng Tin Lớp cho tới khi hàng phạt trống hoàn toàn
+  // Khi có học sinh đang đi lên hoặc đứng chịu phạt trên lớp -> tạm ẩn Bảng Tin Lớp cho tới khi hàng phạt trống hoàn toàn (không ẩn khi 3 bạn chiến thắng đứng bục giảng ở Luồng Kết Thúc)
   const hasPunishedStudentsOnStage =
     !editLayoutMode &&
+    !isRoundEndPhase &&
     pilgrims.some(
       (p) =>
-        p.state === 'stand_punishment' || p.state === 'walk_to_punishment_spot'
+        !p.podiumRank &&
+        (p.state === 'stand_punishment' || p.state === 'walk_to_punishment_spot')
     );
 
   // Key định danh luồng hiển thị bên trong Bảng Lớp: chỉ kích hoạt fade nhẹ (0 -> 1 trong 0.25s) cho phần chữ/nội dung bên trong khi chuyển luồng, giữ nguyên khung nền bảng đen đứng yên
@@ -1223,7 +1237,9 @@ const StageHudInner: React.FC<StageHudProps> = ({
                       fontSize: `${Math.max(7.5, Math.round((safeClassBoardFontSize + 1) * 0.8 * 10) / 10)}px`,
                     }}
                   >
-                    {showTotalScoreBoard
+                    {isRoundEndPhase
+                      ? '🎉 Kết thúc vòng 15 câu - Vinh danh Top 1, 2, 3'
+                      : showTotalScoreBoard
                       ? 'Bảng xếp hạng trong lớp'
                       : 'Kết quả câu hỏi'}
                   </span>
@@ -1231,7 +1247,9 @@ const StageHudInner: React.FC<StageHudProps> = ({
 
                 <div className="flex items-center gap-1 shrink-0">
                   <span className="px-1 py-[1px] rounded bg-emerald-500/25 border border-emerald-300/60 text-emerald-200 font-bold text-[7.2px]">
-                    {showTotalScoreBoard
+                    {isRoundEndPhase
+                      ? 'Top 1 • 2 • 3'
+                      : showTotalScoreBoard
                       ? 'Rank 1-10'
                       : `Đúng: ${boardWinners.length} bạn`}
                   </span>
@@ -1443,7 +1461,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 }}
               >
                 {classBoardState?.lessonStartText ||
-                  'Chào mừng các em đến với tiết học Tiếng Anh cùng cô giáo! Chúng ta cùng bắt đầu nhé!'}
+                  'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'}
               </div>
             </div>
           ) : activeEngine === 'english_quiz' && isPreparingPhase ? (
@@ -1493,7 +1511,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 <div className="flex items-center gap-1 min-w-0">
                   <BookOpen className="w-[11px] h-[11px] text-amber-300 shrink-0" />
                   <span className="font-extrabold tracking-wide text-amber-200 uppercase truncate">
-                    {classBoardLessonTitle || 'Tiết Tiếng Anh'} • Câu #{qIdx + 1}/{totalQuizCount}
+                    {classBoardLessonTitle || 'Tiết Tiếng Anh'} • Câu #{(classBoardState?.roundQuestionIndex ?? qIdx) + 1}/15
                   </span>
                   {Boolean(quizItem.luckyStars && quizItem.luckyStars >= 1) && (
                     <span
@@ -2628,6 +2646,7 @@ function areStageHudPropsEqual(
 
   const isRankingPhase =
     next.classBoardState?.phase === 'ranking_board' ||
+    next.classBoardState?.phase === 'round_end' ||
     next.classBoardState?.phase === 'reveal' ||
     next.classBoardState?.engine === 'result_board';
 

@@ -51,6 +51,10 @@ import {
   formatEnglishQuizTxt,
   parseEnglishQuizTxt,
 } from '../../config/constants';
+import {
+  build15MinuteTieredRoundQuestions,
+  ensureTieredQuizDecksLoaded,
+} from '../../config/vocabDecks';
 import { Flower10BadgeIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
 
 interface HudCycleSettingsCardProps {
@@ -316,12 +320,13 @@ export const TabControl: React.FC<TabControlProps> = ({
       ? config.customQuizQuestions
       : ENGLISH_QUIZ_QUESTIONS;
 
-  const quizDecks =
+  const quizDecks = ensureTieredQuizDecksLoaded(
     Array.isArray(config.quizDecks) && config.quizDecks.length > 0
       ? config.quizDecks
-      : DEFAULT_QUIZ_DECKS;
+      : DEFAULT_QUIZ_DECKS
+  );
 
-  const selectedDeckId = config.activeQuizDeckId || quizDecks[0]?.id || 'deck-12a1';
+  const selectedDeckId = config.activeQuizDeckId || quizDecks[0]?.id || 'deck-500-co-ban';
   const selectedDeck = quizDecks.find((d) => d.id === selectedDeckId) || quizDecks[0];
 
   // Gán sao may mắn ngẫu nhiên theo tỉ lệ % (Câu hỏi bình thường = 0 sao, 1 sao = x2đ, 2 sao = x3đ, 3 sao = x4đ)
@@ -545,6 +550,8 @@ export const TabControl: React.FC<TabControlProps> = ({
       ? 'Luồng 5: Đọc kết quả & Xếp chỗ [Nói xong → Luồng 6]'
       : boardPhase === 'ranking_board'
       ? 'Luồng 6: Đọc BXH Trong Lớp [Nói xong → Câu tiếp]'
+      : boardPhase === 'round_end'
+      ? 'Luồng Kết Thúc: Vinh danh Top 1, 2, 3 & Tặng Trà Sữa [Vỗ tay → Vòng mới]'
       : `Pha: ${boardPhase}`;
 
   return (
@@ -681,7 +688,7 @@ export const TabControl: React.FC<TabControlProps> = ({
             </span>
             {activeEngine === 'english_quiz' && (
               <span className="px-1.5 py-0.5 rounded bg-stone-950 border border-stone-800 text-[10px] font-mono text-amber-300 truncate">
-                #{qIdx + 1}/{activeQuizList.length}: {curQuiz.vi} → {curQuiz.en}
+                Câu {(classBoardState?.roundQuestionIndex ?? qIdx) + 1}/15: {curQuiz.vi} → {curQuiz.en}
               </span>
             )}
           </div>
@@ -1068,6 +1075,21 @@ export const TabControl: React.FC<TabControlProps> = ({
                         <span className="font-mono font-bold text-white truncate">
                           {q.en}
                         </span>
+                        {q.deckName && (
+                          <span className="px-1 py-0.2 rounded bg-stone-800 border border-stone-700 text-[8px] text-cyan-300 shrink-0">
+                            {q.deckName.includes('500')
+                              ? '500 Cơ bản'
+                              : q.deckName.includes('300')
+                              ? '300 TB'
+                              : q.deckName.includes('vua_phai') ||
+                                q.deckName.includes('vừa phải')
+                              ? '200 Khó vừa'
+                              : q.deckName.includes('nang_cao') ||
+                                q.deckName.includes('nâng cao')
+                              ? '200 Nâng cao'
+                              : q.deckName.replace(/\.txt$/i, '')}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">
@@ -1169,7 +1191,24 @@ export const TabControl: React.FC<TabControlProps> = ({
                     <span>🔀 Xáo trộn</span>
                   </label>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const tiered15 = build15MinuteTieredRoundQuestions(config);
+                        onUpdateConfig({
+                          quizDecks,
+                          customQuizQuestions: tiered15,
+                        });
+                        setQuizImportFeedback(
+                          '🎯 Đã trích ngẫu nhiên 15 câu chuẩn (5 câu 500 từ + 5 câu 300 TB + 3 câu 200 Khó vừa + 2 câu 200 Nâng cao)!'
+                        );
+                      }}
+                      title="Trích ngẫu nhiên 15 câu theo đúng cấu trúc: 5 câu đầu bộ 500 từ + 5 câu bộ 300 trung bình + 3 câu bộ 200 khó vừa + 2 câu cuối bộ 200 khó nâng cao"
+                      className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
+                    >
+                      🎯 Trích 15 câu (5+5+3+2)
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleLoadDeckToQueue('append')}

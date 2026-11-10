@@ -1713,7 +1713,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     {
                       text:
                         config.lessonStartTtsText ||
-                        'Chào mừng các em đến với tiết Tiếng Anh lớp 12A1! Các em hãy chú ý lên bảng và bình luận đáp án thật nhanh để giành ghế ngồi trong lớp nhé!',
+                        'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
                       lang: 'vi',
                     },
                   ],
@@ -1734,7 +1734,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               rows={2}
               value={
                 config.lessonStartTtsText ??
-                'Chào mừng các em đến với tiết Tiếng Anh lớp 12A1! Các em hãy chú ý lên bảng và bình luận đáp án thật nhanh để giành ghế ngồi trong lớp nhé!'
+                'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'
               }
               onChange={(e) =>
                 onUpdateConfig({ lessonStartTtsText: e.target.value })
@@ -2737,6 +2737,93 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 <span className="text-stone-400">Thời gian luồng:</span>
                 <span className="font-mono font-bold text-emerald-300">
                   🔒 Tự động: Giữ nguyên danh sách Top đầu xuyên suốt luồng • Nói xong kết thúc câu hỏi
+                </span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* LUỒNG KẾT THÚC (THAY CHO LUỒNG 6 Ở CÂU THỨ 15 CUỐI VÒNG): TỔNG KẾT TOP 1, 2, 3 + TẶNG TRÀ SỮA MATCHA LATTE + VỖ TAY */}
+        {(() => {
+          const defaultRoundEndTpl =
+            'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Tặng 3 bạn 3 ly trà sữa mat cha lat te phun tóp ping, mấy cưng ở dưới vỗ tay nào !';
+          const currentRoundEndTpl =
+            config.lessonRoundEndTtsTemplate ?? defaultRoundEndTpl;
+
+          return (
+            <div className="p-2.5 rounded-xl bg-stone-950 border border-emerald-500/45 space-y-2 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 font-mono font-black text-[10px]">
+                    Luồng Kết Thúc
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-200">
+                    Tổng kết vòng 15 câu (Thay Luồng 6 ở câu cuối • Vinh danh Top 1, 2, 3 & Tặng Trà Sữa)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateConfig({
+                        lessonRoundEndTtsTemplate: defaultRoundEndTpl,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-stone-900 hover:bg-stone-800 border border-stone-700 text-[10px] font-semibold text-stone-300 cursor-pointer"
+                  >
+                    Mặc định
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const preview = (currentRoundEndTpl || defaultRoundEndTpl)
+                        .replace(/\[top1\]|\[Top1Rank\]|\[Top1\]/gi, 'Bảo Ngọc')
+                        .replace(/\[Điểm top 1\]|\[ĐiểmTop1\]/gi, '150')
+                        .replace(/\[top2\]|\[Top2Rank\]|\[Top2\]/gi, 'Minh Khôi')
+                        .replace(/\[Điểm top 2\]|\[ĐiểmTop2\]/gi, '125')
+                        .replace(/\[top3\]|\[Top3Rank\]|\[Top3\]/gi, 'Hà My')
+                        .replace(/\[Điểm top 3\]|\[ĐiểmTop3\]/gi, '110');
+                      soundEngine.enqueueLessonFlowItems(
+                        [{ text: preview, lang: 'vi' }],
+                        config
+                      );
+                    }}
+                    className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[10px] font-semibold text-emerald-300 cursor-pointer"
+                  >
+                    Nghe thử
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-stone-400">
+                  <span>
+                    Biến hỗ trợ:{' '}
+                    <span className="font-mono text-emerald-300">
+                      [top1], [Điểm top 1], [top2], [Điểm top 2], [top3], [Điểm top 3]
+                    </span>
+                  </span>
+                  <span className="text-[9.5px] text-amber-300">
+                    🧋 Tự động khóa cam Top 1→2→3, phát 3 ly trà sữa (200%/150%/100%) & vỗ tay
+                  </span>
+                </div>
+                <textarea
+                  rows={3}
+                  value={currentRoundEndTpl}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      lessonRoundEndTtsTemplate: e.target.value,
+                    })
+                  }
+                  placeholder="Nhập nội dung tổng kết kết thúc vòng 15 câu..."
+                  className="w-full px-2 py-1.5 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-100 focus:outline-none focus:border-emerald-400 resize-y"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
+                <span className="text-stone-400">Hiệu ứng kết thúc vòng:</span>
+                <span className="font-mono font-bold text-emerald-300">
+                  🔒 Vỗ tay xong → Reset toàn bộ điểm về 0 (giữ nguyên chỗ ngồi) & sang vòng 15 câu mới
                 </span>
               </div>
             </div>
