@@ -1215,69 +1215,75 @@ export const GameStage: React.FC<GameStageProps> = ({
     }
   };
 
-  const handleStartDragHudBox = (
-    boxKey: HudBoxKey,
-    e: React.MouseEvent | React.TouchEvent
-  ) => {
-    e.stopPropagation();
-    if (!viewportRef.current) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const rect = viewportRef.current.getBoundingClientRect();
-    const scaleX = 540 / rect.width;
-    const scaleY = 960 / rect.height;
-    const stageX = (clientX - rect.left) * scaleX;
-    const stageY = (clientY - rect.top) * scaleY;
-    const box = config.hudLayout[boxKey] || {
-      x: 12,
-      y: 154,
-      width: 136,
-      height: 34,
-    };
-    setDraggingHudBox({
-      boxKey,
-      offsetX: stageX - box.x,
-      offsetY: stageY - box.y,
-    });
-  };
+  const handleStartDragHudBox = useCallback(
+    (boxKey: HudBoxKey, e: React.MouseEvent | React.TouchEvent) => {
+      e.stopPropagation();
+      if (!viewportRef.current) return;
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      const rect = viewportRef.current.getBoundingClientRect();
+      const scaleX = 540 / rect.width;
+      const scaleY = 960 / rect.height;
+      const stageX = (clientX - rect.left) * scaleX;
+      const stageY = (clientY - rect.top) * scaleY;
+      const box = config.hudLayout[boxKey] || {
+        x: 12,
+        y: 154,
+        width: 136,
+        height: 34,
+      };
+      setDraggingHudBox({
+        boxKey,
+        offsetX: stageX - box.x,
+        offsetY: stageY - box.y,
+      });
+    },
+    [config.hudLayout]
+  );
 
-  const handleStartResizeHudBox = (
-    boxKey: HudBoxKey,
-    corner: ResizeCorner,
-    e: React.MouseEvent | React.TouchEvent
-  ) => {
-    e.stopPropagation();
-    if (!viewportRef.current) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const rect = viewportRef.current.getBoundingClientRect();
-    const scaleX = 540 / rect.width;
-    const scaleY = 960 / rect.height;
-    const stageX = (clientX - rect.left) * scaleX;
-    const stageY = (clientY - rect.top) * scaleY;
-    const box = config.hudLayout[boxKey] || {
-      x: 12,
-      y: 154,
-      width: 136,
-      height: 34,
-    };
-    setResizingHudBox({
-      boxKey,
-      corner,
-      startX: stageX,
-      startY: stageY,
-      initialBox: { ...box },
-    });
-  };
+  const handleStartResizeHudBox = useCallback(
+    (
+      boxKey: HudBoxKey,
+      corner: ResizeCorner,
+      e: React.MouseEvent | React.TouchEvent
+    ) => {
+      e.stopPropagation();
+      if (!viewportRef.current) return;
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      const rect = viewportRef.current.getBoundingClientRect();
+      const scaleX = 540 / rect.width;
+      const scaleY = 960 / rect.height;
+      const stageX = (clientX - rect.left) * scaleX;
+      const stageY = (clientY - rect.top) * scaleY;
+      const box = config.hudLayout[boxKey] || {
+        x: 12,
+        y: 154,
+        width: 136,
+        height: 34,
+      };
+      setResizingHudBox({
+        boxKey,
+        corner,
+        startX: stageX,
+        startY: stageY,
+        initialBox: { ...box },
+      });
+    },
+    [config.hudLayout]
+  );
 
-  const handleStartDragZoneEdge = (
-    zoneKey: ZoneKey,
-    edge: RectEdge,
-    e: React.MouseEvent | React.TouchEvent
-  ) => {
-    e.stopPropagation();
-    setDraggingZoneEdge({ zoneKey, edge });
-  };
+  const handleStartDragZoneEdge = useCallback(
+    (
+      zoneKey: ZoneKey,
+      edge: RectEdge,
+      e: React.MouseEvent | React.TouchEvent
+    ) => {
+      e.stopPropagation();
+      setDraggingZoneEdge({ zoneKey, edge });
+    },
+    []
+  );
 
   const isGrandEventActive = goldenLotusRainUntil > Date.now();
   const totalSeatCapacity =
@@ -1343,7 +1349,6 @@ export const GameStage: React.FC<GameStageProps> = ({
           <ClassroomArt
             vipSlots={vipSlots}
             normalSlots={normalSlots}
-            pilgrims={pilgrims}
             incenseBurner={config.incenseBurner}
             offeringTrayPos={config.offeringTrayPos}
             customAssets={customAssets}
@@ -1351,15 +1356,6 @@ export const GameStage: React.FC<GameStageProps> = ({
             studentDeskGap={config.studentDeskGap ?? 24}
             giftModelScales={config.giftModelScales}
             renderLayer="background"
-            latestAltarOffering={
-              latestAltarOffering
-                ? {
-                    type: latestAltarOffering,
-                    username: '',
-                    key: 1,
-                  }
-                : null
-            }
           />
 
           {/* Layer 2: Canvas Chalk Dust & Optional Seat Waypoint Cushions */}

@@ -17,7 +17,6 @@ import {
   DeskCatModel,
   PcGamingDeskModel,
   RunningPigModel,
-  SchoolGiftArt,
   SnackBagModel,
 } from './SchoolGiftArt';
 
@@ -915,5 +914,86 @@ const ClassroomArtInner: React.FC<ClassroomArtProps> = ({
   );
 };
 
-export const ClassroomArt = React.memo(ClassroomArtInner);
+function areDeskOccupantsEqual(
+  prevPilgrims: PilgrimData[] | undefined,
+  nextPilgrims: PilgrimData[] | undefined
+): boolean {
+  if (prevPilgrims === nextPilgrims) return true;
+  const a = prevPilgrims || [];
+  const b = nextPilgrims || [];
 
+  // Chỉ quan tâm tới học sinh đang ngồi/chiếm ghế có vật phẩm đặt trên mặt bàn
+  let countA = 0;
+  const mapA = new Map<string, PilgrimData>();
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i];
+    if (
+      p.slotId &&
+      p.state !== 'leave_side_to_aisle' &&
+      p.state !== 'leave_down_exit' &&
+      (p.hasPcGamingDesk || p.hasDeskCat || p.hasDeskSnack || p.hasDeskPig)
+    ) {
+      countA++;
+      mapA.set(p.slotId, p);
+    }
+  }
+
+  let countB = 0;
+  for (let i = 0; i < b.length; i++) {
+    const p = b[i];
+    if (
+      p.slotId &&
+      p.state !== 'leave_side_to_aisle' &&
+      p.state !== 'leave_down_exit' &&
+      (p.hasPcGamingDesk || p.hasDeskCat || p.hasDeskSnack || p.hasDeskPig)
+    ) {
+      countB++;
+      const prevP = mapA.get(p.slotId);
+      if (
+        !prevP ||
+        Boolean(prevP.hasPcGamingDesk) !== Boolean(p.hasPcGamingDesk) ||
+        Boolean(prevP.hasDeskCat) !== Boolean(p.hasDeskCat) ||
+        (prevP.deskCatCount || 0) !== (p.deskCatCount || 0) ||
+        (prevP.deskCatDropAt || 0) !== (p.deskCatDropAt || 0) ||
+        Boolean(prevP.hasDeskSnack) !== Boolean(p.hasDeskSnack) ||
+        (prevP.deskSnackDropAt || 0) !== (p.deskSnackDropAt || 0) ||
+        Boolean(prevP.hasDeskPig) !== Boolean(p.hasDeskPig) ||
+        (prevP.deskPigDropAt || 0) !== (p.deskPigDropAt || 0)
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return countA === countB;
+}
+
+function areClassroomArtPropsEqual(
+  prev: ClassroomArtProps,
+  next: ClassroomArtProps
+): boolean {
+  if (prev.renderLayer !== next.renderLayer) return false;
+
+  // Tầng nền SVG phòng học chỉ phụ thuộc vào ảnh nền tùy chỉnh (customBgUrl)
+  if (next.renderLayer === 'background') {
+    return prev.customAssets?.customBgUrl === next.customAssets?.customBgUrl;
+  }
+
+  if (
+    prev.vipSlots !== next.vipSlots ||
+    prev.normalSlots !== next.normalSlots ||
+    prev.deskScale !== next.deskScale ||
+    prev.studentDeskGap !== next.studentDeskGap ||
+    prev.customAssets !== next.customAssets ||
+    prev.giftModelScales !== next.giftModelScales
+  ) {
+    return false;
+  }
+
+  return areDeskOccupantsEqual(prev.pilgrims, next.pilgrims);
+}
+
+export const ClassroomArt = React.memo(
+  ClassroomArtInner,
+  areClassroomArtPropsEqual
+);

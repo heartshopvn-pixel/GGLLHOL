@@ -166,6 +166,7 @@ class TempleSoundService {
   private currentAudio: HTMLAudioElement | null = null;
   private speechTokenSeq = 0;
   private mutedSimTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeFinishCallback: (() => void) | null = null;
   private recentSpokenMap = new Map<string, number>();
   private statusListeners = new Set<TTSStatusListener>();
   private queueListeners = new Set<EventTtsQueueListener>();
@@ -582,6 +583,14 @@ class TempleSoundService {
     sessionStorage.setItem('chua_silent_admin_tab', muted ? 'true' : 'false');
     if (muted) {
       this.stopBgmInternal();
+      if (this.previewZombieBgmAudio) {
+        try {
+          this.previewZombieBgmAudio.pause();
+        } catch {
+          // Ignore
+        }
+        this.previewZombieBgmAudio = null;
+      }
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
@@ -595,6 +604,14 @@ class TempleSoundService {
         } catch {
           // Ignore
         }
+      }
+      // Nếu đang đọc dở câu khi bấm Tắt tiếng tab (Cách 1), chuyển ngay sang bộ đếm giả lập để luồng tiết học không bị kẹt
+      if (this.isSpeaking && this.activeFinishCallback && !this.mutedSimTimer) {
+        const pendingFinish = this.activeFinishCallback;
+        this.mutedSimTimer = setTimeout(() => {
+          this.mutedSimTimer = null;
+          pendingFinish();
+        }, 650);
       }
     } else if (this.latestConfig && !this.remoteSlaveMode) {
       this.syncConfig(this.latestConfig);
@@ -768,6 +785,7 @@ class TempleSoundService {
     this.isSpeakingDharma = false;
     this.currentEventText = '';
     this.activeEventItem = null;
+    this.activeFinishCallback = null;
     if (this.mutedSimTimer) {
       clearTimeout(this.mutedSimTimer);
       this.mutedSimTimer = null;
@@ -2388,7 +2406,7 @@ class TempleSoundService {
       nextItem = this.ttsQueue.shift()!;
       nextText = nextItem.text;
       isDharmaLine = false;
-    } else if (config.dharmaEnabled && !this.isTabMuted()) {
+    } else if (config.dharmaEnabled && !this.remoteSlaveMode) {
       nextText = this.getNextDharmaSentence(config);
       isDharmaLine = true;
     }
@@ -2463,6 +2481,7 @@ class TempleSoundService {
     const finish = () => {
       if (finishedOnce || token !== this.speechTokenSeq) return;
       finishedOnce = true;
+      this.activeFinishCallback = null;
 
       const completedItem = isDharmaLine ? null : nextItem;
       this.isSpeaking = false;
@@ -2481,6 +2500,7 @@ class TempleSoundService {
       }
       this.scheduleNextDharmaStep(isDharmaLine ? 380 : 80);
     };
+    this.activeFinishCallback = finish;
 
     const itemLang: 'vi' | 'en' =
       (!isDharmaLine && (nextItem?.lang || nextItem?.meta?.lang)) || 'vi';

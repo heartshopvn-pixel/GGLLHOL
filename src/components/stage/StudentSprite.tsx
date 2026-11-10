@@ -958,7 +958,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
               </div>
             )}
 
-          {/* THẺ SHOW SỐ ĐIỂM + SỐ ĐIỂM CỘNG/TRỪ (MÀU XANH LÁ / ĐỎ, VIỀN ĐEN ĐẬM, KHÔNG NỀN, TEXT RUN NHẸ)
+          {/* THẺ SHOW SỐ ĐIỂM + FLOATING TEXT EXP PHÍA TRÊN SỐ ĐIỂM CỘNG + SỐ ĐIỂM CỘNG/TRỪ
               Vị trí cố định tuyệt đối cách Thẻ tên đúng 2px + scoreTagOffsetY trong Dev cho MỌI học sinh (không bao giờ bị đẩy lệch bởi icon buff) */}
           {showScoreCard && (() => {
             const totalScore = Math.max(
@@ -966,6 +966,12 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
               Math.round(pilgrim.currentScoreDisplay ?? 0)
             );
             const delta = Math.round(pilgrim.scoreChangeDelta ?? 0);
+            const expDelta = Math.max(0, Math.round(pilgrim.expChangeDelta ?? 0));
+            const curExp = Math.max(0, Math.round(pilgrim.exp ?? 0));
+            const curLevel =
+              pilgrim.level && pilgrim.level > 0
+                ? pilgrim.level
+                : Math.floor(curExp / 20) + 1;
             const isPositive = delta >= 0;
             const formattedDelta = delta > 0 ? `+${delta}` : `${delta}`;
             const safeFontSize = Math.max(
@@ -1068,6 +1074,23 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                   </div>
                 )}
 
+                {/* FLOATING TEXT EXP: nằm ngay phía trên số điểm cộng (+điểm) */}
+                {expDelta > 0 && (
+                  <div
+                    className="score-delta-vibrate font-mono font-black leading-none whitespace-nowrap mb-0.5 relative z-10"
+                    style={{
+                      fontSize: `${Math.max(8, Math.round(safeFontSize * 0.86))}px`,
+                      color: pilgrim.leveledUpInRound ? '#fde047' : '#38bdf8',
+                      WebkitTextStroke: `${Math.max(0.5, safeStrokeW * 0.9)}px #000000`,
+                      paintOrder: 'stroke fill',
+                      textShadow:
+                        '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 2px rgba(0,0,0,0.95)',
+                    }}
+                  >
+                    +{expDelta} EXP{pilgrim.leveledUpInRound ? ` ⬆️Lv.${curLevel}` : ''}
+                  </div>
+                )}
+
                 {/* Số điểm thay đổi (+ / -): nằm cố định ngay phía trên Thẻ số điểm, không nền, chữ xanh lá / đỏ, viền đen đậm, hiệu ứng run nhẹ */}
                 {delta !== 0 && (
                   <div
@@ -1100,50 +1123,74 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
             );
           })()}
 
-          {/* Thẻ Tên Chính (cố định chiều cao 20px) */}
-          <div
-            style={{ fontFamily: nameTagFontFamily }}
-            className={`h-[20px] pl-0 pr-1.5 py-0 rounded-full flex items-center gap-1 whitespace-nowrap transition-shadow ${
-              isPerformingGiftAction
-                ? 'bg-amber-950/95 border-2 border-yellow-300 ring-2 ring-amber-300/85 text-yellow-200 shadow-[0_0_14px_rgba(250,204,21,0.98)]'
-                : pilgrim.isGoldenPriority || isRichKidDancing
-                ? 'bg-amber-950/95 border border-yellow-300 text-yellow-200 shadow-[0_0_10px_rgba(250,204,21,0.85)]'
-                : isSpeakingBubble
-                ? 'bg-pink-950/95 border border-pink-400 text-pink-200 shadow-[0_0_10px_rgba(244,114,182,0.75)]'
-                : showChatBubble
-                ? 'bg-slate-950/95 border border-sky-400 text-sky-100 shadow-[0_0_8px_rgba(56,189,248,0.65)]'
-                : pilgrim.isVip
-                ? 'bg-amber-950/90 border border-amber-400/80 text-amber-200 shadow-sm'
-                : 'bg-slate-950/85 border border-slate-700/80 text-slate-100 shadow-sm'
-            }`}
-          >
-            {pilgrim.avatarUrl ? (
-              <img
-                src={pilgrim.avatarUrl}
-                alt=""
-                className="w-4 h-4 rounded-full object-cover border border-white/40 shrink-0 -ml-px"
-              />
-            ) : (
-              <span
-                className="w-4 h-4 rounded-full shrink-0 inline-block border border-white/30 -ml-px"
-                style={{ backgroundColor: pilgrim.avatarColor }}
-              />
-            )}
-            <span
-              className={`text-[9.5px] font-bold tracking-tight py-0.5 ${
-                pilgrim.isGoldenPriority || isRichKidDancing
-                  ? 'text-yellow-300 font-black'
-                  : ''
-              }`}
-            >
-              {displayUsername}
-            </span>
-            {(pilgrim.isVip || pilgrim.isGoldenPriority || isRichKidDancing) && (
-              <span className="text-[8px] font-extrabold text-yellow-300">
-                {pilgrim.isGoldenPriority || isRichKidDancing ? '👑' : '★'}
-              </span>
-            )}
-          </div>
+          {/* Thẻ Tên Chính (cố định chiều cao 20px) + Huy hiệu Cấp độ Lv.X */}
+          {(() => {
+            const curExp = Math.max(0, Math.round(pilgrim.exp ?? 0));
+            const studentLevel =
+              pilgrim.level && pilgrim.level > 0
+                ? pilgrim.level
+                : Math.floor(curExp / 20) + 1;
+            const levelBadgeClass =
+              studentLevel >= 10
+                ? 'bg-amber-500/30 border-yellow-300/90 text-yellow-200'
+                : studentLevel >= 5
+                ? 'bg-fuchsia-500/30 border-fuchsia-300/85 text-fuchsia-200'
+                : studentLevel >= 2
+                ? 'bg-emerald-500/30 border-emerald-300/85 text-emerald-200'
+                : 'bg-sky-500/25 border-sky-400/70 text-sky-200';
+
+            return (
+              <div
+                style={{ fontFamily: nameTagFontFamily }}
+                className={`h-[20px] pl-0 pr-1.5 py-0 rounded-full flex items-center gap-1 whitespace-nowrap transition-shadow ${
+                  isPerformingGiftAction
+                    ? 'bg-amber-950/95 border-2 border-yellow-300 ring-2 ring-amber-300/85 text-yellow-200 shadow-[0_0_14px_rgba(250,204,21,0.98)]'
+                    : pilgrim.isGoldenPriority || isRichKidDancing
+                    ? 'bg-amber-950/95 border border-yellow-300 text-yellow-200 shadow-[0_0_10px_rgba(250,204,21,0.85)]'
+                    : isSpeakingBubble
+                    ? 'bg-pink-950/95 border border-pink-400 text-pink-200 shadow-[0_0_10px_rgba(244,114,182,0.75)]'
+                    : showChatBubble
+                    ? 'bg-slate-950/95 border border-sky-400 text-sky-100 shadow-[0_0_8px_rgba(56,189,248,0.65)]'
+                    : pilgrim.isVip
+                    ? 'bg-amber-950/90 border border-amber-400/80 text-amber-200 shadow-sm'
+                    : 'bg-slate-950/85 border border-slate-700/80 text-slate-100 shadow-sm'
+                }`}
+              >
+                {pilgrim.avatarUrl ? (
+                  <img
+                    src={pilgrim.avatarUrl}
+                    alt=""
+                    className="w-4 h-4 rounded-full object-cover border border-white/40 shrink-0 -ml-px"
+                  />
+                ) : (
+                  <span
+                    className="w-4 h-4 rounded-full shrink-0 inline-block border border-white/30 -ml-px"
+                    style={{ backgroundColor: pilgrim.avatarColor }}
+                  />
+                )}
+                <span
+                  className={`px-1 py-0.5 rounded border font-mono font-black text-[7.5px] leading-none shrink-0 ${levelBadgeClass}`}
+                  title={`Cấp ${studentLevel} (${curExp} EXP)`}
+                >
+                  Lv.{studentLevel}
+                </span>
+                <span
+                  className={`text-[9.5px] font-bold tracking-tight py-0.5 ${
+                    pilgrim.isGoldenPriority || isRichKidDancing
+                      ? 'text-yellow-300 font-black'
+                      : ''
+                  }`}
+                >
+                  {displayUsername}
+                </span>
+                {(pilgrim.isVip || pilgrim.isGoldenPriority || isRichKidDancing) && (
+                  <span className="text-[8px] font-extrabold text-yellow-300">
+                    {pilgrim.isGoldenPriority || isRichKidDancing ? '👑' : '★'}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           {/* THẺ BUFF NHÂN ĐIỂM KHI BỊ PHẠT ĐỨNG TRÊN BỤC (x3 / x6 / x9): Nằm dưới thẻ tên và giảm kích thước 20% (scale 0.8) */}
           {showPunishmentBadge && (
@@ -1241,6 +1288,10 @@ function areStudentSpritePropsEqual(
     a.scoreCardKey !== b.scoreCardKey ||
     a.currentScoreDisplay !== b.currentScoreDisplay ||
     a.scoreChangeDelta !== b.scoreChangeDelta ||
+    a.exp !== b.exp ||
+    a.level !== b.level ||
+    a.expChangeDelta !== b.expChangeDelta ||
+    a.leveledUpInRound !== b.leveledUpInRound ||
     a.floatingScoreText !== b.floatingScoreText ||
     a.floatingScoreUntil !== b.floatingScoreUntil ||
     a.floatingScoreKey !== b.floatingScoreKey ||

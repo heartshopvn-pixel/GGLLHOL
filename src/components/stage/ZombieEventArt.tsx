@@ -15,7 +15,7 @@ interface ZombieCharacterSpriteProps {
   scale?: number;
 }
 
-export const ZombieCharacterSprite: React.FC<ZombieCharacterSpriteProps> = ({
+const ZombieCharacterSpriteInner: React.FC<ZombieCharacterSpriteProps> = ({
   zombie,
   customAssets,
   scale = 1.15,
@@ -198,6 +198,8 @@ export const ZombieCharacterSprite: React.FC<ZombieCharacterSpriteProps> = ({
   );
 };
 
+export const ZombieCharacterSprite = React.memo(ZombieCharacterSpriteInner);
+
 interface ZombieProjectileSpriteProps {
   proj: ZombieProjectileFX;
   customAssets?: CustomAssetsConfig;
@@ -206,51 +208,63 @@ interface ZombieProjectileSpriteProps {
   nameTagMaxChars?: number;
 }
 
-export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
+const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
   proj,
   customAssets,
   nameTagFontFamily = '"Be Vietnam Pro", system-ui, sans-serif',
   nameTagScale = 1,
   nameTagMaxChars = 16,
 }) => {
-  const [progress, setProgress] = React.useState(0);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const tailRef = React.useRef<HTMLDivElement>(null);
+  const spinRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     let rafId = 0;
+    const arcHeight =
+      proj.kind === 'desk_mate' || proj.kind === 'chair' ? 95 : 50;
+    const totalSpin =
+      proj.kind === 'desk_mate' || proj.kind === 'chair' ? 1080 : 720;
+    const safeDur = Math.max(120, proj.durationMs);
+
     const update = () => {
-      const now = Date.now();
-      const elapsed = now - proj.createdAt;
-      const p = Math.max(0, Math.min(1, elapsed / Math.max(120, proj.durationMs)));
-      setProgress(p);
+      const elapsed = Date.now() - proj.createdAt;
+      const p = Math.max(0, Math.min(1, elapsed / safeDur));
+
+      const curX = proj.startX + (proj.targetX - proj.startX) * p;
+      const linearY = proj.startY + (proj.targetY - proj.startY) * p;
+      const curY = linearY - Math.sin(p * Math.PI) * arcHeight;
+
+      const prevP = Math.max(0, p - 0.12);
+      const tailX = proj.startX + (proj.targetX - proj.startX) * prevP;
+      const tailLinearY = proj.startY + (proj.targetY - proj.startY) * prevP;
+      const tailY = tailLinearY - Math.sin(prevP * Math.PI) * arcHeight;
+
+      const dx = curX - tailX;
+      const dy = curY - tailY;
+      const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const tailLen = Math.min(58, Math.hypot(dx, dy) * 1.35);
+      const spinDeg = p * totalSpin;
+
+      if (containerRef.current) {
+        containerRef.current.style.left = `${curX.toFixed(1)}px`;
+        containerRef.current.style.top = `${curY.toFixed(1)}px`;
+      }
+      if (tailRef.current) {
+        tailRef.current.style.width = `${tailLen.toFixed(1)}px`;
+        tailRef.current.style.transform = `translateY(-50%) rotate(${angleDeg.toFixed(1)}deg)`;
+      }
+      if (spinRef.current) {
+        spinRef.current.style.transform = `translate(-50%, -50%) rotate(${spinDeg.toFixed(1)}deg)`;
+      }
+
       if (p < 1) {
         rafId = requestAnimationFrame(update);
       }
     };
-    rafId = requestAnimationFrame(update);
+    update();
     return () => cancelAnimationFrame(rafId);
-  }, [proj.createdAt, proj.durationMs]);
-
-  // Quỹ đạo bay vòng cung parabol
-  const curX = proj.startX + (proj.targetX - proj.startX) * progress;
-  const linearY = proj.startY + (proj.targetY - proj.startY) * progress;
-  const arcHeight =
-    proj.kind === 'desk_mate' || proj.kind === 'chair' ? 95 : 50;
-  const arcOffset = -Math.sin(progress * Math.PI) * arcHeight;
-  const curY = linearY + arcOffset;
-
-  // Điểm đuôi đạn phía trước đó một chút để vẽ vệt đuôi đơn giản
-  const prevP = Math.max(0, progress - 0.12);
-  const tailX = proj.startX + (proj.targetX - proj.startX) * prevP;
-  const tailLinearY = proj.startY + (proj.targetY - proj.startY) * prevP;
-  const tailY = tailLinearY - Math.sin(prevP * Math.PI) * arcHeight;
-
-  const dx = curX - tailX;
-  const dy = curY - tailY;
-  const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-  const tailLen = Math.min(58, Math.hypot(dx, dy) * 1.35);
-
-  const spinDeg =
-    progress * (proj.kind === 'desk_mate' || proj.kind === 'chair' ? 1080 : 720);
+  }, [proj.createdAt, proj.durationMs, proj.kind, proj.startX, proj.startY, proj.targetX, proj.targetY]);
 
   const tailColor =
     proj.kind === 'desk_mate'
@@ -498,32 +512,35 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
 
   return (
     <div
-      className="absolute w-0 h-0 pointer-events-none select-none"
+      ref={containerRef}
+      className="absolute w-0 h-0 pointer-events-none select-none will-change-transform"
       style={{
-        left: `${curX}px`,
-        top: `${curY}px`,
+        left: `${proj.startX}px`,
+        top: `${proj.startY}px`,
         zIndex: 920,
       }}
     >
       {/* Đuôi đạn gắn chính xác vào tâm (0, 0) của model đạn */}
       <div
+        ref={tailRef}
         className={`absolute rounded-full bg-gradient-to-l ${tailColor} blur-[1px]`}
         style={{
           right: 0,
           top: 0,
-          width: `${tailLen}px`,
+          width: '0px',
           height:
             proj.kind === 'desk_mate' || proj.kind === 'chair' ? '12px' : '6px',
           transformOrigin: '100% 50%',
-          transform: `translateY(-50%) rotate(${angleDeg}deg)`,
+          transform: 'translateY(-50%) rotate(0deg)',
         }}
       />
 
       {/* Model đạn xoay tròn quanh tâm (0, 0) */}
       <div
+        ref={spinRef}
         className="absolute left-0 top-0 drop-shadow-[0_4px_8px_rgba(0,0,0,0.5)]"
         style={{
-          transform: `translate(-50%, -50%) rotate(${spinDeg}deg)`,
+          transform: 'translate(-50%, -50%) rotate(0deg)',
         }}
       >
         {renderModel()}
@@ -532,42 +549,55 @@ export const ZombieProjectileSprite: React.FC<ZombieProjectileSpriteProps> = ({
   );
 };
 
+export const ZombieProjectileSprite = React.memo(ZombieProjectileSpriteInner);
+
 interface ZombieSpikyDamageBubbleProps {
   fx: ZombieSpikyDamageFX;
 }
 
-export const ZombieSpikyDamageBubble: React.FC<ZombieSpikyDamageBubbleProps> = ({ fx }) => {
-  const [progress, setProgress] = React.useState(0);
+const ZombieSpikyDamageBubbleInner: React.FC<ZombieSpikyDamageBubbleProps> = ({
+  fx,
+}) => {
+  const bubbleRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     let rafId = 0;
+    const baseScale = fx.scale || 1;
     const tick = () => {
       const elapsed = Date.now() - fx.createdAt;
       const p = Math.max(0, Math.min(1, elapsed / 900));
-      setProgress(p);
+      const curX = fx.x + fx.vx * p;
+      const curY = fx.y + fx.vy * p - Math.sin(p * Math.PI) * 18;
+      const scale =
+        p < 0.2 ? 0.5 + (p / 0.2) * 0.75 : 1.25 - (p - 0.2) * 0.35;
+      const opacity = p > 0.7 ? Math.max(0, 1 - (p - 0.7) / 0.3) : 1;
+
+      if (bubbleRef.current) {
+        bubbleRef.current.style.left = `${curX.toFixed(1)}px`;
+        bubbleRef.current.style.top = `${curY.toFixed(1)}px`;
+        bubbleRef.current.style.transform = `translate(-50%, -50%) scale(${(
+          scale * baseScale
+        ).toFixed(3)})`;
+        bubbleRef.current.style.opacity = opacity.toFixed(2);
+      }
       if (p < 1) {
         rafId = requestAnimationFrame(tick);
       }
     };
-    rafId = requestAnimationFrame(tick);
+    tick();
     return () => cancelAnimationFrame(rafId);
-  }, [fx.createdAt]);
-
-  // Văng ra theo hướng ngẫu nhiên quanh Zombie
-  const curX = fx.x + fx.vx * progress;
-  const curY = fx.y + fx.vy * progress - Math.sin(progress * Math.PI) * 18;
-  const scale = progress < 0.2 ? 0.5 + (progress / 0.2) * 0.75 : 1.25 - (progress - 0.2) * 0.35;
-  const opacity = progress > 0.7 ? Math.max(0, 1 - (progress - 0.7) / 0.3) : 1;
+  }, [fx.createdAt, fx.scale, fx.vx, fx.vy, fx.x, fx.y]);
 
   return (
     <div
-      className="absolute pointer-events-none select-none"
+      ref={bubbleRef}
+      className="absolute pointer-events-none select-none will-change-transform"
       style={{
-        left: `${curX}px`,
-        top: `${curY}px`,
+        left: `${fx.x}px`,
+        top: `${fx.y}px`,
         zIndex: 960,
-        transform: `translate(-50%, -50%) scale(${scale * (fx.scale || 1)})`,
-        opacity,
+        transform: `translate(-50%, -50%) scale(${0.5 * (fx.scale || 1)})`,
+        opacity: 1,
       }}
     >
       {/* Hình vụ nổ gai nhọn màu kem vàng (Spiky Speech Bubble - viền mỏng, số to rõ dễ đọc) */}
@@ -597,43 +627,52 @@ export const ZombieSpikyDamageBubble: React.FC<ZombieSpikyDamageBubbleProps> = (
   );
 };
 
+export const ZombieSpikyDamageBubble = React.memo(ZombieSpikyDamageBubbleInner);
+
 interface FlyingMilkTeaSpriteProps {
   tea: FlyingMilkTeaFX;
   customAssets?: CustomAssetsConfig;
 }
 
-export const FlyingMilkTeaSprite: React.FC<FlyingMilkTeaSpriteProps> = ({
+const FlyingMilkTeaSpriteInner: React.FC<FlyingMilkTeaSpriteProps> = ({
   tea,
   customAssets,
 }) => {
-  const [progress, setProgress] = React.useState(0);
+  const cupRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     let rafId = 0;
+    const safeDur = Math.max(300, tea.durationMs);
     const tick = () => {
       const elapsed = Date.now() - tea.createdAt;
-      const p = Math.max(0, Math.min(1, elapsed / Math.max(300, tea.durationMs)));
-      setProgress(p);
+      const p = Math.max(0, Math.min(1, elapsed / safeDur));
+      const curX = tea.startX + (tea.targetX - tea.startX) * p;
+      const linearY = tea.startY + (tea.targetY - tea.startY) * p;
+      const curY = linearY - Math.sin(p * Math.PI) * 85;
+      const sc = 0.85 + Math.sin(p * Math.PI) * 0.25;
+
+      if (cupRef.current) {
+        cupRef.current.style.left = `${curX.toFixed(1)}px`;
+        cupRef.current.style.top = `${curY.toFixed(1)}px`;
+        cupRef.current.style.transform = `translate(-50%, -50%) scale(${sc.toFixed(3)})`;
+      }
       if (p < 1) {
         rafId = requestAnimationFrame(tick);
       }
     };
-    rafId = requestAnimationFrame(tick);
+    tick();
     return () => cancelAnimationFrame(rafId);
-  }, [tea.createdAt, tea.durationMs]);
-
-  const curX = tea.startX + (tea.targetX - tea.startX) * progress;
-  const linearY = tea.startY + (tea.targetY - tea.startY) * progress;
-  const curY = linearY - Math.sin(progress * Math.PI) * 85;
+  }, [tea.createdAt, tea.durationMs, tea.startX, tea.startY, tea.targetX, tea.targetY]);
 
   return (
     <div
-      className="absolute pointer-events-none select-none"
+      ref={cupRef}
+      className="absolute pointer-events-none select-none will-change-transform"
       style={{
-        left: `${curX}px`,
-        top: `${curY}px`,
+        left: `${tea.startX}px`,
+        top: `${tea.startY}px`,
         zIndex: 950,
-        transform: `translate(-50%, -50%) scale(${0.85 + Math.sin(progress * Math.PI) * 0.25})`,
+        transform: 'translate(-50%, -50%) scale(0.85)',
       }}
     >
       {customAssets?.milkTeaCupUrl ? (
@@ -662,3 +701,5 @@ export const FlyingMilkTeaSprite: React.FC<FlyingMilkTeaSpriteProps> = ({
     </div>
   );
 };
+
+export const FlyingMilkTeaSprite = React.memo(FlyingMilkTeaSpriteInner);

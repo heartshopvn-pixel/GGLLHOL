@@ -1,10 +1,12 @@
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const STUDENT_EXP_JSON_PATH = path.join(__dirname, 'classroom-student-exp.json');
 
 process.on('uncaughtException', (err) => {
   console.error('⚠️ [UNCAUGHT EXCEPTION]:', err?.message || err);
@@ -27,6 +29,67 @@ async function startServer() {
       return;
     }
     next(err);
+  });
+
+  // Persistent JSON storage for Student EXP ({ [userId]: exp } with exp > 0)
+  let serverStudentExpMap: Record<string, number> = {};
+  try {
+    if (fs.existsSync(STUDENT_EXP_JSON_PATH)) {
+      const raw = fs.readFileSync(STUDENT_EXP_JSON_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const mapCandidate = parsed?.studentExpMap || parsed;
+      if (mapCandidate && typeof mapCandidate === 'object') {
+        for (const [k, v] of Object.entries(mapCandidate)) {
+          const expVal = Math.floor(Number(v) || 0);
+          if (k && expVal > 0) {
+            serverStudentExpMap[k.trim().toLowerCase()] = expVal;
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore read error
+  }
+
+  let expDiskFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleFlushExpToDisk = () => {
+    if (expDiskFlushTimer) return;
+    expDiskFlushTimer = setTimeout(() => {
+      expDiskFlushTimer = null;
+      fs.promises
+        .writeFile(
+          STUDENT_EXP_JSON_PATH,
+          JSON.stringify({ studentExpMap: serverStudentExpMap }, null, 2),
+          'utf-8'
+        )
+        .catch(() => {
+          // Ignore disk write error
+        });
+    }, 1500);
+  };
+
+  app.get('/api/student-exp', (_req: Request, res: Response) => {
+    res.json({ ok: true, studentExpMap: serverStudentExpMap });
+  });
+
+  app.post('/api/student-exp', (req: Request, res: Response) => {
+    const incoming = req.body?.studentExpMap;
+    const replaceAll = Boolean(req.body?.replaceAll);
+    if (incoming && typeof incoming === 'object') {
+      if (replaceAll) {
+        serverStudentExpMap = {};
+      }
+      for (const [k, v] of Object.entries(incoming)) {
+        const cleanKey = String(k || '').trim().toLowerCase();
+        const expVal = Math.floor(Number(v) || 0);
+        if (cleanKey && expVal > 0) {
+          const prev = serverStudentExpMap[cleanKey] || 0;
+          serverStudentExpMap[cleanKey] = replaceAll ? expVal : Math.max(prev, expVal);
+        }
+      }
+      scheduleFlushExpToDisk();
+    }
+    res.json({ ok: true, count: Object.keys(serverStudentExpMap).length });
   });
 
   // Connected SSE clients (Admin Tabs + OBS Browser Source Windows)

@@ -180,6 +180,37 @@ function getQuizRankPoints(rankOneBased: number): number {
   return 5;
 }
 
+// Quy tắc EXP trả lời đúng: Top 1 = +6 EXP, Top 2 = +5 EXP, Top 3 = +4 EXP, còn lại = +3 EXP
+function getQuizRankExp(rankOneBased: number): number {
+  if (rankOneBased === 1) return 6;
+  if (rankOneBased === 2) return 5;
+  if (rankOneBased === 3) return 4;
+  return 3;
+}
+
+// Quy tắc lên cấp: cứ mỗi 20 EXP lên 1 cấp (0..19 EXP = Lv.1, 20..39 EXP = Lv.2, ...)
+function getStudentLevelFromExp(exp: number): number {
+  return Math.floor(Math.max(0, Math.floor(Number(exp) || 0)) / 20) + 1;
+}
+
+const STUDENT_EXP_LS_KEY = 'chua_student_exp_v1';
+const STUDENT_EXP_IDB_KEY = 'classroom_student_exp_v1';
+
+// Giải pháp 3: Chỉ lưu những người có EXP > 0 (loại bỏ hoàn toàn dữ liệu rác EXP = 0)
+function serializeStudentExpMap(
+  map: Map<string, number>
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  map.forEach((expVal, rawKey) => {
+    const cleanKey = (rawKey || '').trim().toLowerCase();
+    const safeExp = Math.floor(Number(expVal) || 0);
+    if (cleanKey && safeExp > 0) {
+      out[cleanKey] = safeExp;
+    }
+  });
+  return out;
+}
+
 function pickRandomLessonPrepSpeech(cfg: GameConfig): string {
   const list = Array.isArray(cfg.lessonPrepareTtsTexts)
     ? cfg.lessonPrepareTtsTexts.map((s) => (s || '').trim()).filter(Boolean)
@@ -1318,8 +1349,175 @@ export function useClassroomEngine() {
     timer: null,
   });
 
-  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists) from IndexedDB
+  // ============================================================================
+  // HỆ THỐNG CẤP ĐỘ & EXP HỌC SINH VĨNH VIỄN (4 GIẢI PHÁP ZERO-LAG + CHUNG FILE JSON)
+  // 1. Bảng băm Map<string, number> trong RAM (Quét ID & cộng điểm tức thời O(1))
+  // 2. Gom nhịp lưu ngầm (Auto-Save cuối câu hỏi & định kỳ mỗi 10s khi có thay đổi)
+  // 3. Chỉ lưu người có EXP > 0 (Loại bỏ rác vãng lai)
+  // 4. Lưu bền vững đa tầng: localStorage + IndexedDB + Server JSON + Chung file Backup JSON
+  // ============================================================================
+  const studentExpMapRef = useRef<Map<string, number>>(new Map());
+  const studentExpDirtyRef = useRef<boolean>(false);
+  const hasInitializedExpMapRef = useRef<boolean>(false);
+
+  if (!hasInitializedExpMapRef.current) {
+    hasInitializedExpMapRef.current = true;
+    const initMap = new Map<string, number>();
+    const ingestRecord = (rec: unknown) => {
+      if (!rec || typeof rec !== 'object') return;
+      for (const [k, v] of Object.entries(rec as Record<string, unknown>)) {
+        const cleanKey = (k || '').trim().toLowerCase();
+        const expVal = Math.floor(Number(v) || 0);
+        if (cleanKey && expVal > 0) {
+          initMap.set(cleanKey, Math.max(initMap.get(cleanKey) || 0, expVal));
+        }
+      }
+    };
+    try {
+      const savedStudio = localStorage.getItem(STORAGE_KEY);
+      if (savedStudio) {
+        const parsedStudio = JSON.parse(savedStudio);
+        ingestRecord(parsedStudio?.studentExpMap);
+      }
+    } catch {
+      // Ignore
+    }
+    try {
+      const savedExpOnly = localStorage.getItem(STUDENT_EXP_LS_KEY);
+      if (savedExpOnly) {
+        ingestRecord(JSON.parse(savedExpOnly));
+      }
+    } catch {
+      // Ignore
+    }
+    studentExpMapRef.current = initMap;
+  }
+
+  const getStudentExpById = useCallback((username: string): number => {
+    const cleanKey = (username || '').trim().toLowerCase();
+    if (!cleanKey) return 0;
+    return studentExpMapRef.current.get(cleanKey) || 0;
+  }, []);
+
+  const applyExpMapToActiveStudents = useCallback(() => {
+    const map = studentExpMapRef.current;
+    let changedPilgrims = false;
+    const nextPilgrims = pilgrimsRef.current.map((p) => {
+      const lower = (p.username || '').trim().toLowerCase();
+      const expVal = map.get(lower) || 0;
+      const lvlVal = getStudentLevelFromExp(expVal);
+      if ((p.exp || 0) !== expVal || (p.level || 1) !== lvlVal) {
+        changedPilgrims = true;
+        return { ...p, exp: expVal, level: lvlVal };
+      }
+      return p;
+    });
+    if (changedPilgrims) {
+      pilgrimsRef.current = nextPilgrims;
+      setPilgrims(nextPilgrims);
+    }
+
+    let changedCrowd = false;
+    const nextCrowd = doorCrowdRef.current.map((d) => {
+      const lower = (d.username || '').trim().toLowerCase();
+      const expVal = map.get(lower) || 0;
+      const lvlVal = getStudentLevelFromExp(expVal);
+      if ((d.exp || 0) !== expVal || (d.level || 1) !== lvlVal) {
+        changedCrowd = true;
+        return { ...d, exp: expVal, level: lvlVal };
+      }
+      return d;
+    });
+    if (changedCrowd) {
+      doorCrowdRef.current = nextCrowd;
+      setDoorCrowd(nextCrowd);
+    }
+  }, []);
+
+  const flushStudentExpStorage = useCallback(
+    (replaceAll = false, broadcastSync = true) => {
+      studentExpDirtyRef.current = false;
+      const serialized = serializeStudentExpMap(studentExpMapRef.current);
+
+      try {
+        localStorage.setItem(STUDENT_EXP_LS_KEY, JSON.stringify(serialized));
+        const rawFull = localStorage.getItem(STORAGE_KEY);
+        if (rawFull) {
+          const parsedFull = JSON.parse(rawFull);
+          parsedFull.studentExpMap = serialized;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsedFull));
+        }
+      } catch {
+        // Ignore quota errors
+      }
+
+      void idbSet(STUDENT_EXP_IDB_KEY, serialized);
+
+      fetch('/api/student-exp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentExpMap: serialized, replaceAll }),
+      }).catch(() => {
+        // Ignore network errors
+      });
+
+      if (broadcastSync) {
+        syncService.sendCommand('SYNC_STUDENT_EXP', {
+          studentExpMap: serialized,
+          replaceAll,
+        });
+      }
+    },
+    []
+  );
+
+  // Giải pháp 2: Auto-save ngầm định kỳ mỗi 10s nếu có thay đổi EXP trên RAM
   useEffect(() => {
+    const expTimer = setInterval(() => {
+      if (studentExpDirtyRef.current) {
+        flushStudentExpStorage(false, true);
+      }
+    }, 10000);
+    return () => clearInterval(expTimer);
+  }, [flushStudentExpStorage]);
+
+  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists / Student EXP) from IndexedDB & Server
+  useEffect(() => {
+    const mergeExpObject = (rec: unknown): boolean => {
+      if (!rec || typeof rec !== 'object') return false;
+      let hasChange = false;
+      const map = studentExpMapRef.current;
+      for (const [k, v] of Object.entries(rec as Record<string, unknown>)) {
+        const cleanKey = (k || '').trim().toLowerCase();
+        const expVal = Math.floor(Number(v) || 0);
+        if (cleanKey && expVal > 0) {
+          const prev = map.get(cleanKey) || 0;
+          if (expVal > prev) {
+            map.set(cleanKey, expVal);
+            hasChange = true;
+          }
+        }
+      }
+      return hasChange;
+    };
+
+    idbGet<Record<string, number>>(STUDENT_EXP_IDB_KEY).then((savedExp) => {
+      if (mergeExpObject(savedExp)) {
+        applyExpMapToActiveStudents();
+      }
+    });
+
+    fetch('/api/student-exp')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.studentExpMap && mergeExpObject(data.studentExpMap)) {
+          applyExpMapToActiveStudents();
+        }
+      })
+      .catch(() => {
+        // Ignore
+      });
+
     idbGet<Partial<CustomAssetsConfig>>('classroom_custom_assets_v1').then((saved) => {
       if (saved) {
         const isDataUrl = (val: unknown): val is string =>
@@ -1360,8 +1558,12 @@ export function useClassroomEngine() {
       safetyCategories?: SafetyCategory[];
       lotusDonors?: DonorEntry[];
       dailyRecords?: DailyRecordEntry[];
+      studentExpMap?: Record<string, number>;
     }>('classroom_full_studio_state_v1').then((savedFull) => {
       if (!savedFull) return;
+      if (savedFull.studentExpMap && mergeExpObject(savedFull.studentExpMap)) {
+        applyExpMapToActiveStudents();
+      }
       if (savedFull.config) {
         const hasSyncLocalConfig = Boolean(localStorage.getItem(STORAGE_KEY));
         setConfig((prev) => ({
@@ -1575,6 +1777,7 @@ export function useClassroomEngine() {
       safetyCategories,
       lotusDonors,
       dailyRecords,
+      studentExpMap: serializeStudentExpMap(studentExpMapRef.current),
     };
 
     // 1. Lưu đầy đủ 100% (kể cả MP3 Base64 & Avatar Base64 dung lượng lớn) vào IndexedDB
@@ -1862,6 +2065,8 @@ export function useClassroomEngine() {
             ...p,
             currentScoreDisplay: newTotalScore,
             scoreChangeDelta: delta,
+            expChangeDelta: 0,
+            leveledUpInRound: false,
             scoreCardUntil: cardUntil,
             scoreCardKey: cardKey,
           };
@@ -1882,6 +2087,8 @@ export function useClassroomEngine() {
               ...r,
               currentScoreDisplay: newTotalScore,
               scoreChangeDelta: delta,
+              expChangeDelta: 0,
+              leveledUpInRound: false,
               scoreCardUntil: cardUntil,
               scoreCardKey: cardKey,
             };
@@ -2233,9 +2440,13 @@ export function useClassroomEngine() {
         }
       }
 
+      const giftUserExp = getStudentExpById(entry.username);
+      const giftUserLevel = getStudentLevelFromExp(giftUserExp);
       const newStudent: PilgrimData = {
         id,
         username: entry.username,
+        exp: giftUserExp,
+        level: giftUserLevel,
         prayer:
           entry.prayer ||
           `Em xin tặng Cô ${entry.giftName || 'Hoa Điểm 10'} ạ! 🌺`,
@@ -2555,10 +2766,14 @@ export function useClassroomEngine() {
             const cfgNow = configRef.current;
             const cleanName = username.trim();
 
+            const admittedExp = getStudentExpById(cleanName);
+            const admittedLevel = getStudentLevelFromExp(admittedExp);
             const admittedStudent: PilgrimData = {
               id,
               username: cleanName,
               currentScoreDisplay: existingDonorScore,
+              exp: admittedExp,
+              level: admittedLevel,
               prayer: rawComment,
               gender: isBot
                 ? resolveBalancedNpcGender(cleanName, 'class', newEntry.gender)
@@ -2682,7 +2897,11 @@ export function useClassroomEngine() {
             const mult = punishedMatch?.punishmentMultiplier || 1;
             const rawStars = prev.currentQuestion?.luckyStars || 0;
             const luckyMult = rawStars > 0 ? rawStars + 1 : 1;
-            return { ...w, points: getQuizRankPoints(idx + 1) * mult * luckyMult };
+            return {
+              ...w,
+              points: getQuizRankPoints(idx + 1) * mult * luckyMult,
+              exp: getQuizRankExp(idx + 1),
+            };
           });
         const nextOutsideWinners = nextWinners
           .filter((w) => w.isSeated === false)
@@ -2692,6 +2911,7 @@ export function useClassroomEngine() {
             return {
               ...w,
               points: getQuizRankPoints(idx + 1) * luckyMult,
+              exp: getQuizRankExp(idx + 1),
             };
           });
 
@@ -4789,10 +5009,14 @@ export function useClassroomEngine() {
           (d) => d.username.trim().toLowerCase() === lowerUser
         )?.coins || 0;
 
+      const existingExp = getStudentExpById(safeName);
+      const existingLevel = getStudentLevelFromExp(existingExp);
       const newStudent: PilgrimData = {
         id,
         username: safeName,
         currentScoreDisplay: Math.max(queuedPts, existingDonorScore),
+        exp: existingExp,
+        level: existingLevel,
         prayer: safeComment,
         gender: opts.isBot
           ? resolveBalancedNpcGender(safeName, 'class', genderCmd || opts.gender)
@@ -4904,9 +5128,11 @@ export function useClassroomEngine() {
       lastMs = nowMs;
       const cfg = configRef.current;
 
-      // 1. Cập nhật Cô Thảo & Thầy Tùng
-      setMonks((prevMonks) =>
-        prevMonks.map((m) => {
+      // 1. Cập nhật Cô Thảo & Thầy Tùng (chỉ setMonks khi thực sự có di chuyển hoặc đổi trạng thái để tránh re-render 60FPS khi đứng yên)
+      setMonks((prevMonks) => {
+        let hasMonkVisualChange = false;
+        const nowMonkMs = Date.now();
+        const nextMonks: TempleMonkData[] = prevMonks.map((m): TempleMonkData => {
           const expectedName = m.role === 'abbot' ? 'Cô Thảo' : 'Thầy Tùng';
           const zone =
             m.role === 'abbot'
@@ -4914,6 +5140,20 @@ export function useClassroomEngine() {
               : cfg.supervisorZone || SUPERVISOR_ZONE_BOUNDS;
           let { x, y, targetX, targetY, moveAxis, facingLeft, pauseTimer, animTime } = m;
           animTime += dt;
+
+          // Tự động dọn chatBubbleUntil / woodenFishRippleUntil đã hết hạn của giáo viên để giải phóng DOM
+          let nextChatText = m.chatText;
+          let nextChatBubbleUntil = m.chatBubbleUntil;
+          if (nextChatBubbleUntil && nowMonkMs >= nextChatBubbleUntil) {
+            nextChatText = undefined;
+            nextChatBubbleUntil = undefined;
+            hasMonkVisualChange = true;
+          }
+          let nextRippleUntil = m.woodenFishRippleUntil;
+          if (nextRippleUntil && nowMonkMs >= nextRippleUntil) {
+            nextRippleUntil = undefined;
+            hasMonkVisualChange = true;
+          }
 
           // Chế độ điều khiển thủ công bằng phím WASD cho Cô Thảo ('abbot') hoặc Thầy Tùng ('senior_novice')
           if (
@@ -4934,10 +5174,25 @@ export function useClassroomEngine() {
               targetX = x + vx * 20;
               targetY = y + vy * 20;
               pauseTimer = 0;
+              hasMonkVisualChange = true;
             } else {
+              if (moveAxis !== 'idle') hasMonkVisualChange = true;
               moveAxis = 'idle';
               pauseTimer = 0;
             }
+            if (
+              !hasMonkVisualChange &&
+              m.name === expectedName &&
+              moveAxis === 'idle' &&
+              m.x === x &&
+              m.y === y &&
+              m.facingLeft === facingLeft
+            ) {
+              m.animTime = animTime;
+              m.pauseTimer = pauseTimer;
+              return m;
+            }
+            hasMonkVisualChange = true;
             return {
               ...m,
               name: expectedName,
@@ -4949,6 +5204,9 @@ export function useClassroomEngine() {
               facingLeft,
               pauseTimer,
               animTime,
+              chatText: nextChatText,
+              chatBubbleUntil: nextChatBubbleUntil,
+              woodenFishRippleUntil: nextRippleUntil,
             };
           }
 
@@ -4961,6 +5219,20 @@ export function useClassroomEngine() {
               m.role === 'abbot'
                 ? cfg.zombieTeacherPos || { x: 392, y: 444 }
                 : cfg.zombieSupervisorPos || { x: 148, y: 498 };
+            const expectedFacing = m.role === 'abbot';
+            if (
+              !hasMonkVisualChange &&
+              m.name === expectedName &&
+              m.x === evPos.x &&
+              m.y === evPos.y &&
+              m.moveAxis === 'idle' &&
+              m.facingLeft === expectedFacing
+            ) {
+              m.animTime = animTime;
+              m.pauseTimer = 2;
+              return m;
+            }
+            hasMonkVisualChange = true;
             return {
               ...m,
               name: expectedName,
@@ -4969,9 +5241,12 @@ export function useClassroomEngine() {
               targetX: evPos.x,
               targetY: evPos.y,
               moveAxis: 'idle',
-              facingLeft: m.role === 'abbot',
+              facingLeft: expectedFacing,
               pauseTimer: 2,
               animTime,
+              chatText: nextChatText,
+              chatBubbleUntil: nextChatBubbleUntil,
+              woodenFishRippleUntil: nextRippleUntil,
             };
           }
 
@@ -5013,7 +5288,21 @@ export function useClassroomEngine() {
               if (Math.abs(targetX - x) > 2) {
                 facingLeft = targetX < x;
               }
+              hasMonkVisualChange = true;
             }
+            if (
+              !hasMonkVisualChange &&
+              m.name === expectedName &&
+              m.moveAxis === 'idle' &&
+              m.x === x &&
+              m.y === y &&
+              m.facingLeft === facingLeft
+            ) {
+              m.pauseTimer = pauseTimer;
+              m.animTime = animTime;
+              return m;
+            }
+            hasMonkVisualChange = true;
             return {
               ...m,
               name: expectedName,
@@ -5025,6 +5314,9 @@ export function useClassroomEngine() {
               facingLeft,
               pauseTimer,
               animTime,
+              chatText: nextChatText,
+              chatBubbleUntil: nextChatBubbleUntil,
+              woodenFishRippleUntil: nextRippleUntil,
             };
           }
 
@@ -5046,25 +5338,49 @@ export function useClassroomEngine() {
                 facingLeft = dx < 0;
               }
             }
+            hasMonkVisualChange = true;
           } else {
             moveAxis = 'idle';
             pauseTimer = 2.5 + Math.random() * 2.0;
           }
 
+          const clampedX = Math.max(safeMinX, Math.min(safeMaxX, x));
+          const clampedY = Math.max(safeMinY, Math.min(safeMaxY, y));
+          const clampedTargetX = Math.max(safeMinX, Math.min(safeMaxX, targetX));
+          const clampedTargetY = Math.max(safeMinY, Math.min(safeMaxY, targetY));
+
+          if (
+            !hasMonkVisualChange &&
+            m.name === expectedName &&
+            m.x === clampedX &&
+            m.y === clampedY &&
+            m.moveAxis === moveAxis &&
+            m.facingLeft === facingLeft
+          ) {
+            m.pauseTimer = pauseTimer;
+            m.animTime = animTime;
+            return m;
+          }
+
+          hasMonkVisualChange = true;
           return {
             ...m,
             name: expectedName,
-            x: Math.max(safeMinX, Math.min(safeMaxX, x)),
-            y: Math.max(safeMinY, Math.min(safeMaxY, y)),
-            targetX: Math.max(safeMinX, Math.min(safeMaxX, targetX)),
-            targetY: Math.max(safeMinY, Math.min(safeMaxY, targetY)),
+            x: clampedX,
+            y: clampedY,
+            targetX: clampedTargetX,
+            targetY: clampedTargetY,
             moveAxis,
             facingLeft,
             pauseTimer,
             animTime,
+            chatText: nextChatText,
+            chatBubbleUntil: nextChatBubbleUntil,
+            woodenFishRippleUntil: nextRippleUntil,
           };
-        })
-      );
+        });
+        return hasMonkVisualChange ? nextMonks : prevMonks;
+      });
 
       // 2. Cập nhật chuyển động của Học Sinh theo các lối đi giữa các dãy bàn đôi
       const freedSlotIds: string[] = [];
@@ -5659,6 +5975,14 @@ export function useClassroomEngine() {
               p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
                 ? 0
                 : p.scoreCardUntil,
+            expChangeDelta:
+              p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
+                ? 0
+                : p.expChangeDelta,
+            leveledUpInRound:
+              p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
+                ? false
+                : p.leveledUpInRound,
             quizResultUntil:
               p.quizResultUntil && nowEpoch >= p.quizResultUntil
                 ? 0
@@ -6327,32 +6651,38 @@ export function useClassroomEngine() {
   ]);
 
   // Dọn dẹp các hiệu ứng Burst & Flying Lotus / Flowers / Explosions / Đạn Zombie đã hết hạn
+  // Tối ưu: Giữ nguyên tham chiếu mảng cũ nếu mảng rỗng hoặc không có phần tử nào hết hạn để tránh re-render toàn sân khấu mỗi 500ms
   useEffect(() => {
+    const pruneExpired = <T,>(prev: T[], keepPredicate: (item: T) => boolean): T[] => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter(keepPredicate);
+      return next.length === prev.length ? prev : next;
+    };
     const timer = setInterval(() => {
       const now = Date.now();
       setBurnerLotusBursts((prev) =>
-        prev.filter((b) => now - b.createdAt < 1800)
+        pruneExpired(prev, (b) => now - b.createdAt < 1800)
       );
       setFlyingLotuses((prev) =>
-        prev.filter((f) => now - f.createdAt < 1100)
+        pruneExpired(prev, (f) => now - f.createdAt < 1100)
       );
       setFlyingFlowers((prev) =>
-        prev.filter((f) => now - f.createdAt < 600)
+        pruneExpired(prev, (f) => now - f.createdAt < 600)
       );
       setSimpleExplosions((prev) =>
-        prev.filter((e) => now - e.createdAt < 950)
+        pruneExpired(prev, (e) => now - e.createdAt < 950)
       );
       setZombieProjectiles((prev) =>
-        prev.filter((p) => now - p.createdAt < (p.durationMs || 450) + 120)
+        pruneExpired(prev, (p) => now - p.createdAt < (p.durationMs || 450) + 120)
       );
       setZombieSpikyDamages((prev) =>
-        prev.filter((s) => now - s.createdAt < 950)
+        pruneExpired(prev, (s) => now - s.createdAt < 950)
       );
       setFlyingMilkTeas((prev) =>
-        prev.filter((m) => now - m.createdAt < (m.durationMs || 1400) + 200)
+        pruneExpired(prev, (m) => now - m.createdAt < (m.durationMs || 1400) + 200)
       );
       setFloatingToasts((prev) =>
-        prev.filter((t) => now - t.createdAt < 7500)
+        pruneExpired(prev, (t) => now - t.createdAt < 7500)
       );
     }, 500);
     return () => clearInterval(timer);
@@ -7359,11 +7689,12 @@ export function useClassroomEngine() {
       clearQuizNpcTimers();
       const cfg = configRef.current;
 
-      // 1. Cộng điểm câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
+      // 1. Cộng điểm & EXP câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
       const rewardedQueueKeys = new Set<string>();
       oWinners.forEach((ow, idx) => {
         if (!ow.username) return;
         const pts = ow.points || getQuizRankPoints(idx + 1);
+        const earnedExp = ow.exp || getQuizRankExp(idx + 1);
         const lower = ow.username.trim().toLowerCase();
         rewardedQueueKeys.add(lower);
         const qEntry = waitingPoolRef.current.get(lower);
@@ -7372,29 +7703,41 @@ export function useClassroomEngine() {
           qEntry.answeredCorrectInRound = true;
           qEntry.idleRounds = 0;
         }
+        const prevExp = studentExpMapRef.current.get(lower) || 0;
+        studentExpMapRef.current.set(lower, prevExp + earnedExp);
+        studentExpDirtyRef.current = true;
         addLotusPointsToDonor(ow.username, pts, true);
       });
 
-      // Đảm bảo học sinh trong Hàng Chờ cục bộ đã trả lời đúng (answeredCorrectInRound === true) cũng được cộng điểm trước khi sắp xếp
+      // Đảm bảo học sinh trong Hàng Chờ cục bộ đã trả lời đúng (answeredCorrectInRound === true) cũng được cộng điểm & EXP (+3 EXP) trước khi sắp xếp
       for (const [lowerKey, qEntry] of waitingPoolRef.current.entries()) {
         if (qEntry.answeredCorrectInRound && !rewardedQueueKeys.has(lowerKey)) {
           const fallbackPts = 5;
+          const fallbackExp = 3;
           qEntry.points = (qEntry.points || 0) + fallbackPts;
+          const prevExp = studentExpMapRef.current.get(lowerKey) || 0;
+          studentExpMapRef.current.set(lowerKey, prevExp + fallbackExp);
+          studentExpDirtyRef.current = true;
           addLotusPointsToDonor(qEntry.username, fallbackPts, true);
         }
       }
 
-      // 2. Lazy Calculation 1 lần cho Hàng Chờ (ai không trả lời đúng sẽ reset points = 0)
+      // 2. Lazy Calculation 1 lần cho Hàng Chờ (ai không trả lời đúng sẽ reset points = 0, nhưng EXP vĩnh viễn luôn giữ nguyên!)
       const resetUsers = recomputeWaitingQueueLazy({
         finalizeQuizRound: true,
       });
 
-      // 3. Cộng điểm câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
+      // 3. Cộng điểm & EXP câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
+      // Quy tắc EXP: Nhanh nhất Top 1 = +6 EXP, Top 2 = +5 EXP, Top 3 = +4 EXP, trả lời đúng còn lại = +3 EXP
       const classWinnerMap = new Map<string, number>();
+      const classWinnerExpMap = new Map<string, number>();
       cWinners.forEach((w, idx) => {
         if (!w.username) return;
+        const lower = w.username.trim().toLowerCase();
         const pts = w.points || getQuizRankPoints(idx + 1);
-        classWinnerMap.set(w.username.trim().toLowerCase(), pts);
+        const earnedExp = w.exp || getQuizRankExp(idx + 1);
+        classWinnerMap.set(lower, pts);
+        classWinnerExpMap.set(lower, earnedExp);
         addLotusPointsToDonor(w.username, pts, true);
       });
 
@@ -7416,18 +7759,35 @@ export function useClassroomEngine() {
           p.slotId !== null &&
           p.state !== 'leave_side_to_aisle' &&
           p.state !== 'leave_down_exit';
-        if (!isSeatedInClass) return p;
-
         const lowerName = p.username.trim().toLowerCase();
+        const curSavedExp = studentExpMapRef.current.get(lowerName) ?? p.exp ?? 0;
+        const curSavedLevel = getStudentLevelFromExp(curSavedExp);
+
+        if (!isSeatedInClass) {
+          return {
+            ...p,
+            exp: curSavedExp,
+            level: curSavedLevel,
+          };
+        }
+
         const earnedPts = classWinnerMap.get(lowerName);
         const isRight =
           Boolean(p.answeredCurrentQuestion) || earnedPts !== undefined;
 
         if (isRight) {
           const finalEarned = earnedPts || 5;
+          const earnedExp = classWinnerExpMap.get(lowerName) || 3;
           if (earnedPts === undefined) {
             addLotusPointsToDonor(p.username, finalEarned, true);
           }
+          const prevExp = curSavedExp;
+          const prevLevel = getStudentLevelFromExp(prevExp);
+          const nextExp = prevExp + earnedExp;
+          const nextLevel = getStudentLevelFromExp(nextExp);
+          studentExpMapRef.current.set(lowerName, nextExp);
+          studentExpDirtyRef.current = true;
+
           const donorItem = lotusDonorsRef.current.find(
             (d) => d.username.trim().toLowerCase() === lowerName
           );
@@ -7444,6 +7804,10 @@ export function useClassroomEngine() {
             quizEarnedPoints: finalEarned,
             currentScoreDisplay: totalScoreNow,
             scoreChangeDelta: finalEarned,
+            exp: nextExp,
+            level: nextLevel,
+            expChangeDelta: earnedExp,
+            leveledUpInRound: nextLevel > prevLevel,
             scoreCardUntil: nowFlow4 + scoreCardDurMs,
             scoreCardKey: nowFlow4 + p.id,
           };
@@ -7453,6 +7817,10 @@ export function useClassroomEngine() {
           const nowShield = Date.now();
           return {
             ...p,
+            exp: curSavedExp,
+            level: curSavedLevel,
+            expChangeDelta: 0,
+            leveledUpInRound: false,
             hasShield: false,
             savedByShieldInCurrentRound: true,
             correctStreak: 0,
@@ -7470,6 +7838,10 @@ export function useClassroomEngine() {
         resetUsers.add(lowerName);
         return {
           ...p,
+          exp: curSavedExp,
+          level: curSavedLevel,
+          expChangeDelta: 0,
+          leveledUpInRound: false,
           correctStreak: 0,
           savedByShieldInCurrentRound: false,
           coins: 0,
@@ -7488,6 +7860,26 @@ export function useClassroomEngine() {
       pilgrimsRef.current = markedPilgrims;
       setPilgrims(markedPilgrims);
 
+      // Đồng bộ EXP/Level mới nhất cho các bạn đứng ở đám đông cửa lớp (doorCrowd)
+      if (doorCrowdRef.current.length > 0) {
+        const nextCrowd = doorCrowdRef.current.map((d) => {
+          const lower = d.username.trim().toLowerCase();
+          const expVal = studentExpMapRef.current.get(lower) || 0;
+          return {
+            ...d,
+            exp: expVal,
+            level: getStudentLevelFromExp(expVal),
+          };
+        });
+        doorCrowdRef.current = nextCrowd;
+        setDoorCrowd(nextCrowd);
+      }
+
+      // Giải pháp 2: Cuối mỗi câu hỏi (nếu có cộng EXP), tự động lưu ngầm 1 lần duy nhất xuống bộ nhớ bền vững
+      if (studentExpDirtyRef.current) {
+        flushStudentExpStorage(false, true);
+      }
+
       if (resetUsers.size > 0) {
         const nextDonors = lotusDonorsRef.current.filter(
           (d) => !resetUsers.has(d.username.trim().toLowerCase())
@@ -7498,7 +7890,12 @@ export function useClassroomEngine() {
 
       return true;
     },
-    [addLotusPointsToDonor, clearQuizNpcTimers, recomputeWaitingQueueLazy]
+    [
+      addLotusPointsToDonor,
+      clearQuizNpcTimers,
+      flushStudentExpStorage,
+      recomputeWaitingQueueLazy,
+    ]
   );
 
   const ensureResultSummaryPhaseSideEffects = useCallback(
@@ -7708,7 +8105,18 @@ export function useClassroomEngine() {
           elapsedPhaseMs: nextElapsed,
         };
         classBoardStateRef.current = tickState;
-        setClassBoardState(tickState);
+        const crossedHintThreshold =
+          (prev.elapsedPhaseMs || 0) < 5000 && nextElapsed >= 5000;
+        const shouldCommitBoardRender =
+          nextStepNum !== prev.lessonStepNumber ||
+          nextIdleTriggered !== prev.idleChatTriggered ||
+          nextActiveToken !== prev.activeFlowToken ||
+          nextTtsFinished !== prev.ttsFinishedForPhase ||
+          crossedHintThreshold ||
+          Math.ceil(nextLeft / 250) !== Math.ceil(prev.timeLeftMs / 250);
+        if (shouldCommitBoardRender) {
+          setClassBoardState(tickState);
+        }
         return;
       }
 
@@ -10319,6 +10727,25 @@ export function useClassroomEngine() {
             saveCustomWordsToStorage(p.customWords);
           }
           break;
+        case 'SYNC_STUDENT_EXP':
+          if (p.studentExpMap && typeof p.studentExpMap === 'object') {
+            if (p.replaceAll) {
+              studentExpMapRef.current.clear();
+            }
+            for (const [k, v] of Object.entries(p.studentExpMap)) {
+              const cleanKey = String(k || '').trim().toLowerCase();
+              const expVal = Math.floor(Number(v) || 0);
+              if (cleanKey && expVal > 0) {
+                const prev = studentExpMapRef.current.get(cleanKey) || 0;
+                studentExpMapRef.current.set(
+                  cleanKey,
+                  p.replaceAll ? expVal : Math.max(prev, expVal)
+                );
+              }
+            }
+            applyExpMapToActiveStudents();
+          }
+          break;
         case 'TRIGGER_CLASSROOM_GIFT':
           handleTriggerClassroomGift({
             username: p.username,
@@ -10344,6 +10771,7 @@ export function useClassroomEngine() {
       unsubSync();
     };
   }, [
+    applyExpMapToActiveStudents,
     ensureAnswerFlashPhaseSideEffects,
     ensureAskingPhaseSideEffects,
     ensureResultSummaryPhaseSideEffects,
@@ -12133,6 +12561,7 @@ export function useClassroomEngine() {
       safetyCategories,
       customWords,
       dailyRecords: dailyRecordsRef.current,
+      studentExpMap: serializeStudentExpMap(studentExpMapRef.current),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: 'application/json',
@@ -12208,12 +12637,31 @@ export function useClassroomEngine() {
           setCustomWords(parsed.customWords);
           saveCustomWordsToStorage(parsed.customWords);
         }
-        return { ok: true, message: 'Đã nạp cấu hình lớp học thành công!' };
+        if (
+          parsed.studentExpMap &&
+          typeof parsed.studentExpMap === 'object'
+        ) {
+          const nextExpMap = new Map<string, number>();
+          for (const [k, v] of Object.entries(parsed.studentExpMap)) {
+            const cleanKey = String(k || '').trim().toLowerCase();
+            const expVal = Math.floor(Number(v) || 0);
+            if (cleanKey && expVal > 0) {
+              nextExpMap.set(cleanKey, expVal);
+            }
+          }
+          studentExpMapRef.current = nextExpMap;
+          applyExpMapToActiveStudents();
+          flushStudentExpStorage(true, true);
+        }
+        return {
+          ok: true,
+          message: `Đã nạp cấu hình lớp học & dữ liệu EXP (${studentExpMapRef.current.size} học sinh) thành công!`,
+        };
       } catch {
         return { ok: false, message: 'Lỗi: Chuỗi JSON không hợp lệ!' };
       }
     },
-    []
+    [applyExpMapToActiveStudents, flushStudentExpStorage]
   );
 
   const handleClearLotusDonors = useCallback(() => {

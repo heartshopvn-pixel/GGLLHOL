@@ -507,5 +507,56 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
   );
 };
 
-export const TeacherSprite = React.memo(TeacherSpriteInner);
+function areTeacherSpritePropsEqual(
+  prev: TeacherSpriteProps,
+  next: TeacherSpriteProps
+): boolean {
+  if (
+    prev.characterScale !== next.characterScale ||
+    prev.femaleTeacherScale !== next.femaleTeacherScale ||
+    prev.maleTeacherScale !== next.maleTeacherScale ||
+    prev.useDefaultPngModels !== next.useDefaultPngModels ||
+    prev.nameTagFontFamily !== next.nameTagFontFamily ||
+    prev.nameTagScale !== next.nameTagScale ||
+    prev.chatBubbleFontFamily !== next.chatBubbleFontFamily ||
+    prev.chatBubbleScale !== next.chatBubbleScale ||
+    prev.teacherBubbleScale !== next.teacherBubbleScale ||
+    prev.supervisorBubbleScale !== next.supervisorBubbleScale ||
+    prev.isSpeakingBubble !== next.isSpeakingBubble ||
+    prev.walkWobbleIntensity !== next.walkWobbleIntensity ||
+    prev.customAssets !== next.customAssets
+  ) {
+    return false;
+  }
 
+  const a = prev.monk;
+  const b = next.monk;
+  if (a === b) return true;
+
+  if (
+    a.id !== b.id ||
+    a.role !== b.role ||
+    a.name !== b.name ||
+    Math.abs(a.x - b.x) > 0.05 ||
+    Math.abs(a.y - b.y) > 0.05 ||
+    a.moveAxis !== b.moveAxis ||
+    a.facingLeft !== b.facingLeft ||
+    a.chatText !== b.chatText ||
+    a.chatBubbleUntil !== b.chatBubbleUntil ||
+    a.woodenFishRippleUntil !== b.woodenFishRippleUntil
+  ) {
+    return false;
+  }
+
+  // Khi Cô Thảo hoặc Thầy Tùng đang đứng yên (moveAxis === 'idle'): bỏ qua hoàn toàn việc re-render do animTime / pauseTimer tăng!
+  if (b.moveAxis === 'idle') {
+    return true;
+  }
+
+  return Math.abs(a.animTime - b.animTime) < 0.015;
+}
+
+export const TeacherSprite = React.memo(
+  TeacherSpriteInner,
+  areTeacherSpritePropsEqual
+);

@@ -252,6 +252,7 @@ export interface ClassBoardQuizWinner {
   username: string;
   elapsedSec: number;
   points?: number;
+  exp?: number;
   isSeated?: boolean;
   avatarUrl?: string | null;
   avatarColor?: string;
@@ -800,6 +801,10 @@ export interface PilgrimData {
   floatingScoreKey?: number;
   currentScoreDisplay?: number;
   scoreChangeDelta?: number;
+  exp?: number;
+  level?: number;
+  expChangeDelta?: number;
+  leveledUpInRound?: boolean;
   scoreCardUntil?: number;
   scoreCardKey?: number;
   punishmentMultiplier?: 3 | 6 | 9;
@@ -1021,6 +1026,7 @@ export interface StudioBackupData {
   safetyCategories?: SafetyCategory[];
   customWords?: string[];
   dailyRecords?: DailyRecordEntry[];
+  studentExpMap?: Record<string, number>;
 }
 
 export interface SyncPacket {
@@ -1063,6 +1069,7 @@ export interface SyncPacket {
     | 'SYNC_LIVE_TTS_SNAPSHOT'
     | 'TRIGGER_ZOMBIE_EVENT'
     | 'SYNC_ZOMBIE_EVENT_STATE'
+    | 'SYNC_STUDENT_EXP'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'
     | 'OBS_DISPLAY_CONTROL';

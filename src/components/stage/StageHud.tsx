@@ -289,7 +289,7 @@ function usePeriodicHudCycle(
   };
 }
 
-export const StageHud: React.FC<StageHudProps> = ({
+const StageHudInner: React.FC<StageHudProps> = ({
   config,
   hudLayout,
   classBoardState,
@@ -2454,3 +2454,79 @@ export const StageHud: React.FC<StageHudProps> = ({
     </div>
   );
 };
+
+function areStageHudPilgrimsEqual(
+  prevPilgrims: PilgrimData[] | undefined,
+  nextPilgrims: PilgrimData[] | undefined,
+  isRankingPhase: boolean
+): boolean {
+  if (prevPilgrims === nextPilgrims) return true;
+  const a = prevPilgrims || [];
+  const b = nextPilgrims || [];
+
+  const hasPunishedA = a.some(
+    (p) =>
+      p.state === 'stand_punishment' || p.state === 'walk_to_punishment_spot'
+  );
+  const hasPunishedB = b.some(
+    (p) =>
+      p.state === 'stand_punishment' || p.state === 'walk_to_punishment_spot'
+  );
+  if (hasPunishedA !== hasPunishedB) return false;
+
+  // Ngoài pha hiển thị Bảng Xếp Hạng Tổng (Luồng 6), StageHud không cần re-render khi học sinh di chuyển (x, y, animTime)
+  if (!isRankingPhase) return true;
+
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].username !== b[i].username ||
+      (a[i].state === 'leave_down_exit') !== (b[i].state === 'leave_down_exit')
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areStageHudPropsEqual(
+  prev: StageHudProps,
+  next: StageHudProps
+): boolean {
+  if (
+    prev.config !== next.config ||
+    prev.hudLayout !== next.hudLayout ||
+    prev.classBoardState !== next.classBoardState ||
+    prev.zombieEventState !== next.zombieEventState ||
+    prev.cameraFocus !== next.cameraFocus ||
+    prev.waitingQueue !== next.waitingQueue ||
+    prev.queueCount !== next.queueCount ||
+    prev.customAssets !== next.customAssets ||
+    prev.lotusDonors !== next.lotusDonors ||
+    prev.dailyRecords !== next.dailyRecords ||
+    prev.floatingToasts !== next.floatingToasts ||
+    prev.grandEventProgress !== next.grandEventProgress ||
+    prev.grandEventTarget !== next.grandEventTarget ||
+    prev.isGrandEventActive !== next.isGrandEventActive ||
+    prev.eventBarFlashKey !== next.eventBarFlashKey ||
+    prev.currentPilgrimCount !== next.currentPilgrimCount ||
+    prev.totalSeatCapacity !== next.totalSeatCapacity ||
+    prev.onStartDragHudBox !== next.onStartDragHudBox ||
+    prev.onStartResizeHudBox !== next.onStartResizeHudBox
+  ) {
+    return false;
+  }
+
+  const isRankingPhase =
+    next.classBoardState?.phase === 'ranking_board' ||
+    next.classBoardState?.phase === 'reveal' ||
+    next.classBoardState?.engine === 'result_board';
+
+  return areStageHudPilgrimsEqual(
+    prev.pilgrims,
+    next.pilgrims,
+    isRankingPhase
+  );
+}
+
+export const StageHud = React.memo(StageHudInner, areStageHudPropsEqual);

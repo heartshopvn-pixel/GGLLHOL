@@ -353,8 +353,9 @@ export const DevStudio: React.FC<DevStudioProps> = ({
 
   return (
     <aside className="w-[465px] max-w-full shrink-0 h-full bg-stone-950 border-l border-stone-800 flex flex-col z-40">
-      {/* Studio Top Bar (Compact & Concise) */}
-      <div className="px-3.5 py-2.5 border-b border-stone-800 bg-stone-900/80 space-y-2">
+      {/* Studio Top Bar (Compact, Structured Grid) */}
+      <div className="px-3 py-2.5 border-b border-stone-800 bg-stone-900/80 space-y-2">
+        {/* Row 1: Title + Status Badge on Left | Tab Audio Mute (Cách 1) + Hide F2 on Right */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
             <Tv className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -381,47 +382,26 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            {onPushFullSyncToLive && (
-              <button
-                type="button"
-                onClick={() => {
-                  onPushFullSyncToLive();
-                  setPushedLiveSync(true);
-                  setTimeout(() => setPushedLiveSync(false), 2000);
-                }}
-                title="Đẩy cấu hình sang màn hình Live"
-                className="px-2 py-1 rounded-md bg-cyan-500 hover:bg-cyan-400 text-stone-950 text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap"
-              >
-                {pushedLiveSync ? (
-                  <>
-                    <Check className="w-3 h-3" />
-                    <span>Đã đồng bộ</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Đồng bộ Live</span>
-                  </>
-                )}
-              </button>
-            )}
-
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
-              onClick={handleCopyObsLink}
-              title="Sao chép link OBS (?obs=1)"
-              className="px-2 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-stone-950 text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap"
+              onClick={onToggleLocalMute}
+              title="Tắt/Mở tiếng riêng trên tab điều khiển này (Cách 1: Game và luồng tiết học vẫn chạy tự động 100%)"
+              className={`h-7 px-2.5 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
+                isLocalTabMuted
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-xs'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
+              }`}
             >
-              {copiedObsLink ? (
+              {isLocalTabMuted ? (
                 <>
-                  <Check className="w-3 h-3" />
-                  <span>Đã chép</span>
+                  <VolumeX className="w-3.5 h-3.5" />
+                  <span>{peerCounts.obsPeers > 0 ? 'Slave (Tắt tiếng)' : 'Đã tắt tiếng tab'}</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-3 h-3" />
-                  <span>Link OBS</span>
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Mở tiếng tab</span>
                 </>
               )}
             </button>
@@ -430,7 +410,7 @@ export const DevStudio: React.FC<DevStudioProps> = ({
               type="button"
               onClick={onCloseStudio}
               title="Ẩn Studio (F2)"
-              className="px-2 py-1 rounded-md bg-stone-900 hover:bg-stone-800 border border-stone-700 text-[11px] font-medium text-stone-300 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0"
+              className="h-7 px-2 rounded-md bg-stone-900 hover:bg-stone-800 border border-stone-700 text-[11px] font-semibold text-stone-300 flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0"
             >
               <PanelRightClose className="w-3 h-3" />
               <span>F2</span>
@@ -438,108 +418,127 @@ export const DevStudio: React.FC<DevStudioProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-800/80">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={handleTopBarSaveJson}
-              className="px-2 py-1 rounded-md bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-extrabold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap"
-            >
-              <Download className="w-3 h-3" />
-              <span>Lưu JSON</span>
-            </button>
-
-            <label className="px-2 py-1 rounded-md bg-cyan-500/20 hover:bg-cyan-500/35 border border-cyan-400/50 text-cyan-200 text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap">
-              <Upload className="w-3 h-3 text-cyan-300" />
-              <span>Nạp JSON</span>
-              <input
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={handleTopBarFileChange}
-              />
-            </label>
-          </div>
-
-          <div className="flex items-center gap-1 flex-wrap justify-end">
-            {onToggleFullscreen && (
-              <button
-                type="button"
-                onClick={() => onToggleFullscreen()}
-                title="Kích hoạt Full Màn Hình cho cửa sổ Link OBS Live (?obs=1), không làm ẩn bảng Dev điều khiển"
-                className={`px-2 py-1 rounded-md text-[11px] font-extrabold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
-                  isFullscreen
-                    ? 'bg-emerald-500 text-stone-950 shadow-sm'
-                    : 'bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/60 shadow-sm'
-                }`}
-              >
-                {isFullscreen ? (
-                  <>
-                    <Minimize2 className="w-3 h-3" />
-                    <span>Thoát Full OBS</span>
-                  </>
-                ) : (
-                  <>
-                    <Maximize2 className="w-3 h-3" />
-                    <span>Full Màn Hình OBS</span>
-                  </>
-                )}
-              </button>
+        {/* Row 2: OBS & Stage Controls (3 equal columns) */}
+        <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-stone-800/80">
+          <button
+            type="button"
+            onClick={handleCopyObsLink}
+            title="Sao chép link OBS (?obs=1)"
+            className="h-7 px-2 rounded-md bg-amber-500 hover:bg-amber-400 text-stone-950 text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap"
+          >
+            {copiedObsLink ? (
+              <>
+                <Check className="w-3 h-3 shrink-0" />
+                <span>Đã chép Link</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3 shrink-0" />
+                <span>Link OBS</span>
+              </>
             )}
+          </button>
 
-            {onToggleStretchFullViewport && (
-              <button
-                type="button"
-                onClick={onToggleStretchFullViewport}
-                title="Bung khít 100% khung hình trên Link OBS Live (?obs=1) không viền đen (Mặc định đã Bật)"
-                className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
-                  stretchFullViewport
-                    ? 'bg-cyan-500 text-stone-950 shadow-sm'
-                    : 'bg-stone-800 hover:bg-stone-700 text-cyan-300 border border-cyan-500/40'
-                }`}
-              >
-                <span>{stretchFullViewport ? '↔️ OBS Bung khít' : '↔️ OBS Tỷ lệ 9:16'}</span>
-              </button>
+          <button
+            type="button"
+            onClick={() => onToggleFullscreen?.()}
+            title="Kích hoạt Full Màn Hình cho cửa sổ Link OBS Live (?obs=1), không làm ẩn bảng Dev điều khiển"
+            className={`h-7 px-2 rounded-md text-[11px] font-extrabold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+              isFullscreen
+                ? 'bg-emerald-500 text-stone-950 shadow-xs'
+                : 'bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/60 shadow-xs'
+            }`}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3 h-3 shrink-0" />
+                <span>Thoát Full OBS</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3 h-3 shrink-0" />
+                <span>Full Màn OBS</span>
+              </>
             )}
+          </button>
 
-            {onToggleCompactRemoteStage && (
-              <button
-                type="button"
-                onClick={onToggleCompactRemoteStage}
-                title="Thu gọn Sân Khấu 2D trên tab điều khiển để tiết kiệm 90% GPU/CPU cho TikTok Live Studio"
-                className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
-                  compactRemoteStage
-                    ? 'bg-amber-500 text-stone-950 shadow-sm'
-                    : 'bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/40'
-                }`}
-              >
-                <Tv className="w-3 h-3" />
-                <span>{compactRemoteStage ? 'Hiện Sân 2D' : '⚡ Thu gọn Sân 2D'}</span>
-              </button>
+          <button
+            type="button"
+            onClick={() => onToggleStretchFullViewport?.()}
+            title="Bung khít 100% khung hình trên Link OBS Live (?obs=1) không viền đen (Mặc định đã Bật)"
+            className={`h-7 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+              stretchFullViewport
+                ? 'bg-cyan-500 text-stone-950 shadow-xs'
+                : 'bg-stone-800 hover:bg-stone-700 text-cyan-300 border border-cyan-500/40'
+            }`}
+          >
+            <span>{stretchFullViewport ? '↔️ OBS Bung khít' : '↔️ OBS Tỷ lệ 9:16'}</span>
+          </button>
+        </div>
+
+        {/* Row 3: Sync, 2D Stage Saver & JSON Backup (4 equal columns) */}
+        <div className="grid grid-cols-4 gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (!onPushFullSyncToLive) return;
+              onPushFullSyncToLive();
+              setPushedLiveSync(true);
+              setTimeout(() => setPushedLiveSync(false), 2000);
+            }}
+            title="Đẩy cấu hình sang màn hình Live"
+            className="h-7 px-2 rounded-md bg-cyan-500 hover:bg-cyan-400 text-stone-950 text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap"
+          >
+            {pushedLiveSync ? (
+              <>
+                <Check className="w-3 h-3 shrink-0" />
+                <span>Đã đồng bộ</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3 h-3 shrink-0" />
+                <span>Đồng bộ Live</span>
+              </>
             )}
+          </button>
 
-            <button
-              type="button"
-              onClick={onToggleLocalMute}
-              className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 shrink-0 transition cursor-pointer whitespace-nowrap ${
-                isLocalTabMuted
-                  ? 'bg-rose-600 text-white'
-                  : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
-              }`}
-            >
-              {isLocalTabMuted ? (
-                <>
-                  <VolumeX className="w-3 h-3" />
-                  <span>{peerCounts.obsPeers > 0 ? 'Slave (Tắt tiếng)' : 'Tắt tiếng tab'}</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="w-3 h-3 text-emerald-400" />
-                  <span>Mở tiếng tab</span>
-                </>
-              )}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => onToggleCompactRemoteStage?.()}
+            title="Thu gọn Sân Khấu 2D trên tab điều khiển để tiết kiệm 90% GPU/CPU cho TikTok Live Studio"
+            className={`h-7 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+              compactRemoteStage
+                ? 'bg-amber-500 text-stone-950 shadow-xs'
+                : 'bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/40'
+            }`}
+          >
+            <Tv className="w-3 h-3 shrink-0" />
+            <span>{compactRemoteStage ? 'Hiện Sân 2D' : '⚡ Thu gọn 2D'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleTopBarSaveJson}
+            title="Lưu toàn bộ cài đặt, câu hỏi và cấp độ EXP học sinh ra file .json"
+            className="h-7 px-2 rounded-md bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-extrabold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap"
+          >
+            <Download className="w-3 h-3 shrink-0" />
+            <span>Lưu JSON</span>
+          </button>
+
+          <label
+            title="Nạp lại toàn bộ cài đặt, câu hỏi và cấp độ EXP học sinh từ file .json"
+            className="h-7 px-2 rounded-md bg-cyan-500/20 hover:bg-cyan-500/35 border border-cyan-400/50 text-cyan-200 text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap"
+          >
+            <Upload className="w-3 h-3 text-cyan-300 shrink-0" />
+            <span>Nạp JSON</span>
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleTopBarFileChange}
+            />
+          </label>
         </div>
 
         {peerCounts.obsPeers > 0 && (
@@ -565,129 +564,135 @@ export const DevStudio: React.FC<DevStudioProps> = ({
         )}
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="px-3 pt-2 pb-2 border-b border-stone-800 bg-stone-950">
-        <div className="grid grid-cols-8 gap-1 p-1 bg-stone-900 rounded-lg border border-stone-800/80">
-          <button
-            type="button"
-            onClick={() => onSelectTab('control')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'control'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Sliders className="w-3 h-3" />
-            <span>Đ.Khiển</span>
-          </button>
+      {/* Navigation Tabs (Balanced 2-Row Grid: 5 Primary + 4 System Tabs) */}
+      <div className="px-3 py-2 border-b border-stone-800 bg-stone-950">
+        <div className="p-1 bg-stone-900 rounded-lg border border-stone-800/80 space-y-1">
+          {/* Tab Row 1: 5 Core Gameplay & Audio Tabs */}
+          <div className="grid grid-cols-5 gap-1">
+            <button
+              type="button"
+              onClick={() => onSelectTab('control')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'control'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Sliders className="w-3 h-3 shrink-0" />
+              <span>Đ.Khiển</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('event')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'event'
-                ? 'bg-red-950/90 text-red-300 border border-red-500/50 shadow-xs'
-                : zombieEventState && zombieEventState.phase !== 'idle'
-                ? 'text-red-400 animate-pulse'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Skull className="w-3 h-3" />
-            <span>Event</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('event')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'event'
+                  ? 'bg-red-950/90 text-red-300 border border-red-500/50 shadow-xs'
+                  : zombieEventState && zombieEventState.phase !== 'idle'
+                  ? 'text-red-400 animate-pulse'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Skull className="w-3 h-3 shrink-0" />
+              <span>Event</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('camera')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'camera'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Camera className="w-3 h-3" />
-            <span>
-              Cam{cameraQueue.length > 0 ? ` (${cameraQueue.length})` : ''}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('camera')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'camera'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Camera className="w-3 h-3 shrink-0" />
+              <span>
+                Cam{cameraQueue.length > 0 ? ` (${cameraQueue.length})` : ''}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('audio')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'audio'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Volume2 className="w-3 h-3" />
-            <span>Âm thanh</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('audio')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'audio'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Volume2 className="w-3 h-3 shrink-0" />
+              <span>Âm thanh</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('npc')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'npc'
-                ? 'bg-stone-800 text-cyan-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Gamepad2 className="w-3 h-3" />
-            <span>NPC</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('npc')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'npc'
+                  ? 'bg-stone-800 text-cyan-300 border border-cyan-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Gamepad2 className="w-3 h-3 shrink-0" />
+              <span>NPC</span>
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('safety')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'safety'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <ShieldCheck className="w-3 h-3" />
-            <span>Lọc ({safetyLogs.length})</span>
-          </button>
+          {/* Tab Row 2: 4 Environment, VFX, Safety & TikTok Tabs */}
+          <div className="grid grid-cols-4 gap-1">
+            <button
+              type="button"
+              onClick={() => onSelectTab('safety')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'safety'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <ShieldCheck className="w-3 h-3 shrink-0" />
+              <span>Lọc ({safetyLogs.length})</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('map')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'map'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <MapPin className="w-3 h-3" />
-            <span>Map</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('map')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'map'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <MapPin className="w-3 h-3 shrink-0" />
+              <span>Map</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('vfx')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'vfx'
-                ? 'bg-stone-800 text-pink-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>VFX</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('vfx')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'vfx'
+                  ? 'bg-stone-800 text-pink-300 border border-pink-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span>VFX</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTab('tiktok')}
-            className={`py-1.5 px-1 rounded-md text-[10px] font-medium flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'tiktok'
-                ? 'bg-stone-800 text-amber-300 shadow-xs'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
-          >
-            <Radio className="w-3 h-3" />
-            <span>TikTok</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSelectTab('tiktok')}
+              className={`h-7 px-1.5 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'tiktok'
+                  ? 'bg-stone-800 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+              }`}
+            >
+              <Radio className="w-3 h-3 shrink-0" />
+              <span>TikTok</span>
+            </button>
+          </div>
         </div>
       </div>
 
