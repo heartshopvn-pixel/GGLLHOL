@@ -99,6 +99,225 @@ import { ZoneKey } from '../components/stage/GameStage';
 const STORAGE_KEY = 'lop_hoc_12a1_studio_state_v3';
 const LEFT_DOOR_POS: Point2D = { x: 46, y: 500 };
 const QUESTIONS_PER_ROUND = 10;
+const SIMULATION_MIN_FRAME_MS = 1000 / 62;
+
+function stepAxis(current: number, target: number, maxStep: number): number {
+  const diff = target - current;
+  const step = Math.max(0.01, maxStep);
+  if (Math.abs(diff) <= step) {
+    return target;
+  }
+  return current + Math.sign(diff) * step;
+}
+
+interface DeskObstacleBox {
+  centerX: number;
+  centerY: number;
+  clearHalfW: number;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function computeClassroomDeskAisleData(
+  vipSlots: KneelSlot[],
+  normalSlots: KneelSlot[],
+  cfg: GameConfig
+) {
+  const safeDeskScale = Math.max(0.5, Math.min(3.0, cfg.deskScale ?? 1));
+  const deskGap = typeof cfg.studentDeskGap === 'number' ? cfg.studentDeskGap : 24;
+  const rawDesks = [
+    ...groupSlotsIntoDoubleDesks(vipSlots, 'vip'),
+    ...groupSlotsIntoDoubleDesks(normalSlots, 'norm'),
+  ];
+
+  let minDeskTopY = 9999;
+  const boxes: DeskObstacleBox[] = rawDesks.map((d) => {
+    const deskW = Math.round(d.width * safeDeskScale);
+    const deskH = Math.round(deskW * 0.56);
+    const clearHalfW = Math.round(deskW / 2) + 12;
+    const deskRenderY = d.centerY - deskGap;
+    const topY = Math.round(deskRenderY - deskH * 0.65);
+    const bottomY = Math.round(d.centerY + 6);
+    if (deskRenderY - 22 < minDeskTopY) {
+      minDeskTopY = deskRenderY - 22;
+    }
+    return {
+      centerX: d.centerX,
+      centerY: d.centerY,
+      clearHalfW,
+      minX: d.centerX - clearHalfW + 4,
+      maxX: d.centerX + clearHalfW - 4,
+      minY: topY,
+      maxY: bottomY,
+    };
+  });
+
+  const frontCorridorY =
+    boxes.length > 0
+      ? Math.min(LEFT_DOOR_POS.y, Math.max(456, Math.round(minDeskTopY)))
+      : LEFT_DOOR_POS.y;
+
+  const isXInsideAnyDeskAtY = (
+    testX: number,
+    testY: number,
+    ignoreDeskCenterY?: number,
+    ignoreDeskCenterX?: number
+  ): boolean => {
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      if (
+        typeof ignoreDeskCenterY === 'number' &&
+        typeof ignoreDeskCenterX === 'number' &&
+        Math.abs(b.centerY - ignoreDeskCenterY) <= 4 &&
+        Math.abs(b.centerX - ignoreDeskCenterX) <= 4
+      ) {
+        continue;
+      }
+      if (testY >= b.minY && testY <= b.maxY && testX > b.minX && testX < b.maxX) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const isXClearAlongVerticalAisle = (testX: number, fromY: number): boolean => {
+    const yStart = Math.min(fromY, frontCorridorY);
+    const yEnd = Math.max(fromY, frontCorridorY);
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      if (b.maxY < yStart || b.minY > yEnd) continue;
+      if (testX > b.minX && testX < b.maxX) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const findNearestClearVerticalAisleX = (curX: number, curY: number): number => {
+    if (boxes.length === 0 || isXClearAlongVerticalAisle(curX, curY)) {
+      return Math.max(20, Math.min(520, Math.round(curX)));
+    }
+    const candidates = new Set<number>([24, 516]);
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      const leftEdge = Math.round(b.centerX - b.clearHalfW);
+      const rightEdge = Math.round(b.centerX + b.clearHalfW);
+      if (leftEdge >= 18 && leftEdge <= 522) candidates.add(leftEdge);
+      if (rightEdge >= 18 && rightEdge <= 522) candidates.add(rightEdge);
+      for (let j = i + 1; j < boxes.length; j++) {
+        const b2 = boxes[j];
+        if (Math.abs(b.centerY - b2.centerY) <= 36) {
+          const mid = Math.round((b.centerX + b2.centerX) / 2);
+          if (mid >= 18 && mid <= 522) candidates.add(mid);
+        }
+      }
+    }
+    let bestX = curX < 270 ? 24 : 516;
+    let bestDist = Infinity;
+    candidates.forEach((cand) => {
+      if (isXClearAlongVerticalAisle(cand, curY)) {
+        const dist = Math.abs(cand - curX);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestX = cand;
+        }
+      }
+    });
+    if (bestDist < Infinity) return bestX;
+
+    // Fallback nếu bàn xếp so le kín lối: thoát ngay ra mép ngoài bàn đang chặn tại curY
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      if (curY >= b.minY && curY <= b.maxY && curX > b.minX && curX < b.maxX) {
+        const leftOut = Math.max(20, Math.round(b.centerX - b.clearHalfW));
+        const rightOut = Math.min(520, Math.round(b.centerX + b.clearHalfW));
+        return Math.abs(curX - leftOut) <= Math.abs(rightOut - curX)
+          ? leftOut
+          : rightOut;
+      }
+    }
+    return Math.max(20, Math.min(520, Math.round(curX)));
+  };
+
+  const resolveSafeAisleX = (
+    slotX: number,
+    slotY: number,
+    preferredLaneX?: number
+  ): number => {
+    if (boxes.length === 0) {
+      return preferredLaneX ?? 270;
+    }
+    let ownDesk: DeskObstacleBox | null = null;
+    let minOwnDist = Infinity;
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      if (Math.abs(b.centerY - slotY) <= 22) {
+        const dx = Math.abs(b.centerX - slotX);
+        if (dx < minOwnDist) {
+          minOwnDist = dx;
+          ownDesk = b;
+        }
+      }
+    }
+    if (!ownDesk) {
+      if (
+        typeof preferredLaneX === 'number' &&
+        isXClearAlongVerticalAisle(preferredLaneX, slotY)
+      ) {
+        return preferredLaneX;
+      }
+      return findNearestClearVerticalAisleX(slotX, slotY);
+    }
+
+    const rowDesks = boxes
+      .filter((b) => Math.abs(b.centerY - ownDesk!.centerY) <= 32)
+      .sort((a, b) => a.centerX - b.centerX);
+    const idx = rowDesks.indexOf(ownDesk);
+
+    let leftAisle: number | null = null;
+    if (idx > 0) {
+      leftAisle = Math.round((rowDesks[idx - 1].centerX + ownDesk.centerX) / 2);
+    } else if (ownDesk.centerX - ownDesk.clearHalfW >= 18) {
+      leftAisle = Math.max(20, Math.round(ownDesk.centerX - ownDesk.clearHalfW));
+    }
+
+    let rightAisle: number | null = null;
+    if (idx >= 0 && idx < rowDesks.length - 1) {
+      rightAisle = Math.round((ownDesk.centerX + rowDesks[idx + 1].centerX) / 2);
+    } else if (ownDesk.centerX + ownDesk.clearHalfW <= 522) {
+      rightAisle = Math.min(520, Math.round(ownDesk.centerX + ownDesk.clearHalfW));
+    }
+
+    const preferLeft = slotX <= ownDesk.centerX;
+    const primary = preferLeft ? leftAisle : rightAisle;
+    const secondary = preferLeft ? rightAisle : leftAisle;
+
+    if (primary !== null && isXClearAlongVerticalAisle(primary, slotY)) {
+      return primary;
+    }
+    if (secondary !== null && isXClearAlongVerticalAisle(secondary, slotY)) {
+      return secondary;
+    }
+    if (primary !== null && !isXInsideAnyDeskAtY(primary, slotY)) {
+      return primary;
+    }
+    if (secondary !== null && !isXInsideAnyDeskAtY(secondary, slotY)) {
+      return secondary;
+    }
+    return findNearestClearVerticalAisleX(slotX, slotY);
+  };
+
+  return {
+    boxes,
+    frontCorridorY,
+    isXInsideAnyDeskAtY,
+    isXClearAlongVerticalAisle,
+    findNearestClearVerticalAisleX,
+    resolveSafeAisleX,
+  };
+}
 
 function normalizePaperPlaneTagText(raw: string): string {
   if (!raw) return '';
@@ -3448,7 +3667,6 @@ export function useClassroomEngine() {
                 chatBubbleKey: giftBubbleKey,
                 chatBubbleUntil:
                   Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000,
-                laneX: 270,
                 state: 'walk_in_up' as const,
                 stateTimer: 0,
               }
@@ -6734,6 +6952,10 @@ export function useClassroomEngine() {
     let frameId = 0;
 
     const stepSimulation = (nowMs: number) => {
+      if (nowMs - lastMs < SIMULATION_MIN_FRAME_MS) {
+        frameId = requestAnimationFrame(stepSimulation);
+        return;
+      }
       const dt = Math.min(0.08, Math.max(0.001, (nowMs - lastMs) / 1000));
       lastMs = nowMs;
       const cfg = configRef.current;
@@ -7016,6 +7238,16 @@ export function useClassroomEngine() {
         const nextList: PilgrimData[] = [];
         const nowEpoch = Date.now();
         let hasActivePilgrimVisualUpdate = false;
+        const hasAnyMovingPilgrim = prevPilgrims.some(
+          (st) => st.state !== 'pray_seated' && st.state !== 'stand_punishment'
+        );
+        const deskAisles = hasAnyMovingPilgrim
+          ? computeClassroomDeskAisleData(
+              vipSlotsRef.current,
+              normalSlotsRef.current,
+              cfg
+            )
+          : null;
 
         for (const p of prevPilgrims) {
           // Hỗ trợ rải nhịp xuất phát (Phương án 3A): học sinh chờ hết spawnDelaySec mới bước qua cửa
@@ -7065,6 +7297,7 @@ export function useClassroomEngine() {
             y === p.slotY &&
             !(p.richKidDanceUntil && nowEpoch < p.richKidDanceUntil);
 
+          let walkSubPhase = stateTimer === 0 ? 0 : (p.walkSubPhase ?? 0);
           animTime += dt;
           stateTimer += dt;
 
@@ -7072,22 +7305,54 @@ export function useClassroomEngine() {
           const burnerY = cfg.incenseBurner.y;
 
           const seatingSpeed = cfg.studentSeatingSpeed ?? (p.speed || 110);
+          const safeLaneX = deskAisles
+            ? deskAisles.resolveSafeAisleX(
+                p.slotX ?? x,
+                p.slotY ?? y,
+                p.laneX
+              )
+            : p.laneX;
+          const frontCorridorY = deskAisles
+            ? deskAisles.frontCorridorY
+            : LEFT_DOOR_POS.y;
 
           if (state === 'walk_in_up') {
-            // Học sinh tặng quà đi từ cửa chính bên trái (chỉ đi ngang rồi đi dọc) lên trước bàn Giáo viên
-            const dx = burnerX - x;
-            const dy = burnerY - y;
-            if (Math.abs(dx) > 4) {
-              x += Math.sign(dx) * seatingSpeed * dt;
-              facingLeft = dx < 0;
-            } else if (Math.abs(dy) > 4) {
-              x = burnerX;
-              y += Math.sign(dy) * seatingSpeed * dt;
-            } else {
-              x = burnerX;
-              y = burnerY;
-              state = 'throw_offering_at_burner';
-              stateTimer = 0;
+            // Học sinh tặng quà đi lên trước bàn Giáo viên theo 3 pha đơn điệu (0 -> 1 -> 2), không bao giờ quay ngược lại lối đi
+            const step = seatingSpeed * dt;
+            if (walkSubPhase === 0) {
+              if (y <= frontCorridorY + 8) {
+                walkSubPhase = 2;
+              } else if (Math.abs(safeLaneX - x) > 0.5) {
+                facingLeft = safeLaneX < x;
+                x = stepAxis(x, safeLaneX, step);
+              } else {
+                x = safeLaneX;
+                walkSubPhase = 1;
+              }
+            }
+            if (walkSubPhase === 1) {
+              x = safeLaneX;
+              if (y > frontCorridorY + 0.5) {
+                y = stepAxis(y, frontCorridorY, step);
+              } else {
+                y = Math.min(y, frontCorridorY);
+                walkSubPhase = 2;
+              }
+            }
+            if (walkSubPhase === 2) {
+              if (Math.abs(burnerX - x) > 0.5) {
+                facingLeft = burnerX < x;
+                x = stepAxis(x, burnerX, step);
+              } else if (Math.abs(burnerY - y) > 0.5) {
+                x = burnerX;
+                y = stepAxis(y, burnerY, step);
+              } else {
+                x = burnerX;
+                y = burnerY;
+                walkSubPhase = 0;
+                state = 'throw_offering_at_burner';
+                stateTimer = 0;
+              }
             }
           } else if (state === 'throw_offering_at_burner') {
             // Đặt quà lên bàn Giáo viên -> nổ hiệu ứng +số Hoa Điểm 10 màu hồng không viền đen
@@ -7113,28 +7378,29 @@ export function useClassroomEngine() {
               stateTimer = 0;
             }
           } else if (state === 'walk_carpet_to_slot_y') {
-            // Đi vuông góc (chỉ ngang và dọc) từ cửa chính bên trái ra lối đi dọc (laneX) rồi đi dọc tới hàng bàn (slotY)
-            const dxAisle = p.laneX - x;
-            const dyRow = p.slotY - y;
-            if (Math.abs(dxAisle) > 4) {
-              x += Math.sign(dxAisle) * seatingSpeed * dt;
-              facingLeft = dxAisle < 0;
-            } else if (Math.abs(dyRow) > 4) {
-              x = p.laneX;
-              y += Math.sign(dyRow) * seatingSpeed * dt;
+            // Đi vuông góc từ cửa / hành lang đầu lớp ra lối đi dọc an toàn (safeLaneX) rồi đi dọc tới hàng bàn (slotY)
+            const step = seatingSpeed * dt;
+            p.laneX = safeLaneX;
+            if (Math.abs(safeLaneX - x) > 0.5) {
+              facingLeft = safeLaneX < x;
+              x = stepAxis(x, safeLaneX, step);
+            } else if (Math.abs(p.slotY - y) > 0.5) {
+              x = safeLaneX;
+              y = stepAxis(y, p.slotY, step);
             } else {
-              x = p.laneX;
+              x = safeLaneX;
               y = p.slotY;
               state = 'walk_side_to_slot';
               stateTimer = 0;
             }
           } else if (state === 'walk_side_to_slot') {
-            // Bước ngang vuông góc từ lối đi dọc vào đúng ghế trái/phải của bàn đôi
+            // Bước ngang vuông góc mượt mà (không vượt lố gây giật) từ lối đi dọc vào đúng ghế trái/phải của bàn đôi
             y = p.slotY;
-            const dx = p.slotX - x;
-            if (Math.abs(dx) > 3) {
-              x += Math.sign(dx) * (seatingSpeed * 0.9) * dt;
-              facingLeft = dx < 0;
+            p.laneX = safeLaneX;
+            const step = seatingSpeed * 0.9 * dt;
+            if (Math.abs(p.slotX - x) > 0.5) {
+              facingLeft = p.slotX < x;
+              x = stepAxis(x, p.slotX, step);
             } else {
               x = p.slotX;
               y = p.slotY;
@@ -7149,82 +7415,98 @@ export function useClassroomEngine() {
             prayTimer += dt;
             // Học sinh trong lớp ngồi cố định tại bàn, tuyệt đối KHÔNG tự ý rời lớp khi tạm dừng tiết học hoặc chuyển sang Bảng Thông Báo
           } else if (state === 'walk_to_teacher_gift') {
-            // Học sinh cầm hoa trước ngực đi tới vị trí bên cạnh Giáo viên (cạnh trái hoặc phải, không chạm giáo viên)
+            // Học sinh cầm hoa đi tới bên cạnh Giáo viên theo 3 pha đơn điệu (0: ra lối đi -> 1: lên hành lang đầu lớp -> 2: tiếp cận Giáo viên), tuyệt đối không lặp vòng
             const moveSpeed = cfg.studentGiftSpeed ?? Math.max(p.speed, 185);
+            const step = moveSpeed * dt;
             const liveTeacher =
               monksRef.current.find(
                 (m) => m.role === (p.giftTargetRole || 'abbot')
               ) || monksRef.current[0];
+            const sideRefX = p.giftTargetPos
+              ? p.giftTargetPos.x
+              : p.slotX || x;
             const targetPos = liveTeacher
-              ? getTeacherSideGiftPos(
-                  liveTeacher.x,
-                  liveTeacher.y,
-                  p.slotX || x
-                )
+              ? getTeacherSideGiftPos(liveTeacher.x, liveTeacher.y, sideRefX)
               : p.giftTargetPos || {
                   x: cfg.incenseBurner.x,
                   y: cfg.incenseBurner.y,
                 };
-            const walkCorridorY =
-              p.giftTargetRole === 'senior_novice' ? targetPos.y : 478;
+            p.giftTargetPos = targetPos;
+            p.laneX = safeLaneX;
 
-            const isAtSeatRow =
-              Math.abs(y - p.slotY) <= 5 && Math.abs(x - p.laneX) > 4;
-            if (isAtSeatRow) {
-              const dxLane = p.laneX - x;
-              x += Math.sign(dxLane) * moveSpeed * dt;
-              facingLeft = dxLane < 0;
-            } else if (
-              Math.abs(y - walkCorridorY) > 5 &&
-              Math.abs(x - targetPos.x) > 5
-            ) {
-              x = p.laneX;
-              const dy = walkCorridorY - y;
-              y += Math.sign(dy) * moveSpeed * dt;
-            } else if (Math.abs(x - targetPos.x) > 5) {
+            if (walkSubPhase === 0) {
+              if (y <= frontCorridorY + 8) {
+                walkSubPhase = 2;
+              } else if (Math.abs(safeLaneX - x) > 0.5) {
+                facingLeft = safeLaneX < x;
+                x = stepAxis(x, safeLaneX, step);
+              } else {
+                x = safeLaneX;
+                walkSubPhase = 1;
+              }
+            }
+            if (walkSubPhase === 1) {
+              x = safeLaneX;
+              if (y > frontCorridorY + 0.5) {
+                y = stepAxis(y, frontCorridorY, step);
+              } else {
+                y = Math.min(y, frontCorridorY);
+                walkSubPhase = 2;
+              }
+            }
+            if (walkSubPhase === 2) {
               const dx = targetPos.x - x;
-              x += Math.sign(dx) * moveSpeed * dt;
-              facingLeft = dx < 0;
-            } else if (Math.abs(y - targetPos.y) > 5) {
-              x = targetPos.x;
               const dy = targetPos.y - y;
-              y += Math.sign(dy) * moveSpeed * dt;
-            } else {
-              x = targetPos.x;
-              y = targetPos.y;
-              state = 'throw_flower_at_teacher';
-              stateTimer = 0;
-              const totalFlowers =
-                p.totalFlowersToThrow || ((p.comboCount || 1) > 1 ? 3 : 1);
-              p.totalFlowersToThrow = totalFlowers;
-              p.flowersThrownCount = 1;
-              p.flowerBurstsDoneCount = 0;
-              isCarryingGift = totalFlowers > 1;
+              if (Math.abs(dx) > 8 && stateTimer < 8.0) {
+                facingLeft = dx < 0;
+                x = stepAxis(x, targetPos.x, step);
+              } else if (
+                (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) &&
+                stateTimer < 8.0
+              ) {
+                if (Math.abs(dx) > 0.5) {
+                  facingLeft = dx < 0;
+                }
+                x = stepAxis(x, targetPos.x, step);
+                y = stepAxis(y, targetPos.y, step);
+              } else {
+                x = targetPos.x;
+                y = targetPos.y;
+                walkSubPhase = 0;
+                state = 'throw_flower_at_teacher';
+                stateTimer = 0;
+                const totalFlowers =
+                  p.totalFlowersToThrow || ((p.comboCount || 1) > 1 ? 3 : 1);
+                p.totalFlowersToThrow = totalFlowers;
+                p.flowersThrownCount = 1;
+                p.flowerBurstsDoneCount = 0;
+                isCarryingGift = totalFlowers > 1;
 
-              // Bắn model bông hoa bay từ trước ngực học sinh sang vị trí của Cô Giáo / Thầy Giám Thị
-              const targetTeacher =
-                monksRef.current.find(
-                  (m) => m.role === (p.giftTargetRole || 'abbot')
-                ) || monksRef.current[0];
-              const teacherX = targetTeacher ? targetTeacher.x : targetPos.x;
-              const teacherY = targetTeacher
-                ? targetTeacher.y - 26
-                : targetPos.y - 26;
-              facingLeft = teacherX < x;
+                // Bắn model bông hoa bay từ trước ngực học sinh sang vị trí của Cô Giáo / Thầy Giám Thị
+                const targetTeacher =
+                  monksRef.current.find(
+                    (m) => m.role === (p.giftTargetRole || 'abbot')
+                  ) || monksRef.current[0];
+                const teacherX = targetTeacher ? targetTeacher.x : targetPos.x;
+                const teacherY = targetTeacher
+                  ? targetTeacher.y - 26
+                  : targetPos.y - 26;
+                facingLeft = teacherX < x;
 
-              setFlyingFlowers((prev) => [
-                ...prev.slice(-12),
-                {
-                  id: `ff_${Date.now()}_1_${p.id}`,
-                  startX: x,
-                  startY: y - 26,
-                  targetX: teacherX,
-                  targetY: teacherY,
-                  createdAt: Date.now(),
-                  donorUsername: p.username,
-                  targetRole: p.giftTargetRole || 'abbot',
-                },
-              ]);
+                setFlyingFlowers((prev) => [
+                  ...prev.slice(-12),
+                  {
+                    id: `ff_${Date.now()}_1_${p.id}`,
+                    startX: x,
+                    startY: y - 26,
+                    targetX: teacherX,
+                    targetY: teacherY,
+                    createdAt: Date.now(),
+                    donorUsername: p.username,
+                    targetRole: p.giftTargetRole || 'abbot',
+                  },
+                ]);
+              }
             }
           } else if (state === 'throw_flower_at_teacher') {
             const totalFlowers =
@@ -7387,14 +7669,17 @@ export function useClassroomEngine() {
                     1
                   ).bonusPoints;
                   p.flowerBonusAwarded = false;
+                  walkSubPhase = 0;
                   state = 'walk_to_teacher_gift';
                   stateTimer = 0;
                 } else {
                   pendingGiftActionsByUserRef.current.delete(lowerU);
+                  walkSubPhase = 0;
                   state = 'leave_down_exit';
                   stateTimer = 0;
                 }
               } else {
+                walkSubPhase = 0;
                 state = 'return_to_seat_from_gift';
                 stateTimer = 0;
               }
@@ -7402,36 +7687,54 @@ export function useClassroomEngine() {
           } else if (state === 'return_to_seat_from_gift') {
             // Nếu đang trên đường quay về bàn mà nhận lệnh rời lớp (leaveAfterGiftAction) -> đi ra cửa rời lớp luôn
             if (p.leaveAfterGiftAction || !p.slotId) {
+              walkSubPhase = 0;
               state = 'leave_down_exit';
               stateTimer = 0;
             } else {
-              // Đi vuông góc quay về đúng ghế bàn đôi của mình
+              // Đi vuông góc quay về đúng ghế bàn đôi theo 3 pha đơn điệu (0: ra trục lối đi dọc -> 1: đi dọc tới hàng bàn -> 2: bước ngang vào ghế)
               const returnSpeed = cfg.studentGiftSpeed ?? Math.max(p.speed, 195);
-              const dxToLane = p.laneX - x;
-              const dyToSlot = p.slotY - y;
-              const dxToSeat = p.slotX - x;
+              const step = returnSpeed * dt;
+              p.laneX = safeLaneX;
 
-              if (Math.abs(y - p.slotY) > 5 && Math.abs(dxToLane) > 5) {
-                x += Math.sign(dxToLane) * returnSpeed * dt;
-                facingLeft = dxToLane < 0;
-              } else if (Math.abs(dyToSlot) > 5) {
-                x = p.laneX;
-                y += Math.sign(dyToSlot) * returnSpeed * dt;
-              } else if (Math.abs(dxToSeat) > 4) {
+              if (walkSubPhase === 0) {
+                if (Math.abs(p.slotY - y) <= 0.5) {
+                  walkSubPhase = 2;
+                } else if (Math.abs(safeLaneX - x) > 0.5) {
+                  facingLeft = safeLaneX < x;
+                  x = stepAxis(x, safeLaneX, step);
+                } else {
+                  x = safeLaneX;
+                  walkSubPhase = 1;
+                }
+              }
+              if (walkSubPhase === 1) {
+                x = safeLaneX;
+                if (Math.abs(p.slotY - y) > 0.5) {
+                  y = stepAxis(y, p.slotY, step);
+                } else {
+                  y = p.slotY;
+                  walkSubPhase = 2;
+                }
+              }
+              if (walkSubPhase === 2) {
                 y = p.slotY;
-                x += Math.sign(dxToSeat) * returnSpeed * dt;
-                facingLeft = dxToSeat < 0;
-              } else {
-                x = p.slotX;
-                y = p.slotY;
-                facingLeft = p.slotX < 270;
-                state = 'pray_seated';
-                stateTimer = 0;
+                if (Math.abs(p.slotX - x) > 0.5) {
+                  facingLeft = p.slotX < x;
+                  x = stepAxis(x, p.slotX, step);
+                } else {
+                  x = p.slotX;
+                  y = p.slotY;
+                  facingLeft = p.slotX < 270;
+                  walkSubPhase = 0;
+                  state = 'pray_seated';
+                  stateTimer = 0;
+                }
               }
             }
           } else if (state === 'walk_to_punishment_spot') {
-            // Học sinh bị gọi phạt hoặc Top 1, 2, 3 bước lên bục giảng đi vuông góc từ bàn học ra lối đi -> lên hàng ngang trước bảng (P1..P5) -> đứng quay mặt xuống dưới
+            // Học sinh bị gọi phạt hoặc Top 1, 2, 3 bước lên bục giảng theo 3 pha đơn điệu (0: ra lối đi -> 1: lên hành lang đầu lớp -> 2: vào P1..P5)
             const moveSpeed = Math.max(p.speed, 200);
+            const step = moveSpeed * dt;
             const linePos = cfg.punishmentLinePos || { x: 270, y: 458 };
             const spacing = Math.max(24, cfg.punishmentLineSpacing ?? 52);
             const spotIdx = p.punishmentSpotIndex ?? 2;
@@ -7440,28 +7743,43 @@ export function useClassroomEngine() {
               Math.min(504, Math.round(linePos.x + (spotIdx - 2) * spacing))
             );
             const spotY = linePos.y;
+            p.laneX = safeLaneX;
 
-            const isAtSeatRow =
-              Math.abs(y - p.slotY) <= 5 && Math.abs(x - p.laneX) > 4;
-            if (isAtSeatRow) {
-              const dxLane = p.laneX - x;
-              x += Math.sign(dxLane) * moveSpeed * dt;
-              facingLeft = dxLane < 0;
-            } else if (Math.abs(y - spotY) > 5) {
-              x = p.laneX;
-              const dy = spotY - y;
-              y += Math.sign(dy) * moveSpeed * dt;
-            } else if (Math.abs(x - spotX) > 4) {
-              y = spotY;
-              const dx = spotX - x;
-              x += Math.sign(dx) * moveSpeed * dt;
-              facingLeft = dx < 0;
-            } else {
-              x = spotX;
-              y = spotY;
-              facingLeft = false; // Quay mặt xuống dưới nhìn về phía lớp học
-              state = 'stand_punishment';
-              stateTimer = 0;
+            if (walkSubPhase === 0) {
+              if (y <= frontCorridorY + 8) {
+                walkSubPhase = 2;
+              } else if (Math.abs(safeLaneX - x) > 0.5) {
+                facingLeft = safeLaneX < x;
+                x = stepAxis(x, safeLaneX, step);
+              } else {
+                x = safeLaneX;
+                walkSubPhase = 1;
+              }
+            }
+            if (walkSubPhase === 1) {
+              x = safeLaneX;
+              if (y > frontCorridorY + 0.5) {
+                y = stepAxis(y, frontCorridorY, step);
+              } else {
+                y = Math.min(y, frontCorridorY);
+                walkSubPhase = 2;
+              }
+            }
+            if (walkSubPhase === 2) {
+              if (Math.abs(spotX - x) > 0.5) {
+                facingLeft = spotX < x;
+                x = stepAxis(x, spotX, step);
+              } else if (Math.abs(spotY - y) > 0.5) {
+                x = spotX;
+                y = stepAxis(y, spotY, step);
+              } else {
+                x = spotX;
+                y = spotY;
+                facingLeft = false; // Quay mặt xuống dưới nhìn về phía lớp học
+                walkSubPhase = 0;
+                state = 'stand_punishment';
+                stateTimer = 0;
+              }
             }
           } else if (state === 'stand_punishment') {
             // Đứng tại vị trí phạt hàng ngang 5 chỗ (P1..P5), quay mặt xuống dưới lớp học
@@ -7475,56 +7793,101 @@ export function useClassroomEngine() {
             y = linePos.y;
             facingLeft = false;
           } else if (state === 'return_from_punishment_to_seat') {
-            // Sau khi hết vòng câu hỏi và trả lời đúng -> đi bộ từ vị trí phạt về lại vị trí bàn học cũ
+            // Sau khi hết vòng câu hỏi và trả lời đúng -> đi bộ vuông góc từ vị trí phạt về lại vị trí bàn học cũ theo 3 pha đơn điệu
             const returnSpeed = Math.max(p.speed, 210);
-            const dxToLane = p.laneX - x;
-            const dyToSlot = p.slotY - y;
-            const dxToSeat = p.slotX - x;
+            const step = returnSpeed * dt;
+            p.laneX = safeLaneX;
 
-            if (Math.abs(y - p.slotY) > 5 && Math.abs(dxToLane) > 5) {
-              x += Math.sign(dxToLane) * returnSpeed * dt;
-              facingLeft = dxToLane < 0;
-            } else if (Math.abs(dyToSlot) > 5) {
-              x = p.laneX;
-              y += Math.sign(dyToSlot) * returnSpeed * dt;
-            } else if (Math.abs(dxToSeat) > 4) {
+            if (walkSubPhase === 0) {
+              if (Math.abs(p.slotY - y) <= 0.5) {
+                walkSubPhase = 2;
+              } else if (Math.abs(safeLaneX - x) > 0.5) {
+                facingLeft = safeLaneX < x;
+                x = stepAxis(x, safeLaneX, step);
+              } else {
+                x = safeLaneX;
+                walkSubPhase = 1;
+              }
+            }
+            if (walkSubPhase === 1) {
+              x = safeLaneX;
+              if (Math.abs(p.slotY - y) > 0.5) {
+                y = stepAxis(y, p.slotY, step);
+              } else {
+                y = p.slotY;
+                walkSubPhase = 2;
+              }
+            }
+            if (walkSubPhase === 2) {
               y = p.slotY;
-              x += Math.sign(dxToSeat) * returnSpeed * dt;
-              facingLeft = dxToSeat < 0;
-            } else {
-              x = p.slotX;
-              y = p.slotY;
-              facingLeft = p.slotX < 270;
-              state = 'pray_seated';
-              stateTimer = 0;
+              if (Math.abs(p.slotX - x) > 0.5) {
+                facingLeft = p.slotX < x;
+                x = stepAxis(x, p.slotX, step);
+              } else {
+                x = p.slotX;
+                y = p.slotY;
+                facingLeft = p.slotX < 270;
+                walkSubPhase = 0;
+                state = 'pray_seated';
+                stateTimer = 0;
+              }
             }
           } else if (state === 'leave_side_to_aisle') {
-            // Bước ngang nhanh từ ghế ra lối đi dọc
+            // Bước ngang dứt khoát từ ghế ra đúng lối đi dọc trống ngoài mép bàn (không vượt lố, không kẹt bàn)
             const leaveSpeed = Math.max(p.speed, 220);
-            const dx = p.laneX - x;
-            if (Math.abs(dx) > 5) {
-              x += Math.sign(dx) * leaveSpeed * dt;
-              facingLeft = dx < 0;
+            const step = leaveSpeed * dt;
+            p.laneX = safeLaneX;
+            if (Math.abs(safeLaneX - x) > 0.5 && stateTimer < 1.6) {
+              facingLeft = safeLaneX < x;
+              x = stepAxis(x, safeLaneX, step);
             } else {
-              x = p.laneX;
+              x = safeLaneX;
+              walkSubPhase = 0;
               state = 'leave_down_exit';
               stateTimer = 0;
             }
           } else if (state === 'leave_down_exit') {
-            // Đi dọc nhanh về ngang tầm cửa chính bên trái (y = 500) rồi đi ngang ra cửa trái (x = 46)
+            // Đi dọc theo lối đi trống lên hành lang phía trước mọi bàn học (frontCorridorY) rồi đi ngang ra cửa trái theo 3 pha đơn điệu
             const leaveSpeed = Math.max(p.speed, 225);
-            const doorY = LEFT_DOOR_POS.y;
+            const step = leaveSpeed * dt;
             const doorX = LEFT_DOOR_POS.x;
-            const dy = doorY - y;
-            const dx = doorX - x;
-            if (Math.abs(dy) > 6) {
-              y += Math.sign(dy) * leaveSpeed * dt;
-            } else if (Math.abs(dx) > 6) {
-              y = doorY;
-              x += Math.sign(dx) * leaveSpeed * dt;
-              facingLeft = dx < 0;
-            } else {
-              continue; // Học sinh đã ra khỏi cửa chính bên trái
+            const doorY = LEFT_DOOR_POS.y;
+
+            if (walkSubPhase === 0) {
+              if (y <= frontCorridorY + 8) {
+                walkSubPhase = 2;
+              } else {
+                const clearExitAisleX =
+                  deskAisles && !deskAisles.isXClearAlongVerticalAisle(x, y)
+                    ? deskAisles.findNearestClearVerticalAisleX(x, y)
+                    : x;
+                if (Math.abs(clearExitAisleX - x) > 0.5) {
+                  facingLeft = clearExitAisleX < x;
+                  x = stepAxis(x, clearExitAisleX, step);
+                } else {
+                  x = clearExitAisleX;
+                  walkSubPhase = 1;
+                }
+              }
+            }
+            if (walkSubPhase === 1) {
+              if (y > frontCorridorY + 0.5) {
+                y = stepAxis(y, frontCorridorY, step);
+              } else {
+                y = Math.min(y, frontCorridorY);
+                walkSubPhase = 2;
+              }
+            }
+            if (walkSubPhase === 2) {
+              if (Math.abs(doorX - x) > 0.5) {
+                facingLeft = doorX < x;
+                x = stepAxis(x, doorX, step);
+              } else if (Math.abs(doorY - y) > 0.5) {
+                x = doorX;
+                y = stepAxis(y, doorY, step);
+              } else {
+                continue; // Học sinh đã ra khỏi cửa chính bên trái
+              }
             }
           }
 
@@ -7566,6 +7929,9 @@ export function useClassroomEngine() {
             continue;
           }
 
+          if (state !== prevState) {
+            walkSubPhase = 0;
+          }
           hasActivePilgrimVisualUpdate = true;
           nextList.push({
             ...p,
@@ -7573,6 +7939,7 @@ export function useClassroomEngine() {
             y,
             state,
             stateTimer,
+            walkSubPhase,
             prayTimer,
             animTime,
             facingLeft,
@@ -7692,6 +8059,8 @@ export function useClassroomEngine() {
               facingLeft,
               isCarryingGift,
             } = r;
+            let runnerSubPhase = stateTimer === 0 ? 0 : (r.walkSubPhase ?? 0);
+            const prevRunnerState = state;
             animTime += dt;
             stateTimer += dt;
             const moveSpeed = cfg.studentGiftSpeed ?? Math.max(r.speed, 205);
@@ -7701,68 +8070,82 @@ export function useClassroomEngine() {
                 monksRef.current.find(
                   (m) => m.role === (r.giftTargetRole || 'abbot')
                 ) || monksRef.current[0];
+              const sideRefX = r.giftTargetPos
+                ? r.giftTargetPos.x
+                : r.slotX || x;
               const targetPos = liveTeacher
-                ? getTeacherSideGiftPos(
-                    liveTeacher.x,
-                    liveTeacher.y,
-                    r.slotX || x
-                  )
+                ? getTeacherSideGiftPos(liveTeacher.x, liveTeacher.y, sideRefX)
                 : r.giftTargetPos || {
                     x: cfg.incenseBurner.x,
                     y: cfg.incenseBurner.y,
                   };
+              r.giftTargetPos = targetPos;
               const walkCorridorY =
                 r.giftTargetRole === 'senior_novice' ? targetPos.y : 478;
+              const step = moveSpeed * dt;
 
-              if (
-                Math.abs(y - walkCorridorY) > 5 &&
-                Math.abs(x - targetPos.x) > 5
-              ) {
-                const dy = walkCorridorY - y;
-                y += Math.sign(dy) * moveSpeed * dt;
-              } else if (Math.abs(x - targetPos.x) > 5) {
+              if (runnerSubPhase === 0) {
+                if (Math.abs(y - walkCorridorY) > 0.5) {
+                  y = stepAxis(y, walkCorridorY, step);
+                } else {
+                  y = walkCorridorY;
+                  runnerSubPhase = 1;
+                }
+              }
+              if (runnerSubPhase === 1) {
                 const dx = targetPos.x - x;
-                x += Math.sign(dx) * moveSpeed * dt;
-                facingLeft = dx < 0;
-              } else if (Math.abs(y - targetPos.y) > 5) {
-                x = targetPos.x;
                 const dy = targetPos.y - y;
-                y += Math.sign(dy) * moveSpeed * dt;
-              } else {
-                x = targetPos.x;
-                y = targetPos.y;
-                state = 'throw_flower_at_teacher';
-                stateTimer = 0;
-                const totalFlowers =
-                  r.totalFlowersToThrow || ((r.comboCount || 1) > 1 ? 3 : 1);
-                r.totalFlowersToThrow = totalFlowers;
-                r.flowersThrownCount = 1;
-                r.flowerBurstsDoneCount = 0;
-                isCarryingGift = totalFlowers > 1;
+                if (Math.abs(dx) > 8 && stateTimer < 8.0) {
+                  facingLeft = dx < 0;
+                  x = stepAxis(x, targetPos.x, step);
+                } else if (
+                  (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) &&
+                  stateTimer < 8.0
+                ) {
+                  if (Math.abs(dx) > 0.5) {
+                    facingLeft = dx < 0;
+                  }
+                  x = stepAxis(x, targetPos.x, step);
+                  y = stepAxis(y, targetPos.y, step);
+                } else {
+                  x = targetPos.x;
+                  y = targetPos.y;
+                  runnerSubPhase = 0;
+                  state = 'throw_flower_at_teacher';
+                  stateTimer = 0;
+                  const totalFlowers =
+                    r.totalFlowersToThrow || ((r.comboCount || 1) > 1 ? 3 : 1);
+                  r.totalFlowersToThrow = totalFlowers;
+                  r.flowersThrownCount = 1;
+                  r.flowerBurstsDoneCount = 0;
+                  isCarryingGift = totalFlowers > 1;
 
-                const targetTeacher =
-                  monksRef.current.find(
-                    (m) => m.role === (r.giftTargetRole || 'abbot')
-                  ) || monksRef.current[0];
-                const teacherX = targetTeacher ? targetTeacher.x : targetPos.x;
-                const teacherY = targetTeacher
-                  ? targetTeacher.y - 26
-                  : targetPos.y - 26;
-                facingLeft = teacherX < x;
+                  const targetTeacher =
+                    monksRef.current.find(
+                      (m) => m.role === (r.giftTargetRole || 'abbot')
+                    ) || monksRef.current[0];
+                  const teacherX = targetTeacher
+                    ? targetTeacher.x
+                    : targetPos.x;
+                  const teacherY = targetTeacher
+                    ? targetTeacher.y - 26
+                    : targetPos.y - 26;
+                  facingLeft = teacherX < x;
 
-                setFlyingFlowers((prev) => [
-                  ...prev.slice(-12),
-                  {
-                    id: `ff_det_1_${Date.now()}_${r.id}`,
-                    startX: x,
-                    startY: y - 26,
-                    targetX: teacherX,
-                    targetY: teacherY,
-                    createdAt: Date.now(),
-                    donorUsername: r.username,
-                    targetRole: r.giftTargetRole || 'abbot',
-                  },
-                ]);
+                  setFlyingFlowers((prev) => [
+                    ...prev.slice(-12),
+                    {
+                      id: `ff_det_1_${Date.now()}_${r.id}`,
+                      startX: x,
+                      startY: y - 26,
+                      targetX: teacherX,
+                      targetY: teacherY,
+                      createdAt: Date.now(),
+                      donorUsername: r.username,
+                      targetRole: r.giftTargetRole || 'abbot',
+                    },
+                  ]);
+                }
               }
             } else if (state === 'throw_flower_at_teacher') {
               const totalFlowers =
@@ -7883,26 +8266,29 @@ export function useClassroomEngine() {
             } else if (state === 'return_to_seat_from_gift') {
               const returnX = r.slotX || crowdPos.x;
               const returnY = r.slotY || crowdPos.y;
-              const dx = returnX - x;
-              const dy = returnY - y;
-              if (Math.abs(dx) > 5) {
-                x += Math.sign(dx) * moveSpeed * dt;
-                facingLeft = dx < 0;
-              } else if (Math.abs(dy) > 5) {
+              const step = moveSpeed * dt;
+              if (Math.abs(returnX - x) > 0.5) {
+                facingLeft = returnX < x;
+                x = stepAxis(x, returnX, step);
+              } else if (Math.abs(returnY - y) > 0.5) {
                 x = returnX;
-                y += Math.sign(dy) * moveSpeed * dt;
+                y = stepAxis(y, returnY, step);
               } else {
                 // Đã quay về đúng vị trí đứng trong đám đông hàng chờ -> kết thúc runner để nhân vật trong doorCrowd hiển thị lại tại chỗ!
                 continue;
               }
             }
 
+            if (state !== prevRunnerState) {
+              runnerSubPhase = 0;
+            }
             nextRunners.push({
               ...r,
               x,
               y,
               state,
               stateTimer,
+              walkSubPhase: runnerSubPhase,
               animTime,
               facingLeft,
               isCarryingGift,
@@ -8056,14 +8442,13 @@ export function useClassroomEngine() {
             continue;
           }
 
-          const dx = wp.x - x;
-          const dy = wp.y - y;
-          if (Math.abs(dx) > 4) {
-            x += Math.sign(dx) * pig.speed * dt;
-            facingLeft = dx < 0;
-          } else if (Math.abs(dy) > 4) {
+          const step = pig.speed * dt;
+          if (Math.abs(wp.x - x) > 0.5) {
+            facingLeft = wp.x < x;
+            x = stepAxis(x, wp.x, step);
+          } else if (Math.abs(wp.y - y) > 0.5) {
             x = wp.x;
-            y += Math.sign(dy) * pig.speed * dt;
+            y = stepAxis(y, wp.y, step);
           } else {
             x = wp.x;
             y = wp.y;
@@ -13656,10 +14041,17 @@ export function useClassroomEngine() {
       const updated = [...slots];
       let hasChange = false;
 
+      const safeDeskScale = Math.max(0.5, Math.min(3.0, config.deskScale ?? 1));
       desks.forEach((desk) => {
         const leftX = Math.round(desk.centerX - offset);
         const rightX = Math.round(desk.centerX + offset);
-        if (updated[desk.leftIndex].x !== leftX) {
+        const clearHalfW = Math.round((desk.width * safeDeskScale) / 2) + 12;
+        const nextLeftAisle = Math.max(20, Math.round(desk.centerX - clearHalfW));
+        const nextRightAisle = Math.min(520, Math.round(desk.centerX + clearHalfW));
+        if (
+          updated[desk.leftIndex].x !== leftX ||
+          updated[desk.leftIndex].aisleX !== nextLeftAisle
+        ) {
           hasChange = true;
           updated[desk.leftIndex] = {
             ...updated[desk.leftIndex],
@@ -13667,10 +14059,14 @@ export function useClassroomEngine() {
             side: leftX < 270 ? 'left' : 'right',
             deskCenterX: desk.centerX,
             deskCenterY: desk.centerY,
-            aisleX: Math.max(20, leftX - 24),
+            aisleX: nextLeftAisle,
           };
         }
-        if (desk.rightSlot && updated[desk.rightIndex].x !== rightX) {
+        if (
+          desk.rightSlot &&
+          (updated[desk.rightIndex].x !== rightX ||
+            updated[desk.rightIndex].aisleX !== nextRightAisle)
+        ) {
           hasChange = true;
           updated[desk.rightIndex] = {
             ...updated[desk.rightIndex],
@@ -13678,7 +14074,7 @@ export function useClassroomEngine() {
             side: rightX < 270 ? 'left' : 'right',
             deskCenterX: desk.centerX,
             deskCenterY: desk.centerY,
-            aisleX: Math.min(520, rightX + 24),
+            aisleX: nextRightAisle,
           };
         }
       });
@@ -14816,6 +15212,11 @@ export function useClassroomEngine() {
             Math.round((configRef.current.studentSeatmateGap ?? 36) / 2)
           )
         );
+        const safeDeskScale = Math.max(
+          0.5,
+          Math.min(3.0, configRef.current.deskScale ?? 1)
+        );
+        const clearHalfW = Math.round((desk.width * safeDeskScale) / 2) + 12;
         const leftX = Math.round(nextCenterX - offset);
         const rightX = Math.round(nextCenterX + offset);
 
@@ -14828,7 +15229,7 @@ export function useClassroomEngine() {
               side: leftX < 270 ? 'left' : 'right',
               deskCenterX: nextCenterX,
               deskCenterY: nextCenterY,
-              aisleX: Math.max(20, leftX - 24),
+              aisleX: Math.max(20, Math.round(nextCenterX - clearHalfW)),
             };
           }
           if (i === desk.rightIndex && desk.rightSlot) {
@@ -14839,7 +15240,7 @@ export function useClassroomEngine() {
               side: rightX < 270 ? 'left' : 'right',
               deskCenterX: nextCenterX,
               deskCenterY: nextCenterY,
-              aisleX: Math.min(520, rightX + 24),
+              aisleX: Math.min(520, Math.round(nextCenterX + clearHalfW)),
             };
           }
           return s;
@@ -14877,6 +15278,10 @@ export function useClassroomEngine() {
         if (moveMap.size === 0) return slots;
         const desks = groupSlotsIntoDoubleDesks(slots, prefix);
         const updatedSlots = [...slots];
+        const safeDeskScale = Math.max(
+          0.5,
+          Math.min(3.0, configRef.current.deskScale ?? 1)
+        );
 
         desks.forEach((desk) => {
           const hasLeft = moveMap.has(desk.leftIndex);
@@ -14914,6 +15319,7 @@ export function useClassroomEngine() {
 
           nextCenterX = Math.max(42, Math.min(498, nextCenterX));
           nextCenterY = Math.max(140, Math.min(935, nextCenterY));
+          const clearHalfW = Math.round((desk.width * safeDeskScale) / 2) + 12;
           const leftX = Math.round(nextCenterX - offset);
           const rightX = Math.round(nextCenterX + offset);
 
@@ -14924,7 +15330,7 @@ export function useClassroomEngine() {
             side: leftX < 270 ? 'left' : 'right',
             deskCenterX: nextCenterX,
             deskCenterY: nextCenterY,
-            aisleX: Math.max(20, leftX - 24),
+            aisleX: Math.max(20, Math.round(nextCenterX - clearHalfW)),
           };
 
           if (desk.rightSlot) {
@@ -14935,7 +15341,7 @@ export function useClassroomEngine() {
               side: rightX < 270 ? 'left' : 'right',
               deskCenterX: nextCenterX,
               deskCenterY: nextCenterY,
-              aisleX: Math.min(520, rightX + 24),
+              aisleX: Math.min(520, Math.round(nextCenterX + clearHalfW)),
             };
           }
         });

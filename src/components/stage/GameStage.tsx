@@ -351,9 +351,13 @@ export const GameStage: React.FC<GameStageProps> = ({
 
   const seatMeta = useMemo(() => {
     const leftSeatIds = new Set<string>();
+    const leftSeatCoords = new Set<string>();
     const deskYBySlotId = new Map<string, number>();
     vipDesks.forEach((d) => {
       leftSeatIds.add(d.leftSlot.id);
+      leftSeatCoords.add(
+        `${Math.round(d.leftSlot.x)}_${Math.round(d.leftSlot.y)}`
+      );
       deskYBySlotId.set(d.leftSlot.id, d.centerY);
       if (d.rightSlot) {
         deskYBySlotId.set(d.rightSlot.id, d.centerY);
@@ -361,12 +365,15 @@ export const GameStage: React.FC<GameStageProps> = ({
     });
     normalDesks.forEach((d) => {
       leftSeatIds.add(d.leftSlot.id);
+      leftSeatCoords.add(
+        `${Math.round(d.leftSlot.x)}_${Math.round(d.leftSlot.y)}`
+      );
       deskYBySlotId.set(d.leftSlot.id, d.centerY);
       if (d.rightSlot) {
         deskYBySlotId.set(d.rightSlot.id, d.centerY);
       }
     });
-    return { leftSeatIds, deskYBySlotId };
+    return { leftSeatIds, leftSeatCoords, deskYBySlotId };
   }, [vipDesks, normalDesks]);
 
   const [draggingNode, setDraggingNode] = useState<{
@@ -786,6 +793,11 @@ export const GameStage: React.FC<GameStageProps> = ({
     let lastTime = performance.now();
 
     const renderFx = (now: number) => {
+      // Khóa trần 60 FPS đồng bộ với vòng lặp mô phỏng di chuyển (tránh chạy 120/144/240Hz trên màn hình tần số quét cao)
+      if (now - lastTime < 1000 / 62) {
+        animId = requestAnimationFrame(renderFx);
+        return;
+      }
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
       const timeSec = now / 1000;
@@ -1746,7 +1758,12 @@ export const GameStage: React.FC<GameStageProps> = ({
               chatBubbleOffsetY={config.chatBubbleOffsetY ?? 0}
               chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
               isLeftSeatmate={Boolean(
-                p.slotId && seatMeta.leftSeatIds.has(p.slotId)
+                p.slotId
+                  ? seatMeta.leftSeatIds.has(p.slotId)
+                  : p.state === 'leave_side_to_aisle' &&
+                      seatMeta.leftSeatCoords.has(
+                        `${Math.round(p.slotX)}_${Math.round(p.slotY)}`
+                      )
               )}
               deskSeatY={
                 p.slotId ? seatMeta.deskYBySlotId.get(p.slotId) : undefined
@@ -1769,11 +1786,11 @@ export const GameStage: React.FC<GameStageProps> = ({
           {runningPigs.map((pig) => (
             <div
               key={pig.id}
-              className="absolute pointer-events-none select-none"
+              className="absolute left-0 top-0 pointer-events-none select-none"
               style={{
-                left: `${pig.x}px`,
-                top: `${pig.y}px`,
-                transform: `translate(-50%, -80%) translateY(${
+                transform: `translate3d(${pig.x.toFixed(2)}px, ${pig.y.toFixed(
+                  2
+                )}px, 0) translate(-50%, -80%) translateY(${
                   Math.abs(Math.sin(pig.animTime * 16)) * -4
                 }px)`,
                 zIndex: Math.max(25, Math.round(pig.y) + 4),
@@ -1799,11 +1816,13 @@ export const GameStage: React.FC<GameStageProps> = ({
             return (
               <div
                 key={cat.id}
-                className="absolute pointer-events-none select-none"
+                className="absolute left-0 top-0 pointer-events-none select-none"
                 style={{
-                  left: `${cat.x}px`,
-                  top: `${cat.y}px`,
-                  transform: `translate(-50%, -80%) translateY(${arcOffsetY.toFixed(
+                  transform: `translate3d(${cat.x.toFixed(
+                    2
+                  )}px, ${cat.y.toFixed(
+                    2
+                  )}px, 0) translate(-50%, -80%) translateY(${arcOffsetY.toFixed(
                     1
                   )}px) rotate(${wobbleDeg.toFixed(1)}deg) ${
                     cat.facingLeft ? 'scaleX(-1)' : ''

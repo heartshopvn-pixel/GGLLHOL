@@ -879,6 +879,7 @@ export interface PilgrimData {
   speed: number;
   state: PilgrimState;
   stateTimer: number;
+  walkSubPhase?: number;
   prayTimer: number;
   totalPrayDuration: number;
   animTime: number;

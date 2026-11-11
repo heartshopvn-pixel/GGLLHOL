@@ -121,21 +121,21 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
       ? 20490
       : 2000 + Math.max(14, Math.round(monk.y));
 
+  const posX = Number(monk.x.toFixed(2));
+  const posY = Number(monk.y.toFixed(2));
+
   return (
-    <div
-      className="absolute pointer-events-none select-none"
-      style={{
-        left: `${monk.x}px`,
-        top: `${monk.y}px`,
-      }}
-    >
+    <>
       {/* CHATBOX CẢM ƠN NHẬN QUÀ CỦA CÔ GIÁO (CHỮ HỒNG, VIỀN HỒNG) & THẦY GIÁM THỊ (CHỮ XANH DƯƠNG, VIỀN XANH DƯƠNG) */}
       {showBubble && (
         <div
-          className="absolute left-0 pointer-events-none"
+          className="absolute left-0 top-0 pointer-events-none"
           style={{
-            top: -headTopOffsetPx,
-            transform: `translate(-50%, -100%) scale(${(effectiveBubbleScale || 1).toFixed(2)})`,
+            transform: `translate3d(${posX}px, ${(
+              posY - headTopOffsetPx
+            ).toFixed(2)}px, 0) translate(-50%, -100%) scale(${(
+              effectiveBubbleScale || 1
+            ).toFixed(2)})`,
             transformOrigin: '50% 100%',
             zIndex: 34000,
           }}
@@ -172,10 +172,12 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
 
       {/* KHỐI THÂN NHÂN VẬT CÔ GIÁO / THẦY GIÁM THỊ */}
       <div
-        className="relative pointer-events-none select-none"
+        className="absolute left-0 top-0 pointer-events-none select-none"
         style={{
           zIndex: teacherBodyZIndex,
-          transform: `translate(-50%, -88%) scale(${finalScale.toFixed(3)}) ${
+          transform: `translate3d(${posX}px, ${posY}px, 0) translate(-50%, -88%) scale(${finalScale.toFixed(
+            3
+          )}) ${
             walkWobbleDeg !== 0 ? `rotate(${walkWobbleDeg.toFixed(2)}deg)` : ''
           }`,
           transformOrigin: '50% 88%',
@@ -482,10 +484,13 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
 
       {/* BẢNG TÊN CÔ GIÁO / THẦY GIÁM THỊ */}
       <div
-        className="absolute left-0 flex flex-col items-center pointer-events-none"
+        className="absolute left-0 top-0 flex flex-col items-center pointer-events-none"
         style={{
-          top: feetBottomOffsetPx,
-          transform: `translate(-50%, 0) scale(${(nameTagScale || 1).toFixed(2)})`,
+          transform: `translate3d(${posX}px, ${(
+            posY + feetBottomOffsetPx
+          ).toFixed(2)}px, 0) translate(-50%, 0) scale(${(
+            nameTagScale || 1
+          ).toFixed(2)})`,
           transformOrigin: '50% 0%',
           zIndex: teacherNameTagZIndex,
         }}
@@ -503,7 +508,7 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
           {monk.name}
         </div>
       </div>
-    </div>
+    </>
   );
 };
 

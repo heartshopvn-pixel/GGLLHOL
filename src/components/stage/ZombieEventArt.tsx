@@ -39,12 +39,12 @@ const ZombieCharacterSpriteInner: React.FC<ZombieCharacterSpriteProps> = ({
 
   return (
     <div
-      className="absolute pointer-events-none select-none"
+      className="absolute left-0 top-0 pointer-events-none select-none"
       style={{
-        left: `${drawX}px`,
-        top: `${drawY}px`,
         zIndex: Math.max(22, Math.round(zombie.y) + 2),
-        transform: `translate(-50%, -100%) scale(${scale})`,
+        transform: `translate3d(${drawX.toFixed(2)}px, ${drawY.toFixed(
+          2
+        )}px, 0) translate(-50%, -100%) scale(${scale})`,
         opacity,
         transition: isDying ? 'opacity 0.15s linear' : undefined,
       }}

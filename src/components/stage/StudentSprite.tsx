@@ -208,10 +208,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
 
   const isSeated = pilgrim.state === 'pray_seated' && !isRichKidDancing;
   const isAtDeskSeat =
-    Boolean(pilgrim.slotId) &&
-    (pilgrim.state === 'pray_seated' ||
-      pilgrim.state === 'walk_side_to_slot' ||
-      Math.abs(pilgrim.y - (pilgrim.slotY || pilgrim.y)) <= 8);
+    Boolean(pilgrim.slotId) && pilgrim.state === 'pray_seated';
 
   const effectiveBaseY =
     isAtDeskSeat && typeof deskSeatY === 'number'
@@ -268,15 +265,43 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
     12,
     Math.min(40, Math.round(Number(nameTagHeight ?? 20)))
   );
-  // Bạn bên trái cùng bàn luôn cao hơn bạn bên phải 1 mức đủ bù chiều cao thẻ tên + thẻ cúp nhỏ bên dưới để 2 bạn không bao giờ đè thẻ lên nhau
-  // Khi kích hoạt Rich Kid Dance -> đứng hẳn lên mặt bàn (-24px) và nhảy múa
+  // Bạn bên trái cùng bàn luôn cao hơn bạn bên phải 1 mức đủ bù chiều cao thẻ tên + thẻ cúp nhỏ bên dưới để 2 bạn không bao giờ đè thẻ lên nhau.
+  // Khi di chuyển ngang ra/vào ghế, nội suy mượt seatProgress (1 -> 0 / 0 -> 1) theo trục X để không bao giờ bị giật nhảy dọc 33px hay cấn vào mặt bàn!
   const nameTagHeightPx = Math.round(
     (safeNameTagHeight + 13) * (nameTagScale || 1)
   );
-  const seatmateYOffset =
-    isLeftSeatmate && isAtDeskSeat ? -nameTagHeightPx : 0;
+  let seatProgress = 0;
+  if (pilgrim.state === 'pray_seated') {
+    seatProgress = 1;
+  } else if (
+    isLeftSeatmate &&
+    typeof pilgrim.slotY === 'number' &&
+    Math.abs(pilgrim.y - pilgrim.slotY) <= 2 &&
+    (pilgrim.state === 'walk_side_to_slot' ||
+      pilgrim.state === 'leave_side_to_aisle' ||
+      pilgrim.state === 'walk_to_teacher_gift' ||
+      pilgrim.state === 'return_to_seat_from_gift' ||
+      pilgrim.state === 'walk_to_punishment_spot' ||
+      pilgrim.state === 'return_from_punishment_to_seat' ||
+      pilgrim.state === 'walk_in_up')
+  ) {
+    const aisleSpan = Math.max(
+      16,
+      Math.abs(
+        pilgrim.slotX -
+          (typeof pilgrim.laneX === 'number' ? pilgrim.laneX : pilgrim.slotX)
+      )
+    );
+    seatProgress = Math.max(
+      0,
+      Math.min(1, 1 - Math.abs(pilgrim.x - pilgrim.slotX) / aisleSpan)
+    );
+  }
+  const seatmateYOffset = isLeftSeatmate ? -nameTagHeightPx * seatProgress : 0;
   const richKidDeskStandOffset = isRichKidDancing ? -24 : 0;
   const renderedY = effectiveBaseY + seatmateYOffset + richKidDeskStandOffset;
+  const posX = Number(pilgrim.x.toFixed(2));
+  const posY = Number(renderedY.toFixed(2));
 
   const isRaisingHand =
     isRichKidDancing ||
@@ -424,21 +449,17 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
   }
 
   return (
-    <div
-      className="absolute pointer-events-none select-none"
-      style={{
-        left: `${pilgrim.x}px`,
-        top: `${renderedY}px`,
-      }}
-    >
+    <>
       {/* FLOATING TEXT CÚP VÀNG KHI TUYÊN DƯƠNG TOP 1, 2, 3 CUỐI VÒNG 15 PHÚT (+3 🏆 / +2 🏆 / +1 🏆) */}
       {showFloatingTrophy && (
         <div
           key={`ftrophy_${pilgrim.floatingTrophyKey || 1}`}
-          className="absolute left-0 pointer-events-none select-none"
+          className="absolute left-0 top-0 pointer-events-none select-none"
           style={{
-            top: -(quizBadgeTopOffsetPx + 8),
-            transform: 'translate(-50%, -100%)',
+            transform: `translate3d(${posX}px, ${(
+              posY -
+              (quizBadgeTopOffsetPx + 8)
+            ).toFixed(2)}px, 0) translate(-50%, -100%)`,
             zIndex: badgeUiZIndex + 35,
           }}
         >
@@ -486,15 +507,17 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
       {showFloatingScore && (
         <div
           key={`fscore_${pilgrim.floatingScoreKey || 1}`}
-          className="absolute left-0 pointer-events-none animate-bounce"
+          className="absolute left-0 top-0 pointer-events-none"
           style={{
-            top: -(quizBadgeTopOffsetPx + 4),
-            transform: 'translate(-50%, -100%)',
+            transform: `translate3d(${posX}px, ${(
+              posY -
+              (quizBadgeTopOffsetPx + 4)
+            ).toFixed(2)}px, 0) translate(-50%, -100%)`,
             zIndex: badgeUiZIndex + 20,
           }}
         >
           <div
-            className="px-2.5 py-0.5 rounded-full font-mono font-black text-[13px] leading-none whitespace-nowrap shadow-xl"
+            className="px-2.5 py-0.5 rounded-full font-mono font-black text-[13px] leading-none whitespace-nowrap shadow-xl animate-bounce"
             style={{
               backgroundColor:
                 pilgrim.floatingScoreColor === 'red'
@@ -516,10 +539,11 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
 
       {showQuizResultBadge && pilgrim.quizResultStatus === 'wrong' && (
         <div
-          className="absolute left-0 pointer-events-none"
+          className="absolute left-0 top-0 pointer-events-none"
           style={{
-            top: -wrongBadgeCenterOffsetPx,
-            transform: 'translate(-50%, -50%)',
+            transform: `translate3d(${posX}px, ${(
+              posY - wrongBadgeCenterOffsetPx
+            ).toFixed(2)}px, 0) translate(-50%, -50%)`,
             zIndex: badgeUiZIndex + 10,
           }}
         >
@@ -552,11 +576,17 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
         return (
           <div
             key={pilgrim.chatBubbleKey || 0}
-            className="absolute pointer-events-none"
+            className="absolute left-0 top-0 pointer-events-none"
             style={{
-              left: horizontalShiftPx,
-              top: -headTopOffsetPx + (chatBubbleOffsetY || 0),
-              transform: `translate(-50%, -100%) scale(${(chatBubbleScale || 1).toFixed(2)})`,
+              transform: `translate3d(${(posX + horizontalShiftPx).toFixed(
+                2
+              )}px, ${(
+                posY -
+                headTopOffsetPx +
+                (chatBubbleOffsetY || 0)
+              ).toFixed(2)}px, 0) translate(-50%, -100%) scale(${(
+                chatBubbleScale || 1
+              ).toFixed(2)})`,
               transformOrigin: '50% 100%',
               zIndex: chatBubbleZIndex,
             }}
@@ -611,10 +641,10 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
 
       {/* KHỐI THÂN NHÂN VẬT HỌC SINH (Phóng to / thu nhỏ 50% -> 300% quanh tâm chân 50% 88%, giữ nguyên zIndex theo độ sâu Y) */}
       <div
-        className="relative pointer-events-none select-none"
+        className="absolute left-0 top-0 pointer-events-none select-none"
         style={{
           zIndex: bodyZIndex,
-          transform: `translate(-50%, ${
+          transform: `translate3d(${posX}px, ${posY}px, 0) translate(-50%, ${
             isRichKidDancing
               ? `${-88 - Math.abs(Math.sin(pilgrim.animTime * 14)) * 12}%`
               : '-88%'
@@ -1046,7 +1076,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           className="absolute left-0 top-0 w-16 h-[70px] pointer-events-none select-none"
           style={{
             zIndex: 22000,
-            transform: `translate(-50%, ${
+            transform: `translate3d(${posX}px, ${posY}px, 0) translate(-50%, ${
               isRichKidDancing
                 ? `${-88 - Math.abs(Math.sin(pilgrim.animTime * 14)) * 12}%`
                 : '-88%'
@@ -1114,10 +1144,15 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           Các icon buff và Thẻ Show số điểm dùng position: absolute (bottom-full) phía trên thẻ tên
           để KHÔNG BAO GIỜ đẩy thẻ tên tụt xuống gây chồng lấn khi 2 bạn ngồi cùng bàn! */}
       <div
-        className="absolute left-0 pointer-events-none"
+        className="absolute left-0 top-0 pointer-events-none"
         style={{
-          top: feetBottomOffsetPx + (nameTagOffsetY || 0),
-          transform: `translate(-50%, 0) scale(${(nameTagScale || 1).toFixed(2)})`,
+          transform: `translate3d(${posX}px, ${(
+            posY +
+            feetBottomOffsetPx +
+            (nameTagOffsetY || 0)
+          ).toFixed(2)}px, 0) translate(-50%, 0) scale(${(
+            nameTagScale || 1
+          ).toFixed(2)})`,
           transformOrigin: '50% 0%',
           zIndex: nameTagZIndex,
         }}
@@ -1522,7 +1557,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
