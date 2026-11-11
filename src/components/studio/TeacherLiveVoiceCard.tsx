@@ -190,28 +190,38 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
               value={`${engine}::${voice}`}
               onChange={(e) => {
                 const [nextEng, nextVoice] = e.target.value.split('::');
+                const isFemaleNext =
+                  nextVoice === 'vi-VN-HoaiMyNeural' ||
+                  nextVoice === 'google-vi-gtx';
                 onUpdateConfig({
                   teacherLiveEngine:
                     nextEng === 'node_edge' ? 'node_edge' : 'google_stream',
                   teacherLiveVoice: nextVoice || 'google-vi-male-deep',
-                  teacherLivePitch:
-                    nextEng === 'node_edge'
-                      ? 0.96
-                      : nextVoice === 'google-vi-warm'
-                      ? 0.85
-                      : 0.8,
+                  teacherLivePitch: isFemaleNext
+                    ? 1.0
+                    : nextEng === 'node_edge'
+                    ? 0.96
+                    : nextVoice === 'google-vi-warm'
+                    ? 0.85
+                    : 0.8,
                 });
               }}
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10.5px] text-sky-200 font-semibold focus:outline-none"
             >
+              <option value="node_edge::vi-VN-HoaiMyNeural">
+                🤖 Giọng Nữ Node.js: Hoài My AI (Node Local)
+              </option>
+              <option value="node_edge::vi-VN-NamMinhNeural">
+                🤖 Giọng Nam Node.js: Nam Minh AI (Node Local)
+              </option>
               <option value="google_stream::google-vi-male-deep">
                 👨‍🏫 Giọng Thầy Trầm Ấm (Google Stream)
               </option>
               <option value="google_stream::google-vi-warm">
                 🎙️ Giọng Thầy Sáng Rõ (Google Warm)
               </option>
-              <option value="node_edge::vi-VN-NamMinhNeural">
-                🤖 Edge AI: Nam Minh (Node Local)
+              <option value="google_stream::google-vi-gtx">
+                👩‍🏫 Giọng Cô Thảo Chuẩn (Google Nữ)
               </option>
             </select>
 
@@ -393,7 +403,13 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
                 type="button"
                 onClick={() =>
                   onUpdateConfig({
-                    teacherLivePitch: engine === 'node_edge' ? 0.96 : 0.8,
+                    teacherLivePitch:
+                      voice === 'vi-VN-HoaiMyNeural' ||
+                      voice === 'google-vi-gtx'
+                        ? 1.0
+                        : engine === 'node_edge'
+                        ? 0.96
+                        : 0.8,
                   })
                 }
                 className="px-1 py-0.2 rounded bg-stone-800 hover:bg-stone-700 text-[8.5px] font-mono text-stone-300 cursor-pointer"

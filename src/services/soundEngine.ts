@@ -411,6 +411,15 @@ class TempleSoundService {
         clearTimeout(timer);
         const latencyMs = Math.max(1, Date.now() - startMs);
         if (!res.ok) return null;
+        const contentType = (
+          res.headers.get('content-type') || ''
+        ).toLowerCase();
+        if (
+          contentType.includes('text/html') ||
+          contentType.includes('application/json')
+        ) {
+          return null;
+        }
         const rawSource =
           res.headers.get('X-TTS-Source') ||
           (url.includes('/api/tts') ? 'google-gtx' : 'node-local');
@@ -533,15 +542,59 @@ class TempleSoundService {
     if (lang === 'en') {
       return `/api/tts?lang=en&voice=google-en-gtx&text=${encodeURIComponent(shortText)}`;
     }
-    const voice = eff.nodeVoice || 'google-vi-gtx';
+    const voice =
+      eff.ttsEngine === 'node_edge'
+        ? eff.nodeVoice || 'vi-VN-HoaiMyNeural'
+        : eff.nodeVoice || 'google-vi-gtx';
     if (eff.ttsEngine === 'google_stream') {
-      return `/api/tts?lang=vi&voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(shortText)}`;
+      const streamVoice =
+        voice === 'vi-VN-NamMinhNeural'
+          ? 'google-vi-male-deep'
+          : voice === 'vi-VN-HoaiMyNeural'
+          ? 'google-vi-gtx'
+          : voice;
+      return `/api/tts?lang=vi&voice=${encodeURIComponent(streamVoice)}&text=${encodeURIComponent(shortText)}`;
     }
     if (eff.ttsEngine === 'node_edge') {
-      const endpoint = eff.nodeTtsEndpoint || 'http://localhost:3000/tts';
-      return `${endpoint}?voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(shortText)}`;
+      const candidates = this.buildNodeTtsCandidateUrls(
+        shortText,
+        voice,
+        eff.nodeTtsEndpoint
+      );
+      return candidates[0] || null;
     }
     return null;
+  }
+
+  private buildNodeTtsCandidateUrls(
+    shortText: string,
+    voice: string,
+    rawEndpoint?: string
+  ): string[] {
+    const query = `voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(
+      shortText
+    )}`;
+    const trimmed = (rawEndpoint || '').trim();
+    const isDefaultOld3000 =
+      !trimmed || trimmed === 'http://localhost:3000/tts';
+    const urls: string[] = [];
+    const addUnique = (base: string) => {
+      const sep = base.includes('?') ? '&' : '?';
+      const full = `${base}${sep}${query}`;
+      if (!urls.includes(full)) urls.push(full);
+    };
+
+    if (isDefaultOld3000) {
+      // Ưu tiên cổng 8080 của Bridge Node.js trên máy cá nhân, kế tiếp là route /tts tích hợp sẵn trên Node.js server hiện tại
+      addUnique('http://localhost:8080/tts');
+      addUnique('/tts');
+    } else {
+      addUnique(trimmed);
+      if (!trimmed.startsWith('/')) {
+        addUnique('/tts');
+      }
+    }
+    return urls;
   }
 
   private prefetchNextQueueItems(config: GameConfig) {
@@ -2273,14 +2326,20 @@ class TempleSoundService {
       Math.min(2.0, Number(options?.volume ?? config.teacherLiveVolume ?? 1.0))
     );
     const isNativeMaleNeural = voice === 'vi-VN-NamMinhNeural';
+    const isNativeFemaleVoice =
+      voice === 'vi-VN-HoaiMyNeural' ||
+      voice === 'google-vi-gtx' ||
+      voice === 'google-vi-twob' ||
+      voice === 'google-vi-bright' ||
+      voice === 'google-vi-slow';
     const desiredPitch = Math.max(
       0.65,
       Math.min(
-        1.15,
+        1.25,
         Number(
           options?.pitch ??
             config.teacherLivePitch ??
-            (isNativeMaleNeural ? 0.96 : 0.8)
+            (isNativeFemaleVoice ? 1.0 : isNativeMaleNeural ? 0.96 : 0.8)
         )
       )
     );
@@ -2303,19 +2362,49 @@ class TempleSoundService {
       return true;
     }
 
-    const buildChunkUrl = (chunkText: string, forceGoogleStream = false): string => {
+    const buildGoogleFallbackUrl = (chunkText: string): string => {
       const shortChunk = chunkText.slice(0, 195);
-      if (!forceGoogleStream && engine === 'node_edge') {
-        const endpoint = config.nodeTtsEndpoint || 'http://localhost:3000/tts';
-        return `${endpoint}?voice=${encodeURIComponent(
-          voice
-        )}&text=${encodeURIComponent(shortChunk)}`;
-      }
       const streamVoice =
-        voice === 'vi-VN-NamMinhNeural' ? 'google-vi-male-deep' : voice;
+        voice === 'vi-VN-NamMinhNeural'
+          ? 'google-vi-male-deep'
+          : voice === 'vi-VN-HoaiMyNeural'
+          ? 'google-vi-gtx'
+          : voice;
       return `/api/tts?lang=vi&voice=${encodeURIComponent(
         streamVoice
       )}&text=${encodeURIComponent(shortChunk)}`;
+    };
+
+    const resolveChunkBlobUrl = async (
+      chunkText: string
+    ): Promise<{ blobUrl: string | null; usedFallbackStream: boolean }> => {
+      const shortChunk = chunkText.slice(0, 195);
+      if (engine === 'node_edge') {
+        const candidates = this.buildNodeTtsCandidateUrls(
+          shortChunk,
+          voice,
+          config.nodeTtsEndpoint
+        );
+        for (const candUrl of candidates) {
+          const found = await this.getOrFetchAudioBlobUrl(candUrl, 1600);
+          if (token !== this.teacherLiveTokenSeq) {
+            return { blobUrl: null, usedFallbackStream: false };
+          }
+          if (found) {
+            return { blobUrl: found, usedFallbackStream: false };
+          }
+        }
+        const fb = await this.getOrFetchAudioBlobUrl(
+          buildGoogleFallbackUrl(chunkText),
+          2200
+        );
+        return { blobUrl: fb, usedFallbackStream: true };
+      }
+      const direct = await this.getOrFetchAudioBlobUrl(
+        buildGoogleFallbackUrl(chunkText),
+        2200
+      );
+      return { blobUrl: direct, usedFallbackStream: false };
     };
 
     const playChunkAt = async (idx: number) => {
@@ -2329,31 +2418,30 @@ class TempleSoundService {
       const chunkText = chunks[idx];
       // Tải trước vế kế tiếp song song nếu câu dài
       if (idx + 1 < chunks.length) {
-        void this.getOrFetchAudioBlobUrl(buildChunkUrl(chunks[idx + 1]), 2500);
+        const nextShort = chunks[idx + 1].slice(0, 195);
+        const preloadUrl =
+          engine === 'node_edge'
+            ? this.buildNodeTtsCandidateUrls(
+                nextShort,
+                voice,
+                config.nodeTtsEndpoint
+              )[0]
+            : buildGoogleFallbackUrl(chunks[idx + 1]);
+        if (preloadUrl) {
+          void this.getOrFetchAudioBlobUrl(preloadUrl, 2500);
+        }
       }
 
-      let usedFallbackStream = false;
-      let blobUrl = await this.getOrFetchAudioBlobUrl(
-        buildChunkUrl(chunkText, false),
-        2200
-      );
+      const { blobUrl, usedFallbackStream } =
+        await resolveChunkBlobUrl(chunkText);
       if (token !== this.teacherLiveTokenSeq) return;
-
-      if (!blobUrl && engine === 'node_edge') {
-        usedFallbackStream = true;
-        blobUrl = await this.getOrFetchAudioBlobUrl(
-          buildChunkUrl(chunkText, true),
-          2200
-        );
-        if (token !== this.teacherLiveTokenSeq) return;
-      }
 
       if (!blobUrl) {
         void playChunkAt(idx + 1);
         return;
       }
 
-      // Ưu tiên giải mã bằng WebAudio API để tách rời hoàn toàn Tốc độ đọc (WSOLA), Độ trầm Nam (Pitch) & Khuếch đại Âm lượng (0% - 200%)
+      // Ưu tiên giải mã bằng WebAudio API để tách rời hoàn toàn Tốc độ đọc (WSOLA), Độ trầm/cao (Pitch) & Khuếch đại Âm lượng (0% - 200%)
       try {
         this.initCtx();
         if (this.ctx) {
@@ -2365,7 +2453,9 @@ class TempleSoundService {
           if (token !== this.teacherLiveTokenSeq) return;
 
           const effectivePitch =
-            isNativeMaleNeural && !usedFallbackStream
+            isNativeFemaleVoice && !usedFallbackStream
+              ? desiredPitch
+              : isNativeMaleNeural && !usedFallbackStream
               ? Math.max(0.75, Math.min(1.15, desiredPitch + 0.16))
               : desiredPitch;
           const liveRate = Math.max(
@@ -3187,11 +3277,13 @@ class TempleSoundService {
     onDone: () => void
   ) {
     const shortText = text.slice(0, 195);
-    const voice = config.nodeVoice || 'google-vi-gtx';
-    const endpoint = config.nodeTtsEndpoint || 'http://localhost:3000/tts';
-    const url = `${endpoint}?voice=${encodeURIComponent(
-      voice
-    )}&text=${encodeURIComponent(shortText)}`;
+    const voice = config.nodeVoice || 'vi-VN-HoaiMyNeural';
+    const endpoint = config.nodeTtsEndpoint || 'http://localhost:8080/tts';
+    const candidateUrls = this.buildNodeTtsCandidateUrls(
+      shortText,
+      voice,
+      endpoint
+    );
 
     let fallbackTriggered = false;
     let hasStartedPlaying = false;
@@ -3216,7 +3308,7 @@ class TempleSoundService {
       activeAudio = null;
     };
 
-    const fallbackOnce = (reasonText = 'Server Node.js (#3) phản hồi quá hạn (>2.2s) hoặc mất kết nối') => {
+    const fallbackOnce = (reasonText = 'Server Node.js (#3) phản hồi quá hạn (>2.6s) hoặc mất kết nối') => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
       fallbackTriggered = true;
       clearTimeout(lagTimeout);
@@ -3242,9 +3334,9 @@ class TempleSoundService {
 
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
-        fallbackOnce('Server Node.js (#3) trễ >2.2s ➔ Tự chuyển sang #2 Google Stream');
+        fallbackOnce('Server Node.js (#3) trễ >3.2s ➔ Tự chuyển sang #2 Google Stream');
       }
-    }, 2200);
+    }, 3200);
 
     // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
     const estimatedPlayMs = Math.max(
@@ -3267,17 +3359,27 @@ class TempleSoundService {
       }
     };
 
-    void this.getOrFetchAudioBlobUrl(url, 2000).then((blobUrl) => {
-      if (fallbackTriggered || token !== this.speechTokenSeq) {
-        clearNodeTimers();
-        return;
+    void (async () => {
+      let blobUrl: string | null = null;
+      let usedUrl = candidateUrls[0] || '';
+      for (const cand of candidateUrls) {
+        const found = await this.getOrFetchAudioBlobUrl(cand, 1600);
+        if (fallbackTriggered || token !== this.speechTokenSeq) {
+          clearNodeTimers();
+          return;
+        }
+        if (found) {
+          blobUrl = found;
+          usedUrl = cand;
+          break;
+        }
       }
       if (!blobUrl) {
         clearNodeTimers();
         fallbackOnce('Không kết nối được cổng Node.js (#3) ➔ Chuyển sang #2 Google Stream');
         return;
       }
-      const meta = this.audioBlobMetaCache.get(url);
+      const meta = this.audioBlobMetaCache.get(usedUrl);
       const audio = new Audio();
       audio.crossOrigin = 'anonymous';
       activeAudio = audio;
@@ -3342,12 +3444,12 @@ class TempleSoundService {
           activeServerLabel:
             meta?.source === 'ram-cache'
               ? 'Node.js (#3 • RAM Cache 0ms)'
-              : `Node.js Local (#3 • ${voice})`,
+              : `Node.js (#3 • ${voice})`,
           statusHeadline: 'Ổn định • Đang phát trực tiếp từ Server Node.js (#3)',
           statusDetail:
             meta?.source === 'ram-cache'
               ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
-              : `Kết nối tốt tới ${endpoint} (${meta?.latencyMs ?? 0}ms)`,
+              : `Kết nối tốt tới ${usedUrl.split('?')[0]} (${meta?.latencyMs ?? 0}ms)`,
           lastLatencyMs: meta?.latencyMs ?? 0,
           lastUpdatedAt: Date.now(),
         };
@@ -3371,7 +3473,7 @@ class TempleSoundService {
         clearNodeTimers();
         fallbackOnce('Không thể khởi chạy Audio từ Node.js (#3)');
       });
-    });
+    })();
   }
 
   private playViaGoogleStream(
@@ -3383,7 +3485,15 @@ class TempleSoundService {
     lang: 'vi' | 'en' = 'vi'
   ) {
     const shortText = text.slice(0, 195);
-    const voice = lang === 'en' ? 'google-en-gtx' : config.nodeVoice || 'google-vi-gtx';
+    const rawViVoice = config.nodeVoice || 'google-vi-gtx';
+    const voice =
+      lang === 'en'
+        ? 'google-en-gtx'
+        : rawViVoice === 'vi-VN-NamMinhNeural'
+        ? 'google-vi-male-deep'
+        : rawViVoice === 'vi-VN-HoaiMyNeural'
+        ? 'google-vi-gtx'
+        : rawViVoice;
     const proxyUrl = `/api/tts?lang=${lang}&voice=${encodeURIComponent(
       voice
     )}&text=${encodeURIComponent(shortText)}`;

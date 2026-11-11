@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
+import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -627,12 +628,148 @@ async function startServer() {
     throw lastErr || new Error('All Google TTS mirrors failed');
   }
 
-  // Built-in TTS Audio Proxy for OBS Browser Source compatibility (Multi-Mirror + Cache + Bilingual vi/en)
-  app.get('/api/tts', async (req: Request, res: Response) => {
+  async function synthesizeEdgeNeuralBuffer(
+    text: string,
+    edgeVoice: 'vi-VN-HoaiMyNeural' | 'vi-VN-NamMinhNeural'
+  ): Promise<Buffer> {
+    const cacheKey = `edge:${edgeVoice}:${text}`;
+    const cached = ttsBufferCache.get(cacheKey);
+    if (cached) {
+      ttsBufferCache.delete(cacheKey);
+      ttsBufferCache.set(cacheKey, cached);
+      return cached;
+    }
+
+    return new Promise<Buffer>((resolve, reject) => {
+      let settled = false;
+      let ttsInstance: MsEdgeTTS | null = null;
+      const doneErr = (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(guardTimer);
+        try {
+          ttsInstance?.close();
+        } catch {
+          // Ignore close error
+        }
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      const guardTimer = setTimeout(() => {
+        doneErr(new Error('Edge Neural TTS timeout'));
+      }, 1900);
+
+      (async () => {
+        try {
+          ttsInstance = new MsEdgeTTS({
+            connectionTimeoutMs: 1600,
+            synthesisTimeoutMs: 1800,
+          });
+          await ttsInstance.setMetadata(
+            edgeVoice,
+            OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3
+          );
+          const streamObj = ttsInstance.toStream(text);
+          const audioStream = streamObj?.audioStream;
+          if (!audioStream) {
+            doneErr(new Error('Missing Edge audioStream'));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          audioStream.on('data', (chunk: Buffer | Uint8Array) => {
+            chunks.push(Buffer.from(chunk));
+          });
+          audioStream.on('error', (err: unknown) => {
+            doneErr(err);
+          });
+          audioStream.on('end', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(guardTimer);
+            try {
+              ttsInstance?.close();
+            } catch {
+              // Ignore
+            }
+            const fullBuf = Buffer.concat(chunks);
+            if (fullBuf.length < 128) {
+              reject(new Error('Empty Edge TTS buffer'));
+              return;
+            }
+            if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
+              const oldestKey = ttsBufferCache.keys().next().value;
+              if (oldestKey) ttsBufferCache.delete(oldestKey);
+            }
+            ttsBufferCache.set(cacheKey, fullBuf);
+            resolve(fullBuf);
+          });
+        } catch (err) {
+          doneErr(err);
+        }
+      })();
+    });
+  }
+
+  const handleTtsHttpRequest = async (req: Request, res: Response) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
     try {
-      const text = String(req.query.text || 'Nam mô A Di Đà Phật').trim().slice(0, 200);
+      const text = String(req.query.text || 'Chào cả lớp')
+        .trim()
+        .slice(0, 200);
       const voiceVariant = String(req.query.voice || 'google-vi-gtx').trim();
       const lang = String(req.query.lang || 'vi').trim().toLowerCase();
+
+      const isEdgeNeuralRequest =
+        lang !== 'en' &&
+        (voiceVariant.includes('HoaiMy') ||
+          voiceVariant.includes('NamMinh') ||
+          voiceVariant.startsWith('vi-VN-'));
+
+      if (isEdgeNeuralRequest) {
+        const edgeVoice: 'vi-VN-HoaiMyNeural' | 'vi-VN-NamMinhNeural' =
+          voiceVariant.includes('NamMinh')
+            ? 'vi-VN-NamMinhNeural'
+            : 'vi-VN-HoaiMyNeural';
+        const hadCached = ttsBufferCache.has(`edge:${edgeVoice}:${text}`);
+        try {
+          const edgeBuf = await synthesizeEdgeNeuralBuffer(text, edgeVoice);
+          res.setHeader('Content-Type', 'audio/mpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          res.setHeader(
+            'X-TTS-Source',
+            hadCached ? 'ram-cache' : `msedge-${edgeVoice}`
+          );
+          res.setHeader('X-TTS-Switched', '0');
+          res.setHeader(
+            'Access-Control-Expose-Headers',
+            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
+          );
+          res.send(edgeBuf);
+          return;
+        } catch {
+          // Nếu môi trường Cloud chặn WSS của Bing -> tự động dự phòng mượt sang giọng Nữ/Nam tương ứng của Google TTS
+          const fallbackGoogleVoice =
+            edgeVoice === 'vi-VN-NamMinhNeural'
+              ? 'google-vi-male-deep'
+              : 'google-vi-gtx';
+          const fallbackRes = await fetchGoogleTtsBuffer(
+            text,
+            fallbackGoogleVoice,
+            'vi'
+          );
+          res.setHeader('Content-Type', 'audio/mpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          res.setHeader('X-TTS-Source', `node-${fallbackRes.source}`);
+          res.setHeader('X-TTS-Switched', '0');
+          res.setHeader(
+            'Access-Control-Expose-Headers',
+            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
+          );
+          res.send(fallbackRes.buf);
+          return;
+        }
+      }
+
       const result = await fetchGoogleTtsBuffer(text, voiceVariant, lang);
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -649,7 +786,11 @@ async function startServer() {
     } catch {
       res.status(502).end();
     }
-  });
+  };
+
+  // Built-in Node.js TTS routes (/api/tts & /tts) mounted before Vite SPA middleware
+  app.get('/api/tts', handleTtsHttpRequest);
+  app.get('/tts', handleTtsHttpRequest);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

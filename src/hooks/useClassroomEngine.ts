@@ -1058,12 +1058,10 @@ export function useClassroomEngine() {
           const isOldScoreRecordText =
             !savedRecordText ||
             savedRecordText.includes('Kỷ lục hôm nay với [ĐiểmKỷLục] điểm');
-          const isSavedMaleMainVoice =
-            parsed.config.nodeVoice === 'google-vi-male-deep' ||
-            parsed.config.nodeVoice === 'vi-VN-NamMinhNeural';
-          const isSavedMaleHostVoice =
-            parsed.config.hostNodeVoice === 'google-vi-male-deep' ||
-            parsed.config.hostNodeVoice === 'vi-VN-NamMinhNeural';
+          const effectiveMainEngine =
+            parsed.config.ttsEngine || DEFAULT_CONFIG.ttsEngine;
+          const effectiveHostEngine =
+            parsed.config.hostTtsEngine || DEFAULT_CONFIG.hostTtsEngine;
           const mergedCfg: GameConfig = {
             ...DEFAULT_CONFIG,
             ...parsed.config,
@@ -1071,18 +1069,26 @@ export function useClassroomEngine() {
               ? Boolean(parsed.config.studentLevelExpEnabled)
               : true,
             ieltsRankBadgeSchemaV1: true,
-            nodeVoice: isSavedMaleMainVoice
-              ? 'google-vi-gtx'
-              : parsed.config.nodeVoice || DEFAULT_CONFIG.nodeVoice,
-            ttsPitch: isSavedMaleMainVoice
-              ? 1.0
-              : parsed.config.ttsPitch ?? DEFAULT_CONFIG.ttsPitch,
-            hostNodeVoice: isSavedMaleHostVoice
-              ? 'google-vi-gtx'
-              : parsed.config.hostNodeVoice || DEFAULT_CONFIG.hostNodeVoice,
-            hostTtsPitch: isSavedMaleHostVoice
-              ? 1.0
-              : parsed.config.hostTtsPitch ?? DEFAULT_CONFIG.hostTtsPitch,
+            nodeTtsEndpoint:
+              !parsed.config.nodeTtsEndpoint ||
+              parsed.config.nodeTtsEndpoint === 'http://localhost:3000/tts'
+                ? DEFAULT_CONFIG.nodeTtsEndpoint
+                : parsed.config.nodeTtsEndpoint,
+            nodeVoice:
+              effectiveMainEngine === 'node_edge' &&
+              (!parsed.config.nodeVoice ||
+                parsed.config.nodeVoice === 'google-vi-gtx')
+                ? 'vi-VN-HoaiMyNeural'
+                : parsed.config.nodeVoice || DEFAULT_CONFIG.nodeVoice,
+            ttsPitch: parsed.config.ttsPitch ?? DEFAULT_CONFIG.ttsPitch,
+            hostNodeVoice:
+              effectiveHostEngine === 'node_edge' &&
+              (!parsed.config.hostNodeVoice ||
+                parsed.config.hostNodeVoice === 'google-vi-gtx')
+                ? 'vi-VN-HoaiMyNeural'
+                : parsed.config.hostNodeVoice || DEFAULT_CONFIG.hostNodeVoice,
+            hostTtsPitch:
+              parsed.config.hostTtsPitch ?? DEFAULT_CONFIG.hostTtsPitch,
             quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
             quizDecks: mergedDecks,
             activeQuizDeckId:

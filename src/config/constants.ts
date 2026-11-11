@@ -822,8 +822,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   ttsEnabled: true,
   ttsVipOnly: false,
   ttsEngine: 'google_stream',
-  nodeVoice: 'google-vi-gtx',
-  nodeTtsEndpoint: 'http://localhost:3000/tts',
+  nodeVoice: 'vi-VN-HoaiMyNeural',
+  nodeTtsEndpoint: 'http://localhost:8080/tts',
   selectedSystemVoiceURI: '',
   ttsRate: 1.05,
   englishTtsRate: 0.95,
@@ -1655,23 +1655,52 @@ app.get('/tts', async (req, res) => {
     }
 
     const edgeVoice = voice.includes('NamMinh') ? 'vi-VN-NamMinhNeural' : 'vi-VN-HoaiMyNeural';
-    const tts = new MsEdgeTTS();
-    await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_Mono_MP3);
-    res.setHeader('Content-Type', 'audio/mpeg');
-    const readable = tts.toStream(text);
-    const chunks = [];
-    readable.on('data', chunk => chunks.push(Buffer.from(chunk)));
-    readable.on('end', () => {
-      const fullBuf = Buffer.concat(chunks);
-      if (fullBuf.length > 128) {
+    try {
+      const tts = new MsEdgeTTS();
+      const mp3Fmt = OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3 || OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_Mono_MP3 || 'audio-24khz-48kbitrate-mono-mp3';
+      await tts.setMetadata(edgeVoice, mp3Fmt);
+      const streamRes = tts.toStream(text);
+      const readable = streamRes && streamRes.audioStream ? streamRes.audioStream : streamRes;
+      const fullBuf = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const timer = setTimeout(() => {
+          try { tts.close && tts.close(); } catch (e) {}
+          reject(new Error('Edge TTS timeout'));
+        }, 4000);
+        readable.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        readable.on('error', err => {
+          clearTimeout(timer);
+          try { tts.close && tts.close(); } catch (e) {}
+          reject(err);
+        });
+        readable.on('end', () => {
+          clearTimeout(timer);
+          try { tts.close && tts.close(); } catch (e) {}
+          resolve(Buffer.concat(chunks));
+        });
+      });
+      if (fullBuf && fullBuf.length > 128) {
         if (ttsCache.size >= MAX_TTS_CACHE) {
           const firstKey = ttsCache.keys().next().value;
           if (firstKey) ttsCache.delete(firstKey);
         }
         ttsCache.set(cacheKey, fullBuf);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-TTS-Source', 'msedge-' + edgeVoice);
+        res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
+        return res.send(fullBuf);
       }
-    });
-    readable.pipe(res);
+    } catch (edgeErr) {
+      // Dự phòng sang Google Mirror nếu mạng tạm nghẽn kết nối Edge AI
+      const fallbackBuf = await fetchGoogleMirrorBuffer(text, 'google-vi-gtx');
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('X-TTS-Source', 'node-google-fallback');
+      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
+      return res.send(fallbackBuf);
+    }
+    res.status(500).end();
   } catch (err) {
     res.status(500).end();
   }

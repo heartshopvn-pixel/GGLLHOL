@@ -3216,9 +3216,17 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
           <select
             value={config.ttsEngine === 'monk_zen' ? 'web_speech' : config.ttsEngine}
-            onChange={(e) =>
-              onUpdateConfig({ ttsEngine: e.target.value as TTSEngineType })
-            }
+            onChange={(e) => {
+              const nextEngine = e.target.value as TTSEngineType;
+              onUpdateConfig({
+                ttsEngine: nextEngine,
+                ...(nextEngine === 'node_edge' &&
+                config.nodeVoice !== 'vi-VN-HoaiMyNeural' &&
+                config.nodeVoice !== 'vi-VN-NamMinhNeural'
+                  ? { nodeVoice: 'vi-VN-HoaiMyNeural', ttsPitch: 1.0 }
+                  : {}),
+              });
+            }}
             className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-amber-500/40 text-xs text-stone-100 font-semibold focus:outline-none focus:border-amber-400"
           >
             <option value="web_speech">
@@ -3228,7 +3236,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               2. [Ổn định #2 - Chuẩn OBS/TLS] Google Cloud Stream Đa Máy Chủ (GTX + Cache)
             </option>
             <option value="node_edge">
-              3. [Ổn định #3 - Local Node] Node.js TTS (Google GTX / Edge AI HoaiMy, NamMinh)
+              3. [Ổn định #3 - Node.js] Giọng Nữ Node.js Hoài My / Nam Minh (Edge AI + GTX)
             </option>
           </select>
         </div>
@@ -3237,7 +3245,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
         {config.ttsEngine === 'google_stream' && (
           <div className="space-y-1">
             <div className="text-[10px] text-stone-400 font-medium">
-              Chọn máy chủ & màu giọng Google Stream cho Học sinh / Sự kiện:
+              Chọn máy chủ & màu giọng cho Học sinh / Sự kiện:
             </div>
             <select
               value={
@@ -3245,7 +3253,21 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                   ? config.nodeVoice
                   : 'google-vi-gtx'
               }
-              onChange={(e) => onUpdateConfig({ nodeVoice: e.target.value })}
+              onChange={(e) => {
+                const picked = e.target.value;
+                if (
+                  picked === 'vi-VN-HoaiMyNeural' ||
+                  picked === 'vi-VN-NamMinhNeural'
+                ) {
+                  onUpdateConfig({
+                    ttsEngine: 'node_edge',
+                    nodeVoice: picked,
+                    ttsPitch: 1.0,
+                  });
+                } else {
+                  onUpdateConfig({ nodeVoice: picked });
+                }
+              }}
               className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-200 font-medium"
             >
               <option value="google-vi-gtx">
@@ -3266,6 +3288,12 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               <option value="google-vi-male-deep">
                 6. Google Nam Trầm — Giọng Trầm Sâu
               </option>
+              <option value="vi-VN-HoaiMyNeural">
+                7. 🤖 Giọng Nữ Node.js — Edge AI Hoài My Neural (Tự bật Node.js)
+              </option>
+              <option value="vi-VN-NamMinhNeural">
+                8. 🤖 Giọng Nam Node.js — Edge AI Nam Minh Neural (Tự bật Node.js)
+              </option>
             </select>
           </div>
         )}
@@ -3274,37 +3302,37 @@ export const TabAudio: React.FC<TabAudioProps> = ({
         {config.ttsEngine === 'node_edge' && (
           <div className="space-y-1.5">
             <div className="text-[10px] text-stone-400 font-medium">
-              Chọn giọng Node.js cho Học sinh / Sự kiện:
+              Chọn giọng Node.js cho Cô Thảo / Học sinh / Sự kiện:
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               <select
-                value={config.nodeVoice}
+                value={config.nodeVoice || 'vi-VN-HoaiMyNeural'}
                 onChange={(e) => onUpdateConfig({ nodeVoice: e.target.value })}
                 className="px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-200 font-medium"
               >
-                <option value="google-vi-gtx">
-                  1. Google Cloud GTX (Ổn định #1 - Nữ chuẩn)
-                </option>
-                <option value="google-vi-twob">
-                  2. Google Translate TW-OB (Ổn định #2 - Nữ dịu)
-                </option>
-                <option value="google-vi-bright">
-                  3. Google Nữ Cao Trong Trẻo (Sáng tiếng)
-                </option>
-                <option value="google-vi-slow">
-                  4. Google Nữ Trang Nghiêm (Nhịp chậm)
-                </option>
-                <option value="google-vi-warm">
-                  5. Google Trầm Ấm (Dày tiếng)
-                </option>
-                <option value="google-vi-male-deep">
-                  6. Google Nam Trầm (Giọng trầm sâu)
-                </option>
                 <option value="vi-VN-HoaiMyNeural">
-                  7. Edge AI - Hoài My Neural (Nữ truyền cảm)
+                  1. 🤖 Giọng Nữ Node.js — Edge AI Hoài My Neural (Nữ truyền cảm)
                 </option>
                 <option value="vi-VN-NamMinhNeural">
-                  8. Edge AI - Nam Minh Neural (Nam trầm ấm)
+                  2. 🤖 Giọng Nam Node.js — Edge AI Nam Minh Neural (Nam trầm ấm)
+                </option>
+                <option value="google-vi-gtx">
+                  3. Node.js Google GTX (Ổn định - Nữ chuẩn)
+                </option>
+                <option value="google-vi-twob">
+                  4. Node.js Google TW-OB (Nữ dịu)
+                </option>
+                <option value="google-vi-bright">
+                  5. Node.js Nữ Cao Trong Trẻo (Sáng tiếng)
+                </option>
+                <option value="google-vi-slow">
+                  6. Node.js Nữ Trang Nghiêm (Nhịp chậm)
+                </option>
+                <option value="google-vi-warm">
+                  7. Node.js Trầm Ấm (Dày tiếng)
+                </option>
+                <option value="google-vi-male-deep">
+                  8. Node.js Nam Trầm (Giọng trầm sâu)
                 </option>
               </select>
               <input
@@ -3313,7 +3341,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 onChange={(e) =>
                   onUpdateConfig({ nodeTtsEndpoint: e.target.value })
                 }
-                placeholder="http://localhost:3000/tts"
+                placeholder="http://localhost:8080/tts"
                 className="px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-300 font-mono"
               />
             </div>
@@ -3361,7 +3389,27 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           <div className="text-[10px] text-stone-400 font-medium">
             Chọn nhanh Tông Giọng mẫu:
           </div>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  ttsEngine: 'node_edge',
+                  nodeVoice: 'vi-VN-HoaiMyNeural',
+                  ttsRate: 1.02,
+                  ttsPitch: 1.0,
+                  ttsReverb: 0,
+                })
+              }
+              className={`px-1.5 py-1 rounded border text-[10px] font-semibold cursor-pointer truncate transition ${
+                config.ttsEngine === 'node_edge' &&
+                config.nodeVoice === 'vi-VN-HoaiMyNeural'
+                  ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold'
+                  : 'bg-stone-950 hover:bg-stone-800 border-amber-500/40 text-amber-200'
+              }`}
+            >
+              🤖 Nữ Node.js (Hoài My)
+            </button>
             <button
               type="button"
               onClick={() =>

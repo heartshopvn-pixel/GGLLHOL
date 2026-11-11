@@ -1,6 +1,0 @@
-{
-  "summary":  "Phương án triển khai chi tiết 5 hạng mục nâng cấp Lớp Học 12A1 Live:\n1. Chặn NPC giả lập tấn công Zombie nhận hiệu ứng Khiên bảo vệ.\n2. Bổ sung thanh chỉnh vị trí ngang/dọc (X, Y) cho Con Heo trên bàn trong Dev.\n3. Đổi phần thưởng tuyên dương Top 1, 2, 3 cuối vòng Kiểm tra 15 phút từ Trà sữa sang Cúp Vàng (+3 / +2 / +1 cúp) kèm hiệu ứng phóng Cúp Vàng, Floating Text số cúp + icon cúp và lời thoại Cô Thảo mới.\n4. Nâng cấp Bảng Kỷ lục cúp vàng (tính cúp trong phiên/ngày, reset thủ công) và gắn thẻ số Cúp Vàng sở hữu nhỏ dưới thẻ tên mọi học sinh (hiển thị cả khi 0 cúp, lưu trữ bền vững đa tầng).\n5. Bổ sung chỉnh Chiều cao thẻ tên trong Dev không lề trong, giữ nguyên kích thước Avatar và cỡ chữ tên.",
-  "updatedAt":  "2026-11-11T07:42:41.459710704Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
