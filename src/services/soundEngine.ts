@@ -66,6 +66,21 @@ export type EventTtsQueueListener = (snapshot: EventTtsQueueSnapshot) => void;
 
 export type DharmaArticleChangeListener = (nextArticleId: string) => void;
 
+export interface TeacherLiveVoiceStatus {
+  active: boolean;
+  currentText: string;
+}
+
+export type TeacherLiveStatusListener = (status: TeacherLiveVoiceStatus) => void;
+
+export interface TeacherLiveVoiceOptions {
+  volume?: number;
+  rate?: number;
+  pitch?: number;
+  engine?: 'google_stream' | 'node_edge';
+  voice?: string;
+}
+
 /**
  * Làm sạch comment trước khi đưa vào TTS:
  * 1. Loại bỏ toàn bộ icon / emoji / ký tự biểu tượng để tránh TTS đọc tên icon dài dòng gây trễ camera.
@@ -171,6 +186,14 @@ class TempleSoundService {
   private statusListeners = new Set<TTSStatusListener>();
   private queueListeners = new Set<EventTtsQueueListener>();
   private dharmaChangeListeners = new Set<DharmaArticleChangeListener>();
+  private teacherLiveListeners = new Set<TeacherLiveStatusListener>();
+  private teacherLiveTokenSeq = 0;
+  private teacherLiveActive = false;
+  private teacherLiveCurrentText = '';
+  private teacherLiveSourceNode: AudioBufferSourceNode | null = null;
+  private teacherLiveGainNode: GainNode | null = null;
+  private teacherLiveFallbackAudio: HTMLAudioElement | null = null;
+  private teacherLiveSimTimer: ReturnType<typeof setTimeout> | null = null;
   private onStartEventItemCallback: ((item: TTSQueueItem) => void) | null = null;
   private onFinishEventItemCallback: ((item: TTSQueueItem) => void) | null = null;
 
@@ -552,6 +575,7 @@ class TempleSoundService {
       this.isSpeaking = false;
       this.isSpeakingDharma = false;
       this.currentEventText = '';
+      this.stopTeacherLiveAudioNodesOnly();
       for (const item of pendingItemsToNotify) {
         this.notifyItemFinished(item);
       }
@@ -615,6 +639,7 @@ class TempleSoundService {
           // Ignore
         }
       }
+      this.stopTeacherLiveIndependent();
       // Nếu đang đọc dở câu khi bấm Tắt tiếng tab (Cách 1), chuyển ngay sang bộ đếm giả lập để luồng tiết học không bị kẹt
       if (this.isSpeaking && this.activeFinishCallback && !this.mutedSimTimer) {
         const pendingFinish = this.activeFinishCallback;
@@ -762,6 +787,32 @@ class TempleSoundService {
         );
       } catch {
         // Ignore live audio update error
+      }
+    }
+
+    // Cập nhật tức thì âm lượng Giọng Thầy Giáo độc lập nếu đang phát song song
+    if (this.teacherLiveGainNode && this.ctx) {
+      try {
+        const nextTeacherVol = Math.max(
+          0,
+          Math.min(2.0, Number(config.teacherLiveVolume ?? 1.0))
+        );
+        this.teacherLiveGainNode.gain.setValueAtTime(
+          nextTeacherVol,
+          this.ctx.currentTime
+        );
+      } catch {
+        // Ignore
+      }
+    }
+    if (this.teacherLiveFallbackAudio) {
+      try {
+        this.teacherLiveFallbackAudio.volume = Math.max(
+          0,
+          Math.min(1.0, Number(config.teacherLiveVolume ?? 1.0))
+        );
+      } catch {
+        // Ignore
       }
     }
 
@@ -1983,10 +2034,415 @@ class TempleSoundService {
         // Ignore
       }
     }
+    this.stopTeacherLiveIndependent();
     this.emitStatus('Đã ngắt đọc', false, '');
     this.emitEventQueue();
     if (oldActive) this.notifyItemFinished(oldActive);
     oldQueue.forEach((it) => this.notifyItemFinished(it));
+  }
+
+  public subscribeTeacherLiveStatus(fn: TeacherLiveStatusListener) {
+    this.teacherLiveListeners.add(fn);
+    fn(this.getTeacherLiveStatus());
+    return () => this.teacherLiveListeners.delete(fn);
+  }
+
+  public getTeacherLiveStatus(): TeacherLiveVoiceStatus {
+    return {
+      active: this.teacherLiveActive,
+      currentText: this.teacherLiveActive ? this.teacherLiveCurrentText : '',
+    };
+  }
+
+  private emitTeacherLiveStatus(active: boolean, currentText = '') {
+    this.teacherLiveActive = active;
+    this.teacherLiveCurrentText = active ? currentText : '';
+    const snap = this.getTeacherLiveStatus();
+    this.teacherLiveListeners.forEach((fn) => fn(snap));
+  }
+
+  private stopTeacherLiveAudioNodesOnly() {
+    if (this.teacherLiveSimTimer) {
+      clearTimeout(this.teacherLiveSimTimer);
+      this.teacherLiveSimTimer = null;
+    }
+    if (this.teacherLiveSourceNode) {
+      try {
+        this.teacherLiveSourceNode.onended = null;
+        this.teacherLiveSourceNode.stop();
+        this.teacherLiveSourceNode.disconnect();
+      } catch {
+        // Ignore
+      }
+      this.teacherLiveSourceNode = null;
+    }
+    if (this.teacherLiveGainNode) {
+      try {
+        this.teacherLiveGainNode.disconnect();
+      } catch {
+        // Ignore
+      }
+      this.teacherLiveGainNode = null;
+    }
+    if (this.teacherLiveFallbackAudio) {
+      try {
+        this.teacherLiveFallbackAudio.onended = null;
+        this.teacherLiveFallbackAudio.onerror = null;
+        this.teacherLiveFallbackAudio.pause();
+        this.teacherLiveFallbackAudio.removeAttribute('src');
+      } catch {
+        // Ignore
+      }
+      this.teacherLiveFallbackAudio = null;
+    }
+  }
+
+  /**
+   * Ngắt riêng giọng đọc độc lập của Thầy Giáo (tuyệt đối không chạm tới hàng chờ TTS hay giọng Cô Thảo)
+   */
+  public stopTeacherLiveIndependent() {
+    this.teacherLiveTokenSeq++;
+    this.stopTeacherLiveAudioNodesOnly();
+    this.emitTeacherLiveStatus(false, '');
+  }
+
+  /**
+   * WSOLA (Waveform Similarity Overlap-Add) Time-Stretch trên kênh đơn (mono):
+   * Giúp thay đổi tốc độ đọc (tempo = desiredRate / pitchFactor) hoàn toàn độc lập với cao độ trầm (pitchFactor)
+   * để Giọng Thầy Giáo luôn giữ nguyên màu giọng Nam Trầm ấm áp ngay cả khi kéo tốc độ lên 1.5x - 2.0x hoặc hạ xuống 0.5x!
+   */
+  private wsolaTimeStretchAudioBuffer(
+    ctx: AudioContext,
+    srcBuffer: AudioBuffer,
+    tempo: number
+  ): AudioBuffer {
+    const safeTempo = Math.max(0.35, Math.min(3.0, tempo));
+    if (Math.abs(safeTempo - 1.0) < 0.03 || srcBuffer.length < 2048) {
+      return srcBuffer;
+    }
+
+    const sr = srcBuffer.sampleRate;
+    const inLen = srcBuffer.length;
+    const input = new Float32Array(inLen);
+    if (srcBuffer.numberOfChannels === 1) {
+      input.set(srcBuffer.getChannelData(0));
+    } else {
+      const ch0 = srcBuffer.getChannelData(0);
+      const ch1 = srcBuffer.getChannelData(1);
+      for (let i = 0; i < inLen; i++) {
+        input[i] = (ch0[i] + ch1[i]) * 0.5;
+      }
+    }
+
+    let winSize = Math.round(sr * 0.03);
+    if (winSize % 2 !== 0) winSize += 1;
+    const hopOut = winSize >> 1; // 50% overlap -> tổng hàm cửa sổ Hann luôn bằng 1.0 tuyệt đối
+    const hopInNominal = hopOut * safeTempo;
+    const searchRadius = Math.round(sr * 0.009);
+
+    const outLen = Math.max(winSize + hopOut, Math.ceil(inLen / safeTempo) + winSize);
+    const output = new Float32Array(outLen);
+    const hann = new Float32Array(winSize);
+    const twoPiOverW = (2 * Math.PI) / winSize;
+    for (let i = 0; i < winSize; i++) {
+      hann[i] = 0.5 * (1 - Math.cos(twoPiOverW * i));
+    }
+
+    // Frame đầu tiên
+    for (let i = 0; i < winSize && i < inLen; i++) {
+      output[i] += input[i] * hann[i];
+    }
+
+    let prevInPos = 0;
+    let outPos = hopOut;
+    let frameIdx = 1;
+
+    while (outPos + winSize < outLen) {
+      const targetInPos = Math.round(frameIdx * hopInNominal);
+      if (targetInPos + winSize >= inLen) break;
+
+      const naturalInPos = prevInPos + hopOut;
+      let bestPos = targetInPos;
+
+      if (naturalInPos + hopOut < inLen) {
+        const minCand = Math.max(0, targetInPos - searchRadius);
+        const maxCand = Math.min(inLen - winSize - 1, targetInPos + searchRadius);
+        let bestScore = -1e30;
+        const stepCand = sr >= 40000 ? 4 : 2;
+        const stepCorr = sr >= 40000 ? 3 : 2;
+
+        for (let cand = minCand; cand <= maxCand; cand += stepCand) {
+          let dot = 0;
+          let energy = 1e-7;
+          for (let k = 0; k < hopOut; k += stepCorr) {
+            const a = input[naturalInPos + k];
+            const b = input[cand + k];
+            dot += a * b;
+            energy += b * b;
+          }
+          const score = dot / Math.sqrt(energy);
+          if (score > bestScore) {
+            bestScore = score;
+            bestPos = cand;
+          }
+        }
+      }
+
+      for (let i = 0; i < winSize; i++) {
+        output[outPos + i] += input[bestPos + i] * hann[i];
+      }
+
+      prevInPos = bestPos;
+      outPos += hopOut;
+      frameIdx++;
+    }
+
+    const validOutLen = Math.max(1, Math.min(outLen, outPos + hopOut));
+    const stretchedBuffer = ctx.createBuffer(1, validOutLen, sr);
+    stretchedBuffer.getChannelData(0).set(output.subarray(0, validOutLen));
+    return stretchedBuffer;
+  }
+
+  /**
+   * Phát Live Text-to-Voice (Giọng Thầy Giáo) trên kênh âm thanh ĐỘC LẬP 100%:
+   * - Chạy song song cùng lúc với tiếng Cô Thảo giảng bài, học sinh trả lời, nhạc nền và mọi SFX khác.
+   * - KHÔNG xếp vào hàng chờ giọng nói (ttsQueue), KHÔNG làm trễ luồng tiết học.
+   * - Hỗ trợ chỉnh đầy đủ Âm lượng (0% - 200%), Tốc độ đọc (0.5x - 2.0x) và Độ trầm giọng Thầy (Pitch).
+   */
+  public speakTeacherLiveIndependent(
+    rawText: string,
+    config: GameConfig,
+    options?: TeacherLiveVoiceOptions
+  ): boolean {
+    this.latestConfig = config;
+    const cleaned = (rawText || '')
+      .replace(
+        /[\p{Extended_Pictographic}\p{Emoji_Presentation}\u2600-\u27BF\uFE00-\uFE0F\u200D]/gu,
+        ' '
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return false;
+
+    const chunks = this.splitLongLessonText(cleaned, 175);
+    if (chunks.length === 0) return false;
+
+    // Nếu Thầy đang nói câu cũ thì ngắt riêng câu cũ của Thầy để đọc ngay câu mới (không đụng tới Cô Thảo)
+    const token = ++this.teacherLiveTokenSeq;
+    this.stopTeacherLiveAudioNodesOnly();
+
+    const engine = options?.engine || config.teacherLiveEngine || 'google_stream';
+    const voice =
+      options?.voice ||
+      config.teacherLiveVoice ||
+      (engine === 'node_edge' ? 'vi-VN-NamMinhNeural' : 'google-vi-male-deep');
+    const desiredRate = Math.max(
+      0.5,
+      Math.min(2.0, Number(options?.rate ?? config.teacherLiveRate ?? 1.0))
+    );
+    const desiredVolume = Math.max(
+      0,
+      Math.min(2.0, Number(options?.volume ?? config.teacherLiveVolume ?? 1.0))
+    );
+    const isNativeMaleNeural = voice === 'vi-VN-NamMinhNeural';
+    const desiredPitch = Math.max(
+      0.65,
+      Math.min(
+        1.15,
+        Number(
+          options?.pitch ??
+            config.teacherLivePitch ??
+            (isNativeMaleNeural ? 0.96 : 0.8)
+        )
+      )
+    );
+
+    this.emitTeacherLiveStatus(true, cleaned);
+
+    // Nếu tab hiện tại đang tắt tiếng cục bộ hoặc đang nhường âm thanh cho màn hình OBS Live (?obs=1),
+    // chỉ hiển thị trạng thái đang phát trên bảng điều khiển mà không phát trùng âm thanh cục bộ
+    if (this.isTabMuted() || desiredVolume <= 0.001) {
+      const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+      const simMs = Math.max(
+        1200,
+        Math.min(15000, Math.round((wordCount * 320) / Math.max(0.5, desiredRate)))
+      );
+      this.teacherLiveSimTimer = setTimeout(() => {
+        if (token !== this.teacherLiveTokenSeq) return;
+        this.teacherLiveSimTimer = null;
+        this.emitTeacherLiveStatus(false, '');
+      }, simMs);
+      return true;
+    }
+
+    const buildChunkUrl = (chunkText: string, forceGoogleStream = false): string => {
+      const shortChunk = chunkText.slice(0, 195);
+      if (!forceGoogleStream && engine === 'node_edge') {
+        const endpoint = config.nodeTtsEndpoint || 'http://localhost:3000/tts';
+        return `${endpoint}?voice=${encodeURIComponent(
+          voice
+        )}&text=${encodeURIComponent(shortChunk)}`;
+      }
+      const streamVoice =
+        voice === 'vi-VN-NamMinhNeural' ? 'google-vi-male-deep' : voice;
+      return `/api/tts?lang=vi&voice=${encodeURIComponent(
+        streamVoice
+      )}&text=${encodeURIComponent(shortChunk)}`;
+    };
+
+    const playChunkAt = async (idx: number) => {
+      if (token !== this.teacherLiveTokenSeq) return;
+      if (idx >= chunks.length) {
+        this.stopTeacherLiveAudioNodesOnly();
+        this.emitTeacherLiveStatus(false, '');
+        return;
+      }
+
+      const chunkText = chunks[idx];
+      // Tải trước vế kế tiếp song song nếu câu dài
+      if (idx + 1 < chunks.length) {
+        void this.getOrFetchAudioBlobUrl(buildChunkUrl(chunks[idx + 1]), 2500);
+      }
+
+      let usedFallbackStream = false;
+      let blobUrl = await this.getOrFetchAudioBlobUrl(
+        buildChunkUrl(chunkText, false),
+        2200
+      );
+      if (token !== this.teacherLiveTokenSeq) return;
+
+      if (!blobUrl && engine === 'node_edge') {
+        usedFallbackStream = true;
+        blobUrl = await this.getOrFetchAudioBlobUrl(
+          buildChunkUrl(chunkText, true),
+          2200
+        );
+        if (token !== this.teacherLiveTokenSeq) return;
+      }
+
+      if (!blobUrl) {
+        void playChunkAt(idx + 1);
+        return;
+      }
+
+      // Ưu tiên giải mã bằng WebAudio API để tách rời hoàn toàn Tốc độ đọc (WSOLA), Độ trầm Nam (Pitch) & Khuếch đại Âm lượng (0% - 200%)
+      try {
+        this.initCtx();
+        if (this.ctx) {
+          const res = await fetch(blobUrl);
+          const arrBuf = await res.arrayBuffer();
+          if (token !== this.teacherLiveTokenSeq) return;
+
+          const decoded = await this.ctx.decodeAudioData(arrBuf.slice(0));
+          if (token !== this.teacherLiveTokenSeq) return;
+
+          const effectivePitch =
+            isNativeMaleNeural && !usedFallbackStream
+              ? Math.max(0.75, Math.min(1.15, desiredPitch + 0.16))
+              : desiredPitch;
+          const liveRate = Math.max(
+            0.5,
+            Math.min(
+              2.0,
+              Number(options?.rate ?? this.latestConfig?.teacherLiveRate ?? desiredRate)
+            )
+          );
+          const liveVol = Math.max(
+            0,
+            Math.min(
+              2.0,
+              Number(
+                options?.volume ??
+                  this.latestConfig?.teacherLiveVolume ??
+                  desiredVolume
+              )
+            )
+          );
+
+          const tempo = liveRate / effectivePitch;
+          const processedBuf = this.wsolaTimeStretchAudioBuffer(
+            this.ctx,
+            decoded,
+            tempo
+          );
+
+          const source = this.ctx.createBufferSource();
+          source.buffer = processedBuf;
+          source.playbackRate.setValueAtTime(effectivePitch, this.ctx.currentTime);
+
+          // Bộ lọc ấm ngực (Low-shelf 175Hz +2.5dB) giúp giọng Thầy Giáo dày ấm, rõ nét khi phát đè trên nhạc nền
+          const warmthFilter = this.ctx.createBiquadFilter();
+          warmthFilter.type = 'lowshelf';
+          warmthFilter.frequency.setValueAtTime(175, this.ctx.currentTime);
+          warmthFilter.gain.setValueAtTime(2.5, this.ctx.currentTime);
+
+          const clarityFilter = this.ctx.createBiquadFilter();
+          clarityFilter.type = 'peaking';
+          clarityFilter.frequency.setValueAtTime(2700, this.ctx.currentTime);
+          clarityFilter.Q.setValueAtTime(1.1, this.ctx.currentTime);
+          clarityFilter.gain.setValueAtTime(1.8, this.ctx.currentTime);
+
+          const gainNode = this.ctx.createGain();
+          gainNode.gain.setValueAtTime(liveVol, this.ctx.currentTime);
+
+          source.connect(warmthFilter);
+          warmthFilter.connect(clarityFilter);
+          clarityFilter.connect(gainNode);
+          gainNode.connect(this.ctx.destination);
+
+          this.teacherLiveSourceNode = source;
+          this.teacherLiveGainNode = gainNode;
+
+          let advanced = false;
+          const nextOnce = () => {
+            if (advanced || token !== this.teacherLiveTokenSeq) return;
+            advanced = true;
+            clearTimeout(watchdog);
+            void playChunkAt(idx + 1);
+          };
+
+          const expectedMs =
+            Math.ceil(
+              (processedBuf.duration / Math.max(0.4, effectivePitch)) * 1000
+            ) + 900;
+          const watchdog = setTimeout(nextOnce, Math.max(1500, expectedMs));
+
+          source.onended = nextOnce;
+          source.start(0);
+          return;
+        }
+      } catch {
+        // Fallback xuống HTMLAudioElement riêng biệt nếu trình duyệt không hỗ trợ decodeAudioData
+      }
+
+      if (token !== this.teacherLiveTokenSeq) return;
+      const fallbackAudio = new Audio();
+      fallbackAudio.crossOrigin = 'anonymous';
+      this.teacherLiveFallbackAudio = fallbackAudio;
+      fallbackAudio.src = blobUrl;
+      const fallbackRate = Math.max(0.55, Math.min(2.0, desiredRate * desiredPitch));
+      this.applyAudioPlaybackParams(
+        fallbackAudio,
+        fallbackRate,
+        false,
+        Math.min(1.0, desiredVolume)
+      );
+
+      let settled = false;
+      const settleFallback = () => {
+        if (settled || token !== this.teacherLiveTokenSeq) return;
+        settled = true;
+        clearTimeout(fbWatchdog);
+        void playChunkAt(idx + 1);
+      };
+      const fbWatchdog = setTimeout(settleFallback, 12000);
+      fallbackAudio.onended = settleFallback;
+      fallbackAudio.onerror = settleFallback;
+      fallbackAudio.play().catch(settleFallback);
+    };
+
+    void playChunkAt(0);
+    return true;
   }
 
   /**

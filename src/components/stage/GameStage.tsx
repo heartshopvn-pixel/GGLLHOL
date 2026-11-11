@@ -1585,6 +1585,7 @@ export const GameStage: React.FC<GameStageProps> = ({
               isLeftSeatmate={false}
               isSpeakingBubble={speakingPilgrim?.id === p.id}
               isTop1InClass={false}
+              top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
@@ -1623,6 +1624,7 @@ export const GameStage: React.FC<GameStageProps> = ({
               isLeftSeatmate={false}
               isSpeakingBubble={false}
               isTop1InClass={false}
+              top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
@@ -1666,6 +1668,7 @@ export const GameStage: React.FC<GameStageProps> = ({
               }
               isSpeakingBubble={speakingPilgrim?.id === p.id}
               isTop1InClass={p.id === top1InClassPilgrimId}
+              top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}

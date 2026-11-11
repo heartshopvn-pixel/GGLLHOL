@@ -137,7 +137,7 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
             top: -headTopOffsetPx,
             transform: `translate(-50%, -100%) scale(${(effectiveBubbleScale || 1).toFixed(2)})`,
             transformOrigin: '50% 100%',
-            zIndex: 20500,
+            zIndex: 34000,
           }}
         >
           <div

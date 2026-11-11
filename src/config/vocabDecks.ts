@@ -1,9 +1,242 @@
-import { EnglishQuizItem, GameConfig } from '../types/game';
+import {
+  EnglishQuizItem,
+  GameConfig,
+  QuizDifficultyLevel,
+  QuizDurationCategory,
+  QuizQuestionDurationByLevel,
+} from '../types/game';
+
+export const QUIZ_DECK_SCHEMA_VERSION = 2;
+
+export const DEFAULT_QUESTION_DURATION_BY_LEVEL: QuizQuestionDurationByLevel = {
+  easy: 12,
+  normal: 15,
+  hard: 18,
+  omg: 22,
+  other: 12,
+};
+
+export interface QuizLevelRewardSpec {
+  level: QuizDifficultyLevel;
+  canonicalDeckName: string;
+  label: string;
+  base: number; // Trả lời đúng (hạng 4+)
+  top1: number; // Nhanh nhất
+  top2: number; // Nhanh nhì
+  top3: number; // Nhanh ba
+}
+
+export const QUIZ_LEVEL_REWARD_MAP: Record<
+  QuizDifficultyLevel,
+  QuizLevelRewardSpec
+> = {
+  easy: {
+    level: 'easy',
+    canonicalDeckName: 'tienganh-de',
+    label: 'Dễ',
+    base: 5,
+    top1: 10,
+    top2: 8,
+    top3: 7,
+  },
+  normal: {
+    level: 'normal',
+    canonicalDeckName: 'tienganh-thuong',
+    label: 'Thường',
+    base: 7,
+    top1: 12,
+    top2: 10,
+    top3: 9,
+  },
+  hard: {
+    level: 'hard',
+    canonicalDeckName: 'tienganh-kho',
+    label: 'Khó',
+    base: 9,
+    top1: 15,
+    top2: 13,
+    top3: 12,
+  },
+  omg: {
+    level: 'omg',
+    canonicalDeckName: 'tienganh-OMG',
+    label: 'OMG',
+    base: 12,
+    top1: 20,
+    top2: 18,
+    top3: 16,
+  },
+};
+
+export function normalizeQuizDeckFileName(rawName: string): {
+  deckName: string;
+  deckKey: string;
+  level: QuizDifficultyLevel;
+} {
+  const stripped = String(rawName || '')
+    .trim()
+    .replace(/\.txt$/i, '')
+    .trim();
+  const safeBase = stripped || `De_${Date.now()}`;
+  const lower = safeBase.toLowerCase();
+
+  if (lower === 'tienganh-de') {
+    return { deckName: 'tienganh-de', deckKey: 'tienganh-de', level: 'easy' };
+  }
+  if (lower === 'tienganh-thuong') {
+    return {
+      deckName: 'tienganh-thuong',
+      deckKey: 'tienganh-thuong',
+      level: 'normal',
+    };
+  }
+  if (lower === 'tienganh-kho') {
+    return { deckName: 'tienganh-kho', deckKey: 'tienganh-kho', level: 'hard' };
+  }
+  if (lower === 'tienganh-omg') {
+    return { deckName: 'tienganh-OMG', deckKey: 'tienganh-omg', level: 'omg' };
+  }
+
+  let inferredLevel: QuizDifficultyLevel = 'normal';
+  if (lower.endsWith('-omg') || lower.includes('omg')) {
+    inferredLevel = 'omg';
+  } else if (lower.endsWith('-kho') || lower.includes('kho')) {
+    inferredLevel = 'hard';
+  } else if (lower.endsWith('-de')) {
+    inferredLevel = 'easy';
+  }
+
+  return {
+    deckName: safeBase,
+    deckKey: lower,
+    level: inferredLevel,
+  };
+}
+
+export function resolveQuizDifficultyLevel(
+  itemOrDeckName?: EnglishQuizItem | string | null
+): QuizDifficultyLevel {
+  if (!itemOrDeckName) return 'easy';
+  if (typeof itemOrDeckName === 'string') {
+    return normalizeQuizDeckFileName(itemOrDeckName).level;
+  }
+  if (
+    itemOrDeckName.quizLevel === 'easy' ||
+    itemOrDeckName.quizLevel === 'normal' ||
+    itemOrDeckName.quizLevel === 'hard' ||
+    itemOrDeckName.quizLevel === 'omg'
+  ) {
+    return itemOrDeckName.quizLevel;
+  }
+  if (itemOrDeckName.deckName) {
+    const lowerDeck = itemOrDeckName.deckName.toLowerCase();
+    if (lowerDeck === 'tienganh-omg' || lowerDeck.includes('nang_cao') || lowerDeck.includes('omg')) {
+      return 'omg';
+    }
+    if (lowerDeck === 'tienganh-kho' || lowerDeck.includes('vua_phai') || lowerDeck.includes('-kho')) {
+      return 'hard';
+    }
+    if (lowerDeck === 'tienganh-thuong' || lowerDeck.includes('trung_binh') || lowerDeck.includes('-thuong')) {
+      return 'normal';
+    }
+    if (lowerDeck === 'tienganh-de' || lowerDeck.includes('500') || lowerDeck.includes('-de')) {
+      return 'easy';
+    }
+    return normalizeQuizDeckFileName(itemOrDeckName.deckName).level;
+  }
+  return 'easy';
+}
+
+export function getQuizLevelRewardInfo(
+  itemOrDeckName?: EnglishQuizItem | string | null
+): QuizLevelRewardSpec {
+  const level = resolveQuizDifficultyLevel(itemOrDeckName);
+  return QUIZ_LEVEL_REWARD_MAP[level];
+}
+
+export function getQuizPointsForRank(
+  rankOneBased: number,
+  itemOrDeckName?: EnglishQuizItem | string | null
+): number {
+  const spec = getQuizLevelRewardInfo(itemOrDeckName);
+  if (rankOneBased === 1) return spec.top1;
+  if (rankOneBased === 2) return spec.top2;
+  if (rankOneBased === 3) return spec.top3;
+  return spec.base;
+}
+
+export function formatQuizLevelRewardBanner(
+  itemOrDeckName?: EnglishQuizItem | string | null
+): string {
+  const spec = getQuizLevelRewardInfo(itemOrDeckName);
+  return `Level: ${spec.label}. Đúng +${spec.base}, nhất +${spec.top1}, nhì +${spec.top2}, ba +${spec.top3}.`;
+}
+
+export function resolveQuizDurationCategory(
+  itemOrDeckName?: EnglishQuizItem | string | null
+): QuizDurationCategory {
+  if (!itemOrDeckName) return 'easy';
+  const rawDeckName =
+    typeof itemOrDeckName === 'string'
+      ? itemOrDeckName
+      : itemOrDeckName.deckName || '';
+  const cleanedKey = rawDeckName
+    .trim()
+    .replace(/\.txt$/i, '')
+    .trim()
+    .toLowerCase();
+
+  if (cleanedKey) {
+    if (cleanedKey === 'tienganh-de') return 'easy';
+    if (cleanedKey === 'tienganh-thuong') return 'normal';
+    if (cleanedKey === 'tienganh-kho') return 'hard';
+    if (cleanedKey === 'tienganh-omg') return 'omg';
+    return 'other';
+  }
+
+  if (typeof itemOrDeckName !== 'string' && itemOrDeckName.quizLevel) {
+    return itemOrDeckName.quizLevel;
+  }
+
+  return 'other';
+}
+
+export function getQuestionAskDurationSec(
+  cfg?: GameConfig | null,
+  itemOrDeckName?: EnglishQuizItem | string | null
+): number {
+  const cat = resolveQuizDurationCategory(itemOrDeckName);
+  const byLevel = cfg?.hudLayout?.classBoardQuestionDurationByLevel;
+  const legacySec = cfg?.hudLayout?.classBoardQuestionDurationSec || 12;
+
+  let rawSec: number;
+  switch (cat) {
+    case 'easy':
+      rawSec = byLevel?.easy ?? legacySec;
+      break;
+    case 'normal':
+      rawSec = byLevel?.normal ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.normal;
+      break;
+    case 'hard':
+      rawSec = byLevel?.hard ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.hard;
+      break;
+    case 'omg':
+      rawSec = byLevel?.omg ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.omg;
+      break;
+    case 'other':
+    default:
+      rawSec = byLevel?.other ?? legacySec;
+      break;
+  }
+
+  return Math.max(5, Math.min(120, Number(rawSec) || 12));
+}
 
 function parseCompactPairs(
   rawLines: string,
   prefix: string,
-  deckName: string
+  deckName: string,
+  quizLevel: QuizDifficultyLevel
 ): EnglishQuizItem[] {
   const out: EnglishQuizItem[] = [];
   const seen = new Set<string>();
@@ -34,6 +267,7 @@ function parseCompactPairs(
         vi,
         en,
         deckName,
+        quizLevel,
       });
     }
   }
@@ -179,121 +413,131 @@ Thiếu thốn|DESTITUTE;Răn đe|DETERRENCE;Có hại lớn|DETRIMENTAL;Lệch 
 export const VOCAB_500_BASIC_ITEMS: EnglishQuizItem[] = parseCompactPairs(
   RAW_500_BASIC,
   'v500',
-  '500_tu_vung_co_ban.txt'
+  'tienganh-de',
+  'easy'
 );
 
 export const VOCAB_300_MEDIUM_ITEMS: EnglishQuizItem[] = parseCompactPairs(
   RAW_300_MEDIUM,
   'v300tb',
-  '300_tu_vung_tieng_anh_trung_binh.txt'
+  'tienganh-thuong',
+  'normal'
 );
 
 export const VOCAB_200_MODERATELY_HARD_ITEMS: EnglishQuizItem[] =
   parseCompactPairs(
     RAW_200_MODERATELY_HARD,
     'v200kvp',
-    '200_tu_vung_tieng_anh_kho_vua_phai.txt'
+    'tienganh-kho',
+    'hard'
   );
 
 export const VOCAB_200_ADVANCED_HARD_ITEMS: EnglishQuizItem[] =
   parseCompactPairs(
     RAW_200_ADVANCED_HARD,
     'v200knc',
-    '200_tu_vung_tieng_anh_kho_nang_cao.txt'
+    'tienganh-OMG',
+    'omg'
   );
 
 export const BUILT_IN_TIERED_QUIZ_DECKS: Array<{
   id: string;
   name: string;
+  level: QuizDifficultyLevel;
   questions: EnglishQuizItem[];
 }> = [
   {
-    id: 'deck-500-co-ban',
-    name: '500_tu_vung_co_ban.txt',
+    id: 'deck-tienganh-de',
+    name: 'tienganh-de',
+    level: 'easy',
     questions: VOCAB_500_BASIC_ITEMS,
   },
   {
-    id: 'deck-300-trung-binh',
-    name: '300_tu_vung_tieng_anh_trung_binh.txt',
+    id: 'deck-tienganh-thuong',
+    name: 'tienganh-thuong',
+    level: 'normal',
     questions: VOCAB_300_MEDIUM_ITEMS,
   },
   {
-    id: 'deck-200-kho-vua-phai',
-    name: '200_tu_vung_tieng_anh_kho_vua_phai.txt',
+    id: 'deck-tienganh-kho',
+    name: 'tienganh-kho',
+    level: 'hard',
     questions: VOCAB_200_MODERATELY_HARD_ITEMS,
   },
   {
-    id: 'deck-200-kho-nang-cao',
-    name: '200_tu_vung_tieng_anh_kho_nang_cao.txt',
+    id: 'deck-tienganh-omg',
+    name: 'tienganh-OMG',
+    level: 'omg',
     questions: VOCAB_200_ADVANCED_HARD_ITEMS,
   },
 ];
 
 /**
- * Tự động nạp và đồng bộ 4 bộ đề chuẩn (500 cơ bản, 300 trung bình, 200 khó vừa phải, 200 khó nâng cao)
- * vào danh sách quizDecks của người dùng (giữ nguyên các bộ đề riêng mà người dùng đã tự tải lên).
+ * Chuẩn hóa danh sách bộ đề theo quy ước 4 level:
+ * tienganh-de / tienganh-thuong / tienganh-kho / tienganh-OMG.
+ * Nếu forceReset = true hoặc danh sách đang trống -> đặt lại sạch đúng 4 bộ đề chuẩn.
+ * Nếu đã ở schema mới -> tôn trọng nguyên vẹn các bộ đề hiện có (kể cả khi user bấm ✕ xóa hoặc thêm đề riêng).
  */
 export function ensureTieredQuizDecksLoaded(
   existingDecks?: Array<{
     id: string;
     name: string;
+    level?: QuizDifficultyLevel;
     questions: EnglishQuizItem[];
-  }>
+  }>,
+  forceReset = false
 ): Array<{
   id: string;
   name: string;
+  level?: QuizDifficultyLevel;
   questions: EnglishQuizItem[];
 }> {
-  if (!Array.isArray(existingDecks) || existingDecks.length === 0) {
-    return [...BUILT_IN_TIERED_QUIZ_DECKS];
+  if (forceReset || !Array.isArray(existingDecks) || existingDecks.length === 0) {
+    return BUILT_IN_TIERED_QUIZ_DECKS.map((d) => ({
+      ...d,
+      questions: [...d.questions],
+    }));
   }
 
-  // Giữ lại các bộ đề do người dùng tải lên (loại bỏ 3 bộ mẫu cũ ít từ 12A1_CoBan / IELTS_TuVung / 12A1_NangCao nếu chỉ có <=35 câu)
-  const legacySampleIds = new Set(['deck-12a1', 'deck-ielts', 'deck-nangcao']);
-  const userDecks = existingDecks.filter(
-    (d) =>
-      d &&
-      Array.isArray(d.questions) &&
-      d.questions.length > 0 &&
-      !(legacySampleIds.has(d.id) && d.questions.length <= 35)
-  );
+  const validDecks = existingDecks
+    .filter((d) => d && Array.isArray(d.questions) && d.questions.length > 0)
+    .map((d) => {
+      const norm = normalizeQuizDeckFileName(d.name);
+      const resolvedLevel = d.level || norm.level;
+      return {
+        ...d,
+        name: norm.deckName,
+        level: resolvedLevel,
+        questions: d.questions.map((q) => ({
+          ...q,
+          deckName: norm.deckName,
+          quizLevel: q.quizLevel || resolvedLevel,
+        })),
+      };
+    });
 
-  const merged = [...userDecks];
-  for (const builtin of BUILT_IN_TIERED_QUIZ_DECKS) {
-    const builtinLower = builtin.name.toLowerCase();
-    const existingIdx = merged.findIndex(
-      (d) =>
-        d.id === builtin.id ||
-        d.name.trim().toLowerCase() === builtinLower
-    );
-    if (existingIdx >= 0) {
-      // Nếu bộ đề trùng tên nhưng số câu quá ít thì cập nhật đủ số câu chuẩn
-      if (merged[existingIdx].questions.length < builtin.questions.length) {
-        merged[existingIdx] = {
-          ...merged[existingIdx],
-          questions: builtin.questions,
-        };
-      }
-    } else {
-      merged.push(builtin);
-    }
+  if (validDecks.length === 0) {
+    return BUILT_IN_TIERED_QUIZ_DECKS.map((d) => ({
+      ...d,
+      questions: [...d.questions],
+    }));
   }
 
-  return merged;
+  return validDecks;
 }
 
 function sampleRandomQuestions(
   pool: EnglishQuizItem[],
   count: number,
   usedEnLower: Set<string>,
-  deckLabel: string
+  deckLabel: string,
+  quizLevel: QuizDifficultyLevel
 ): EnglishQuizItem[] {
   const available = pool.filter(
     (q) => q && q.en && !usedEnLower.has(q.en.trim().toLowerCase())
   );
   const source = available.length >= count ? available : pool;
   const copy = [...source];
-  // Xáo trộn Fisher-Yates chuẩn xác để trích ngẫu nhiên không trùng lặp
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     const tmp = copy[i];
@@ -307,18 +551,18 @@ function sampleRandomQuestions(
     usedEnLower.add(item.en.trim().toLowerCase());
     picked.push({
       ...item,
-      deckName: item.deckName || deckLabel,
+      deckName: deckLabel,
+      quizLevel,
     });
   }
   return picked;
 }
 
 /**
- * Xây dựng bộ đề thi 15 phút (15 câu) chia làm 4 tầng độ khó tăng dần theo đúng yêu cầu:
- * - Câu 1..9 (9 câu đầu): Trích ngẫu nhiên từ bộ 500 từ vựng dễ / cơ bản (ưu tiên bộ 500 từ trong quizDecks nếu người dùng đã tải lên).
- * - Câu 10..12 (3 câu kế): Trích ngẫu nhiên từ list 300 từ vựng trung bình (300_tu_vung_tieng_anh_trung_binh.txt).
- * - Câu 13..14 (2 câu kế): Trích ngẫu nhiên từ list 200 từ vựng khó vừa phải (200_tu_vung_tieng_anh_kho_vua_phai.txt).
- * - Câu 15 (1 câu cuối): Trích ngẫu nhiên từ list 200 từ vựng khó nâng cao (200_tu_vung_tieng_anh_kho_nang_cao.txt).
+ * Xây dựng bộ đề thi 15 phút (15 câu) theo phân bố độ khó tăng dần:
+ * - Câu 1..8 (8 câu đầu): Level Dễ (tienganh-de)
+ * - Câu 9..13 (5 câu kế): Level Thường (tienganh-thuong)
+ * - Câu 14..15 (2 câu kế): Level Khó (tienganh-kho)
  */
 export function build15MinuteTieredRoundQuestions(
   cfg?: GameConfig,
@@ -326,93 +570,64 @@ export function build15MinuteTieredRoundQuestions(
 ): EnglishQuizItem[] {
   const decks = ensureTieredQuizDecksLoaded(cfg?.quizDecks);
 
-  // 1. Tìm bộ 500 từ (ưu tiên bộ đề của người dùng có chữ "500" hoặc >= 400 từ, nếu không dùng VOCAB_500_BASIC_ITEMS)
-  const deck500 =
-    decks.find(
-      (d) =>
-        d.name.toLowerCase().includes('500') ||
-        (Array.isArray(d.questions) && d.questions.length >= 400)
-    ) ||
-    decks.find((d) => d.id === 'deck-500-co-ban');
-  const pool500 =
-    deck500 && deck500.questions.length >= 9
-      ? deck500.questions
+  const deckEasy = decks.find(
+    (d) =>
+      d.id === 'deck-tienganh-de' ||
+      normalizeQuizDeckFileName(d.name).deckKey === 'tienganh-de'
+  );
+  const poolEasy =
+    deckEasy && deckEasy.questions.length >= 1
+      ? deckEasy.questions
       : VOCAB_500_BASIC_ITEMS;
 
-  // 2. Tìm bộ 300 từ trung bình
-  const deck300 =
-    decks.find(
-      (d) =>
-        d.id === 'deck-300-trung-binh' ||
-        d.name.toLowerCase().includes('300_tu_vung_tieng_anh_trung_binh') ||
-        d.name.toLowerCase().includes('trung_binh') ||
-        d.name.toLowerCase().includes('trung bình')
-    );
-  const pool300 =
-    deck300 && deck300.questions.length >= 3
-      ? deck300.questions
+  const deckNormal = decks.find(
+    (d) =>
+      d.id === 'deck-tienganh-thuong' ||
+      normalizeQuizDeckFileName(d.name).deckKey === 'tienganh-thuong'
+  );
+  const poolNormal =
+    deckNormal && deckNormal.questions.length >= 1
+      ? deckNormal.questions
       : VOCAB_300_MEDIUM_ITEMS;
 
-  // 3. Tìm bộ 200 từ khó vừa phải
-  const deck200Moderate =
-    decks.find(
-      (d) =>
-        d.id === 'deck-200-kho-vua-phai' ||
-        d.name.toLowerCase().includes('200_tu_vung_tieng_anh_kho_vua_phai') ||
-        d.name.toLowerCase().includes('kho_vua_phai') ||
-        d.name.toLowerCase().includes('khó vừa phải')
-    );
-  const pool200Moderate =
-    deck200Moderate && deck200Moderate.questions.length >= 2
-      ? deck200Moderate.questions
+  const deckHard = decks.find(
+    (d) =>
+      d.id === 'deck-tienganh-kho' ||
+      normalizeQuizDeckFileName(d.name).deckKey === 'tienganh-kho'
+  );
+  const poolHard =
+    deckHard && deckHard.questions.length >= 1
+      ? deckHard.questions
       : VOCAB_200_MODERATELY_HARD_ITEMS;
-
-  // 4. Tìm bộ 200 từ khó nâng cao
-  const deck200Advanced =
-    decks.find(
-      (d) =>
-        d.id === 'deck-200-kho-nang-cao' ||
-        d.name.toLowerCase().includes('200_tu_vung_tieng_anh_kho_nang_cao') ||
-        d.name.toLowerCase().includes('kho_nang_cao') ||
-        d.name.toLowerCase().includes('khó nâng cao')
-    );
-  const pool200Advanced =
-    deck200Advanced && deck200Advanced.questions.length >= 1
-      ? deck200Advanced.questions
-      : VOCAB_200_ADVANCED_HARD_ITEMS;
 
   const usedEnLower = new Set<string>();
   if (excludeEnLower) {
     usedEnLower.add(excludeEnLower.trim().toLowerCase());
   }
 
-  // Trích ngẫu nhiên theo đúng cơ cấu 9 + 3 + 2 + 1 = 15 câu
   const tier1 = sampleRandomQuestions(
-    pool500,
-    9,
+    poolEasy,
+    8,
     usedEnLower,
-    deck500?.name || '500_tu_vung_co_ban.txt'
+    deckEasy?.name || 'tienganh-de',
+    'easy'
   );
   const tier2 = sampleRandomQuestions(
-    pool300,
-    3,
+    poolNormal,
+    5,
     usedEnLower,
-    deck300?.name || '300_tu_vung_tieng_anh_trung_binh.txt'
+    deckNormal?.name || 'tienganh-thuong',
+    'normal'
   );
   const tier3 = sampleRandomQuestions(
-    pool200Moderate,
+    poolHard,
     2,
     usedEnLower,
-    deck200Moderate?.name || '200_tu_vung_tieng_anh_kho_vua_phai.txt'
-  );
-  const tier4 = sampleRandomQuestions(
-    pool200Advanced,
-    1,
-    usedEnLower,
-    deck200Advanced?.name || '200_tu_vung_tieng_anh_kho_nang_cao.txt'
+    deckHard?.name || 'tienganh-kho',
+    'hard'
   );
 
-  const combined = [...tier1, ...tier2, ...tier3, ...tier4];
+  const combined = [...tier1, ...tier2, ...tier3];
   const r1 = Math.max(0, Math.min(100, cfg?.luckyStarRatio1 ?? 15));
   const r2 = Math.max(0, Math.min(100, cfg?.luckyStarRatio2 ?? 10));
   const r3 = Math.max(0, Math.min(100, cfg?.luckyStarRatio3 ?? 5));

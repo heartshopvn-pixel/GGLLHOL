@@ -974,8 +974,9 @@ export const DEFAULT_CONFIG: GameConfig = {
   lessonPunishmentMultiTtsTemplate:
     'Mời các bạn [DanhSáchTên] mới quậy trong lớp lên đây đứng 1 lượt!',
   customQuizQuestions: [],
+  quizDeckSchemaVersion: 2,
   quizDecks: [],
-  activeQuizDeckId: 'deck-12a1',
+  activeQuizDeckId: 'deck-tienganh-de',
   quizQueueLimitDisplay: 10,
   shuffleBeforeEnqueue: false,
   luckyStarRatio1: 15,
@@ -1004,6 +1005,20 @@ export const DEFAULT_CONFIG: GameConfig = {
     'Cả lớp trả lời câu hỏi nhiệt tình cho đủ mốc Kích hoạt sự kiện nào!',
     'Cô cảm ơn các bạn đã tặng Hoa Điểm 10 ủng hộ lớp nhé!',
     'Bạn nào muốn vào lớp ngồi bàn học thì comment vào lớp nha!',
+  ],
+
+  // Live Text-to-Voice Độc Lập (Giọng Thầy Giáo phát song song với game, không vào hàng chờ)
+  teacherLiveEngine: 'google_stream',
+  teacherLiveVoice: 'google-vi-male-deep',
+  teacherLiveVolume: 1.0,
+  teacherLiveRate: 1.0,
+  teacherLivePitch: 0.8,
+  teacherLiveShowBubble: true,
+  teacherLiveQuickPhrases: [
+    'Trật tự nào mấy đứa, tập trung nhìn lên bảng trả lời câu hỏi của cô Thảo đi!',
+    'Thầy giám thị đang đi tuần nha, bạn nào quậy trong lớp coi chừng lên đứng bảng đó!',
+    'Chào mừng các bạn mới vào lớp, thả tim và bình luận đáp án thật nhanh nhé!',
+    'Giỏi lắm, mấy bạn hàng chờ cố gắng trả lời đúng để giành ghế vào lớp nha!',
   ],
 
   showWaypoints: false,
@@ -1060,6 +1075,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   nameTagScale: 1.0,
   nameTagMaxChars: 16,
   nameTagOffsetY: 0,
+  top1CrownOffsetY: 0,
   streakTagFontFamily: '"Be Vietnam Pro", system-ui, sans-serif',
   streakTagScale: 1.0,
   scoreTagScale: 1.0,
@@ -1209,6 +1225,13 @@ export const DEFAULT_CONFIG: GameConfig = {
     classBoardLessonTitle: 'Tiết Tiếng Anh',
     classBoardLetterMode: 'default',
     classBoardQuestionDurationSec: 12,
+    classBoardQuestionDurationByLevel: {
+      easy: 12,
+      normal: 15,
+      hard: 18,
+      omg: 22,
+      other: 12,
+    },
     classBoardRevealDurationSec: 10,
     classBoardNpcParticipate: true,
     classBoardTtsReadQuestion: true,

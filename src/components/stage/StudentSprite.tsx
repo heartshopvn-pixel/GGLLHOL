@@ -74,6 +74,7 @@ interface StudentSpriteProps {
   deskSeatY?: number;
   isSpeakingBubble?: boolean;
   isTop1InClass?: boolean;
+  top1CrownOffsetY?: number;
   studentLevelExpEnabled?: boolean;
   giftModelScales?: GiftModelScalesConfig;
   walkWobbleIntensity?: number;
@@ -164,6 +165,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
   deskSeatY,
   isSpeakingBubble = false,
   isTop1InClass = false,
+  top1CrownOffsetY = 0,
   studentLevelExpEnabled = false,
   giftModelScales = DEFAULT_GIFT_MODEL_SCALES,
   walkWobbleIntensity = 1.0,
@@ -326,22 +328,25 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
         Math.round(depthY) + (isSeated || isAtDeskSeat ? 0 : 2)
       );
 
-  // Tầng giao diện nổi (Thẻ tên, Bong bóng chat, Thẻ điểm, Huy hiệu): tách độc lập khỏi thân nhân vật
+  // Tầng giao diện nổi: Bong bóng chat (26000..35000) > Vương miện Top 1 (22000) > Thẻ tên (<= 19990) > Thẻ điểm & Huy hiệu
   const baseUiZIndex = 2000 + Math.max(10, Math.round(effectiveBaseY));
   const activeBubblePriority = showChatBubble
-    ? 10000 + Math.floor(((pilgrim.chatBubbleUntil || 0) % 100000) / 10)
+    ? 26000 + Math.floor(((pilgrim.chatBubbleUntil || 0) % 100000) / 20)
+    : 0;
+  const nameTagBubblePriority = showChatBubble
+    ? 11000 + Math.floor(((pilgrim.chatBubbleUntil || 0) % 100000) / 20)
     : 0;
   const chatBubbleZIndex = isSpeakingBubble
-    ? 20000
+    ? 35000
     : isPerformingGiftAction
-    ? 18500
-    : Math.max(baseUiZIndex + 50, activeBubblePriority);
+    ? 33000
+    : Math.max(26000, activeBubblePriority);
   const nameTagZIndex = isSpeakingBubble
     ? 19990
     : isPerformingGiftAction
     ? 18490
     : showChatBubble
-    ? Math.max(baseUiZIndex + 40, activeBubblePriority - 1)
+    ? Math.max(baseUiZIndex + 40, nameTagBubblePriority)
     : showScoreCard
     ? 9850 + Math.round(effectiveBaseY / 10)
     : baseUiZIndex;
@@ -966,12 +971,12 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
         )}
       </div>
 
-      {/* VƯƠNG MIỆN TOP 1 TRONG LỚP: Hạ xuống đụng sát đỉnh đầu, luôn ưu tiên ở layer đầu tiên (zIndex: 25000) có thể đè lên cả bảng tên */}
+      {/* VƯƠNG MIỆN TOP 1 TRONG LỚP: Hạ xuống đụng sát đỉnh đầu (+ chỉnh dọc top1CrownOffsetY trong Map Dev), ưu tiên đè lên bảng tên (zIndex: 22000) nhưng cho phép bong bóng chat (zIndex >= 26000) đè lên trên */}
       {isTop1InClass && (
         <div
           className="absolute left-0 top-0 w-16 h-[70px] pointer-events-none select-none"
           style={{
-            zIndex: 25000,
+            zIndex: 22000,
             transform: `translate(-50%, ${
               isRichKidDancing
                 ? `${-88 - Math.abs(Math.sin(pilgrim.animTime * 14)) * 12}%`
@@ -989,10 +994,11 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           <div
             className="top1-crown-float-glow absolute left-1/2 pointer-events-none select-none"
             style={{
-              top:
-                isSeated && useDefaultPngModels && processedDefaultModelSrc
-                  ? '22px'
-                  : '9px',
+              top: `${
+                (isSeated && useDefaultPngModels && processedDefaultModelSrc
+                  ? 22
+                  : 9) + (top1CrownOffsetY || 0)
+              }px`,
             }}
           >
             <svg
@@ -1093,12 +1099,6 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
               Math.round(pilgrim.currentScoreDisplay ?? 0)
             );
             const delta = Math.round(pilgrim.scoreChangeDelta ?? 0);
-            const expDelta = Math.max(0, Math.round(pilgrim.expChangeDelta ?? 0));
-            const curExp = Math.max(0, Math.round(pilgrim.exp ?? 0));
-            const curLevel =
-              pilgrim.level && pilgrim.level > 0
-                ? pilgrim.level
-                : Math.floor(curExp / 20) + 1;
             const isPositive = delta >= 0;
             const formattedDelta = delta > 0 ? `+${delta}` : `${delta}`;
             const safeFontSize = Math.max(
@@ -1201,23 +1201,6 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                   </div>
                 )}
 
-                {/* FLOATING TEXT EXP: nằm ngay phía trên số điểm cộng (+điểm) */}
-                {studentLevelExpEnabled && expDelta > 0 && (
-                  <div
-                    className="score-delta-vibrate font-mono font-black leading-none whitespace-nowrap mb-0.5 relative z-10"
-                    style={{
-                      fontSize: `${Math.max(8, Math.round(safeFontSize * 0.86))}px`,
-                      color: pilgrim.leveledUpInRound ? '#fde047' : '#38bdf8',
-                      WebkitTextStroke: `${Math.max(0.5, safeStrokeW * 0.9)}px #000000`,
-                      paintOrder: 'stroke fill',
-                      textShadow:
-                        '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 2px rgba(0,0,0,0.95)',
-                    }}
-                  >
-                    +{expDelta} EXP{pilgrim.leveledUpInRound ? ` ⬆️Lv.${curLevel}` : ''}
-                  </div>
-                )}
-
                 {/* Số điểm thay đổi (+ / -): nằm cố định ngay phía trên Thẻ số điểm, không nền, chữ xanh lá / đỏ, viền đen đậm, hiệu ứng run nhẹ */}
                 {delta !== 0 && (
                   <div
@@ -1298,7 +1281,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                 {studentLevelExpEnabled && (
                   <span
                     className={`px-1 py-0.5 rounded border font-mono font-black text-[7.5px] leading-none shrink-0 ${levelBadgeClass}`}
-                    title={`Cấp ${studentLevel} (${curExp} EXP)`}
+                    title={`Rank Lv.${studentLevel} (${curExp} điểm EXP)`}
                   >
                     Lv.{studentLevel}
                   </span>
@@ -1360,6 +1343,7 @@ function areStudentSpritePropsEqual(
     prev.deskSeatY !== next.deskSeatY ||
     prev.isSpeakingBubble !== next.isSpeakingBubble ||
     prev.isTop1InClass !== next.isTop1InClass ||
+    prev.top1CrownOffsetY !== next.top1CrownOffsetY ||
     prev.studentLevelExpEnabled !== next.studentLevelExpEnabled ||
     prev.characterScale !== next.characterScale ||
     prev.useDefaultPngModels !== next.useDefaultPngModels ||

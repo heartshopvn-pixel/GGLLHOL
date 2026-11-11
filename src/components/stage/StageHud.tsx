@@ -28,6 +28,10 @@ import {
   WaitingQueueItem,
   ZombieEventRuntimeState,
 } from '../../types/game';
+import {
+  formatQuizLevelRewardBanner,
+  getQuizPointsForRank,
+} from '../../config/vocabDecks';
 import { DEFAULT_GUIDE_ITEMS, ENGLISH_QUIZ_QUESTIONS } from '../../config/constants';
 import { Flower10BadgeIcon, SchoolGiftArt } from './SchoolGiftArt';
 
@@ -655,8 +659,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
     isClassCol: boolean
   ) => {
     const rankNum = rankIdx + 1;
-    const defaultPts =
-      rankNum === 1 ? 10 : rankNum === 2 ? 8 : rankNum === 3 ? 7 : 6;
+    const defaultPts = getQuizPointsForRank(rankNum, quizItem);
     const pts = w?.points || defaultPts;
     const rankBadgeColors =
       rankNum === 1
@@ -1452,12 +1455,19 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 )}
             </div>
           ) : activeEngine === 'english_quiz' && isLessonStartPhase ? (
-            /* BẮT ĐẦU TIẾT HỌC: Chỉ hiển thị chữ lớn lời bắt đầu của cô giáo */
+            /* BẮT ĐẦU TIẾT HỌC (LUỒNG 0): Hiển thị lời bắt đầu của cô giáo (giảm 20% cỡ chữ, bỏ glow) */
             <div className="flex flex-col h-full items-center justify-center relative select-none py-2 px-3">
               <div
-                className="font-extrabold text-yellow-200 text-center leading-snug my-auto drop-shadow-[0_2px_10px_rgba(250,204,21,0.45)]"
+                className="font-extrabold text-yellow-200 text-center leading-snug my-auto"
                 style={{
-                  fontSize: `${Math.max(15, Math.min(28, safeClassBoardFontSize + 5))}px`,
+                  fontSize: `${
+                    Math.round(
+                      Math.max(15, Math.min(28, safeClassBoardFontSize + 5)) *
+                        0.8 *
+                        10
+                    ) / 10
+                  }px`,
+                  textShadow: 'none',
                 }}
               >
                 {classBoardState?.lessonStartText ||
@@ -1511,7 +1521,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 <div className="flex items-center gap-1 min-w-0">
                   <BookOpen className="w-[11px] h-[11px] text-amber-300 shrink-0" />
                   <span className="font-extrabold tracking-wide text-amber-200 uppercase truncate">
-                    {classBoardLessonTitle || 'Tiết Tiếng Anh'} • Câu #{(classBoardState?.roundQuestionIndex ?? qIdx) + 1}/15
+                    {classBoardLessonTitle || 'Tiết Tiếng Anh'}
                   </span>
                   {Boolean(quizItem.luckyStars && quizItem.luckyStars >= 1) && (
                     <span
@@ -1673,31 +1683,19 @@ const StageHudInner: React.FC<StageHudProps> = ({
                   />
                 </div>
 
-                {/* Dòng trạng thái trả lời dưới đáy bảng */}
+                {/* Dòng trạng thái dưới đáy bảng: căng trái, Luồng 2 & 3 hiển thị Level + điểm thưởng trả lời đúng */}
                 <div
-                  className="flex items-center justify-between gap-1 text-stone-100 leading-tight truncate"
+                  className="flex items-center justify-start text-left w-full gap-1 text-stone-100 leading-tight truncate"
                   style={{ fontSize: `${Math.max(8, safeClassBoardFontSize - 2.5)}px` }}
                 >
                   {isAnswerFlashPhase || isLegacyRevealed ? (
-                    <span className="text-emerald-200 font-extrabold truncate">
+                    <span className="text-emerald-200 font-extrabold text-left truncate">
                       ✨ {quizItem.vi} = {quizItem.en.toUpperCase()}{' '}
                       {quizItem.phonetic ? `(${quizItem.phonetic})` : ''}
                     </span>
-                  ) : boardWinners.length > 0 ? (
-                    <div className="flex items-center gap-1 min-w-0 truncate text-emerald-200 font-bold">
-                      <Trophy className="w-3 h-3 text-yellow-300 shrink-0" />
-                      <span className="truncate">
-                        Trong lớp: {classWinners.length} đúng • Học ké: {outsideWinners.length} đúng
-                      </span>
-                    </div>
                   ) : (
-                    <span className="text-stone-200/90 truncate">
-                      💬 Comment đáp án tiếng Anh ({quizLetters.length} chữ cái) để giữ chỗ ngồi!
-                    </span>
-                  )}
-                  {!(isAnswerFlashPhase || isLegacyRevealed) && (
-                    <span className="font-mono text-amber-300/95 font-bold shrink-0">
-                      Còn {String(remSec).padStart(2, '0')} giây
+                    <span className="text-amber-200 font-bold text-left truncate">
+                      {formatQuizLevelRewardBanner(quizItem)}
                     </span>
                   )}
                 </div>

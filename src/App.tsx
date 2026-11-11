@@ -471,6 +471,9 @@ export default function App() {
           onPanicMute={engine.handlePanicMute}
           onTestTTS={engine.handleTestTTS}
           onSpeakHostLiveText={engine.handleSpeakHostLiveText}
+          teacherLiveStatus={engine.teacherLiveStatus}
+          onSpeakTeacherLiveVoice={engine.handleSpeakTeacherLiveVoice}
+          onStopTeacherLiveVoice={engine.handleStopTeacherLiveVoice}
           onNextDharmaArticle={engine.handleNextDharmaArticle}
           onTriggerLike={engine.handleTriggerLike}
           onTriggerFollow={engine.handleTriggerFollow}

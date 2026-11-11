@@ -24,12 +24,14 @@ import {
   GameConfig,
   LessonFlow5ConditionKey,
   LessonFlow6ConditionKey,
+  QuizQuestionDurationByLevel,
   TTSEngineType,
 } from '../../types/game';
 import {
   CLASSROOM_GIFT_EVENTS_META,
   DEFAULT_CONFIG,
 } from '../../config/constants';
+import { DEFAULT_QUESTION_DURATION_BY_LEVEL } from '../../config/vocabDecks';
 import { soundEngine } from '../../services/soundEngine';
 
 interface TabAudioProps {
@@ -1963,12 +1965,23 @@ export const TabAudio: React.FC<TabAudioProps> = ({
             />
           </div>
 
-          <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
-            <span className="text-stone-400">Thời gian luồng:</span>
-            <span className="font-mono font-bold text-amber-300">
-              🔒 Tính chung thời gian với Luồng 3 ({config.hudLayout.classBoardQuestionDurationSec || 12}s)
-            </span>
-          </div>
+          {(() => {
+            const legacyDur = config.hudLayout.classBoardQuestionDurationSec || 12;
+            const dMap = config.hudLayout.classBoardQuestionDurationByLevel;
+            const dEasy = dMap?.easy ?? legacyDur;
+            const dNormal = dMap?.normal ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.normal;
+            const dHard = dMap?.hard ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.hard;
+            const dOmg = dMap?.omg ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.omg;
+            const dOther = dMap?.other ?? legacyDur;
+            return (
+              <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
+                <span className="text-stone-400 shrink-0">Thời gian luồng:</span>
+                <span className="font-mono font-bold text-amber-300 text-right">
+                  🔒 Chung với Luồng 3 (Dễ {dEasy}s • Thường {dNormal}s • Khó {dHard}s • OMG {dOmg}s • Khác {dOther}s)
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
         {/* LUỒNG 3: ĐỢI TRẢ LỜI / GỢI Ý & CÂU NÓI VU VƠ CỦA CÔ */}
@@ -1983,6 +1996,46 @@ export const TabAudio: React.FC<TabAudioProps> = ({
 
           const updateIdleList = (nextList: string[]) => {
             onUpdateConfig({ lessonIdleChatTexts: nextList });
+          };
+
+          const legacyDur = config.hudLayout.classBoardQuestionDurationSec || 12;
+          const curDurByLevel: QuizQuestionDurationByLevel = {
+            easy:
+              config.hudLayout.classBoardQuestionDurationByLevel?.easy ??
+              legacyDur,
+            normal:
+              config.hudLayout.classBoardQuestionDurationByLevel?.normal ??
+              DEFAULT_QUESTION_DURATION_BY_LEVEL.normal,
+            hard:
+              config.hudLayout.classBoardQuestionDurationByLevel?.hard ??
+              DEFAULT_QUESTION_DURATION_BY_LEVEL.hard,
+            omg:
+              config.hudLayout.classBoardQuestionDurationByLevel?.omg ??
+              DEFAULT_QUESTION_DURATION_BY_LEVEL.omg,
+            other:
+              config.hudLayout.classBoardQuestionDurationByLevel?.other ??
+              legacyDur,
+          };
+
+          const updateDurationForLevel = (
+            key: keyof QuizQuestionDurationByLevel,
+            rawVal: number
+          ) => {
+            const clamped = Math.max(5, Math.min(120, Number(rawVal) || 12));
+            const nextByLevel: QuizQuestionDurationByLevel = {
+              ...curDurByLevel,
+              [key]: clamped,
+            };
+            onUpdateConfig({
+              hudLayout: {
+                ...config.hudLayout,
+                classBoardQuestionDurationSec:
+                  key === 'easy'
+                    ? clamped
+                    : config.hudLayout.classBoardQuestionDurationSec || nextByLevel.easy,
+                classBoardQuestionDurationByLevel: nextByLevel,
+              },
+            });
           };
 
           return (
@@ -2032,10 +2085,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 p-2 rounded bg-stone-900/75 border border-stone-800/80">
+              <div className="p-2 rounded bg-stone-900/75 border border-stone-800/80 space-y-2">
                 <div className="flex items-center justify-between gap-1.5">
                   <span className="text-[10px] text-amber-200 font-semibold">
-                    Trễ trước khi nói vu vơ:
+                    Trễ trước khi Cô nói câu vu vơ:
                   </span>
                   <div className="flex items-center gap-1">
                     <input
@@ -2058,32 +2111,83 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-1.5">
-                  <span className="text-[10px] text-amber-200 font-semibold">
-                    Tổng TG Luồng 2 & 3:
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={5}
-                      max={90}
-                      value={
-                        config.hudLayout.classBoardQuestionDurationSec || 12
-                      }
-                      onChange={(e) =>
-                        onUpdateConfig({
-                          hudLayout: {
-                            ...config.hudLayout,
-                            classBoardQuestionDurationSec: Math.max(
-                              5,
-                              Math.min(90, Number(e.target.value) || 12)
-                            ),
-                          },
-                        })
-                      }
-                      className="w-14 px-1.5 py-0.5 rounded bg-stone-950 border border-amber-500/50 text-center font-mono font-bold text-[11px] text-amber-300 focus:outline-none"
-                    />
-                    <span className="text-[10px] text-stone-400">giây</span>
+                <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-amber-200 font-semibold">
+                      ⏱ Tổng TG Luồng 2 & 3 theo độ khó câu hỏi (giây):
+                    </span>
+                    <span className="text-[9px] text-stone-400 font-mono">
+                      5s – 120s
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {(
+                      [
+                        {
+                          key: 'easy',
+                          label: 'Dễ',
+                          borderCls: 'border-emerald-500/50 text-emerald-300',
+                          labelCls: 'text-emerald-300',
+                        },
+                        {
+                          key: 'normal',
+                          label: 'Thường',
+                          borderCls: 'border-sky-500/50 text-sky-300',
+                          labelCls: 'text-sky-300',
+                        },
+                        {
+                          key: 'hard',
+                          label: 'Khó',
+                          borderCls: 'border-amber-500/55 text-amber-300',
+                          labelCls: 'text-amber-300',
+                        },
+                        {
+                          key: 'omg',
+                          label: 'OMG',
+                          borderCls: 'border-rose-500/55 text-rose-300',
+                          labelCls: 'text-rose-300',
+                        },
+                        {
+                          key: 'other',
+                          label: 'Khác',
+                          borderCls: 'border-purple-500/50 text-purple-300',
+                          labelCls: 'text-purple-300',
+                        },
+                      ] as Array<{
+                        key: keyof QuizQuestionDurationByLevel;
+                        label: string;
+                        borderCls: string;
+                        labelCls: string;
+                      }>
+                    ).map((lvl) => (
+                      <label
+                        key={lvl.key}
+                        className="flex flex-col items-center gap-0.5 p-1 rounded bg-stone-950/90 border border-stone-800"
+                      >
+                        <span
+                          className={`text-[9.5px] font-bold leading-none ${lvl.labelCls}`}
+                        >
+                          {lvl.label}
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          <input
+                            type="number"
+                            min={5}
+                            max={120}
+                            step={1}
+                            value={curDurByLevel[lvl.key]}
+                            onChange={(e) =>
+                              updateDurationForLevel(
+                                lvl.key,
+                                Number(e.target.value)
+                              )
+                            }
+                            className={`w-11 px-1 py-0.5 rounded bg-stone-900 border text-center font-mono font-bold text-[10.5px] focus:outline-none ${lvl.borderCls}`}
+                          />
+                          <span className="text-[9px] text-stone-400">s</span>
+                        </div>
+                      </label>
+                    ))}
                   </div>
                 </div>
               </div>

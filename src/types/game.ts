@@ -240,6 +240,22 @@ export type ClassBoardLetterMode =
   | 'blank'
   | 'full';
 
+export type QuizDifficultyLevel = 'easy' | 'normal' | 'hard' | 'omg';
+export type QuizDurationCategory =
+  | 'easy'
+  | 'normal'
+  | 'hard'
+  | 'omg'
+  | 'other';
+
+export interface QuizQuestionDurationByLevel {
+  easy: number;
+  normal: number;
+  hard: number;
+  omg: number;
+  other: number;
+}
+
 export interface EnglishQuizItem {
   id: string;
   vi: string;
@@ -247,6 +263,7 @@ export interface EnglishQuizItem {
   phonetic?: string;
   luckyStars?: 0 | 1 | 2 | 3;
   deckName?: string;
+  quizLevel?: QuizDifficultyLevel;
 }
 
 export interface ClassBoardQuizWinner {
@@ -375,6 +392,7 @@ export interface HudLayoutConfig {
   classBoardLessonTitle?: string;
   classBoardLetterMode?: ClassBoardLetterMode;
   classBoardQuestionDurationSec?: number;
+  classBoardQuestionDurationByLevel?: QuizQuestionDurationByLevel;
   classBoardRevealDurationSec?: number;
   classBoardNpcParticipate?: boolean;
   classBoardTtsReadQuestion?: boolean;
@@ -551,7 +569,13 @@ export interface GameConfig {
   lessonPunishmentSingleTtsTemplate?: string;
   lessonPunishmentMultiTtsTemplate?: string;
   customQuizQuestions?: EnglishQuizItem[];
-  quizDecks?: Array<{ id: string; name: string; questions: EnglishQuizItem[] }>;
+  quizDeckSchemaVersion?: number;
+  quizDecks?: Array<{
+    id: string;
+    name: string;
+    level?: QuizDifficultyLevel;
+    questions: EnglishQuizItem[];
+  }>;
   activeQuizDeckId?: string;
   quizQueueLimitDisplay?: number;
   shuffleBeforeEnqueue?: boolean;
@@ -579,6 +603,15 @@ export interface GameConfig {
   hostTtsInterrupt: boolean;
   hostTtsSpeakerRole: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
   hostQuickPhrases: string[];
+
+  // Live Text-to-Voice Độc Lập (Giọng Thầy Giáo phát song song với game, không vào hàng chờ)
+  teacherLiveEngine?: 'google_stream' | 'node_edge';
+  teacherLiveVoice?: string;
+  teacherLiveVolume?: number;
+  teacherLiveRate?: number;
+  teacherLivePitch?: number;
+  teacherLiveShowBubble?: boolean;
+  teacherLiveQuickPhrases?: string[];
 
   showWaypoints: boolean;
   showZoneBounds: boolean;
@@ -626,6 +659,7 @@ export interface GameConfig {
   nameTagScale: number;
   nameTagMaxChars?: number;
   nameTagOffsetY?: number;
+  top1CrownOffsetY?: number;
   streakTagFontFamily?: string;
   streakTagScale?: number;
   scoreTagScale?: number;
@@ -1064,6 +1098,8 @@ export interface SyncPacket {
     | 'PANIC_MUTE'
     | 'TEST_TTS'
     | 'HOST_LIVE_TTS'
+    | 'TEACHER_LIVE_TTS'
+    | 'STOP_TEACHER_LIVE_TTS'
     | 'UPDATE_CONFIG'
     | 'UPDATE_GRID'
     | 'UPDATE_SLOTS'

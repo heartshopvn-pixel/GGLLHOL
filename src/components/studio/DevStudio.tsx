@@ -41,6 +41,10 @@ import {
   ZombieProjectileKind,
 } from '../../types/game';
 import { WsConnectionStatus } from '../../services/syncService';
+import {
+  TeacherLiveVoiceOptions,
+  TeacherLiveVoiceStatus,
+} from '../../services/soundEngine';
 import { TabControl } from './TabControl';
 import { TabAudio } from './TabAudio';
 import { TabNpc } from './TabNpc';
@@ -100,6 +104,12 @@ interface DevStudioProps {
       speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
     }
   ) => void;
+  teacherLiveStatus?: TeacherLiveVoiceStatus;
+  onSpeakTeacherLiveVoice: (
+    text: string,
+    options?: TeacherLiveVoiceOptions & { showBubble?: boolean }
+  ) => void;
+  onStopTeacherLiveVoice: () => void;
   onNextDharmaArticle: () => void;
   onTriggerLike: (count: number, username?: string) => void;
   onTriggerFollow: (username?: string) => void;
@@ -235,6 +245,9 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onPanicMute,
   onTestTTS,
   onSpeakHostLiveText,
+  teacherLiveStatus,
+  onSpeakTeacherLiveVoice,
+  onStopTeacherLiveVoice,
   onNextDharmaArticle,
   onTriggerLike,
   onTriggerFollow,
@@ -719,6 +732,9 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onUpdateConfig={onUpdateConfig}
             onUpdateHudLayout={onUpdateHudLayout}
             onSpeakHostLiveText={onSpeakHostLiveText}
+            teacherLiveStatus={teacherLiveStatus}
+            onSpeakTeacherLiveVoice={onSpeakTeacherLiveVoice}
+            onStopTeacherLiveVoice={onStopTeacherLiveVoice}
             onPanicMute={onPanicMute}
             onSpawnRandom={onSpawnRandom}
             onSpawnBatch={onSpawnBatch}

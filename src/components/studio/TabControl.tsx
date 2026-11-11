@@ -52,10 +52,18 @@ import {
   parseEnglishQuizTxt,
 } from '../../config/constants';
 import {
+  QUIZ_DECK_SCHEMA_VERSION,
   build15MinuteTieredRoundQuestions,
   ensureTieredQuizDecksLoaded,
+  getQuizLevelRewardInfo,
+  normalizeQuizDeckFileName,
 } from '../../config/vocabDecks';
 import { Flower10BadgeIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
+import {
+  TeacherLiveVoiceOptions,
+  TeacherLiveVoiceStatus,
+} from '../../services/soundEngine';
+import { TeacherLiveVoiceCard } from './TeacherLiveVoiceCard';
 
 interface HudCycleSettingsCardProps {
   title: string;
@@ -229,6 +237,12 @@ interface TabControlProps {
       speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none';
     }
   ) => void;
+  teacherLiveStatus?: TeacherLiveVoiceStatus;
+  onSpeakTeacherLiveVoice: (
+    text: string,
+    options?: TeacherLiveVoiceOptions & { showBubble?: boolean }
+  ) => void;
+  onStopTeacherLiveVoice: () => void;
   onPanicMute: () => void;
   onSpawnRandom: (isVip: boolean) => void;
   onSpawnBatch: (count: number) => void;
@@ -286,6 +300,9 @@ export const TabControl: React.FC<TabControlProps> = ({
   onClearNpcWaitingQueue,
   onAdmitNextWaitingStudent,
   onSpeakHostLiveText,
+  teacherLiveStatus,
+  onSpeakTeacherLiveVoice,
+  onStopTeacherLiveVoice,
   onPanicMute,
   onSpawnRandom,
   onSpawnBatch,
@@ -326,7 +343,10 @@ export const TabControl: React.FC<TabControlProps> = ({
       : DEFAULT_QUIZ_DECKS
   );
 
-  const selectedDeckId = config.activeQuizDeckId || quizDecks[0]?.id || 'deck-500-co-ban';
+  const selectedDeckId =
+    config.activeQuizDeckId && quizDecks.some((d) => d.id === config.activeQuizDeckId)
+      ? config.activeQuizDeckId
+      : quizDecks[0]?.id || 'deck-tienganh-de';
   const selectedDeck = quizDecks.find((d) => d.id === selectedDeckId) || quizDecks[0];
 
   // Gán sao may mắn ngẫu nhiên theo tỉ lệ % (Câu hỏi bình thường = 0 sao, 1 sao = x2đ, 2 sao = x3đ, 3 sao = x4đ)
@@ -430,7 +450,7 @@ export const TabControl: React.FC<TabControlProps> = ({
     setQuizImportFeedback('🗑️ Đã xóa sạch hàng chờ câu hỏi!');
   };
 
-  // Nạp file .txt tạo bộ đề mới đặt tên theo file
+  // Nạp file .txt: trùng tên (tienganh-de / tienganh-thuong / tienganh-kho / tienganh-OMG hoặc tên đã có) -> ghi đè; khác tên -> tạo bộ đề riêng biệt mới
   const handleUploadNewDeckFile = (file: File | undefined) => {
     if (!file) return;
     const reader = new FileReader();
@@ -441,45 +461,84 @@ export const TabControl: React.FC<TabControlProps> = ({
         setQuizImportFeedback('⚠️ File .txt chưa đúng định dạng (Nghĩa Việt | Tiếng Anh)');
         return;
       }
-      const newDeckId = `deck-${Date.now()}`;
-      const newDeckName = file.name || `De_${Date.now()}.txt`;
-      const newDeck = {
-        id: newDeckId,
-        name: newDeckName,
-        questions: parsed.map((q) => ({ ...q, deckName: newDeckName })),
-      };
-      const nextDecks = [...quizDecks, newDeck];
-      onUpdateConfig({
-        quizDecks: nextDecks,
-        activeQuizDeckId: newDeckId,
-      });
-      setQuizImportFeedback(`📁 Đã thêm bộ đề "${newDeckName}" (${parsed.length} câu)!`);
+      const { deckName, deckKey, level } = normalizeQuizDeckFileName(file.name);
+      const taggedQuestions = parsed.map((q) => ({
+        ...q,
+        deckName,
+        quizLevel: level,
+      }));
+
+      const existingIdx = quizDecks.findIndex(
+        (d) => normalizeQuizDeckFileName(d.name).deckKey === deckKey
+      );
+
+      if (existingIdx >= 0) {
+        const targetDeck = quizDecks[existingIdx];
+        const updatedDeck = {
+          ...targetDeck,
+          name: deckName,
+          level,
+          questions: taggedQuestions,
+        };
+        const nextDecks = quizDecks.map((d, idx) =>
+          idx === existingIdx ? updatedDeck : d
+        );
+        const rewardSpec = getQuizLevelRewardInfo(deckName);
+        onUpdateConfig({
+          quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
+          quizDecks: nextDecks,
+          activeQuizDeckId: targetDeck.id,
+        });
+        setQuizImportFeedback(
+          `♻️ Đã ghi đè bộ đề "${deckName}" (${parsed.length} câu • Level ${rewardSpec.label}: ${rewardSpec.base}/${rewardSpec.top1}/${rewardSpec.top2}/${rewardSpec.top3})!`
+        );
+      } else {
+        const newDeckId = `deck-${Date.now()}`;
+        const newDeck = {
+          id: newDeckId,
+          name: deckName,
+          level,
+          questions: taggedQuestions,
+        };
+        const nextDecks = [...quizDecks, newDeck];
+        const rewardSpec = getQuizLevelRewardInfo(deckName);
+        onUpdateConfig({
+          quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
+          quizDecks: nextDecks,
+          activeQuizDeckId: newDeckId,
+        });
+        setQuizImportFeedback(
+          `📁 Đã thêm bộ đề mới "${deckName}" (${parsed.length} câu • Level ${rewardSpec.label}: ${rewardSpec.base}/${rewardSpec.top1}/${rewardSpec.top2}/${rewardSpec.top3})!`
+        );
+      }
     };
     reader.readAsText(file, 'utf-8');
   };
 
-  // Xóa file .txt câu hỏi đang chọn khỏi danh sách bộ đề đã load vào
+  // Xóa bộ đề đang chọn khỏi danh sách (nút ✕)
   const handleDeleteSelectedDeck = () => {
     if (!selectedDeck) return;
     const removedName = selectedDeck.name;
     const remainingDecks = quizDecks.filter((d) => d.id !== selectedDeck.id);
     if (remainingDecks.length === 0) {
-      const fallbackDecks = DEFAULT_QUIZ_DECKS;
+      const fallbackDecks = ensureTieredQuizDecksLoaded([], true);
       onUpdateConfig({
+        quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
         quizDecks: fallbackDecks,
-        activeQuizDeckId: fallbackDecks[0]?.id || 'deck-12a1',
+        activeQuizDeckId: fallbackDecks[0]?.id || 'deck-tienganh-de',
       });
       setQuizImportFeedback(
-        `🗑️ Đã xóa tệp "${removedName}" và khôi phục bộ đề mặc định!`
+        `🗑️ Đã xóa "${removedName}" và đặt lại 4 bộ đề mặc định (tienganh-de / thuong / kho / OMG)!`
       );
       return;
     }
     onUpdateConfig({
+      quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
       quizDecks: remainingDecks,
       activeQuizDeckId: remainingDecks[0].id,
     });
     setQuizImportFeedback(
-      `🗑️ Đã xóa tệp câu hỏi "${removedName}" khỏi danh sách bộ đề!`
+      `🗑️ Đã xóa bộ đề "${removedName}" khỏi danh sách!`
     );
   };
 
@@ -556,7 +615,16 @@ export const TabControl: React.FC<TabControlProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* 0A. HÀNG CHỜ ĐỌC SỰ KIỆN & ĐỒNG BỘ GIỌNG ĐỌC CÔ GIÁO (ĐẶT LÊN ĐẦU BẢNG ĐIỀU KHIỂN) */}
+      {/* 00. LIVE TEXT-TO-VOICE ĐỘC LẬP (GIỌNG THẦY GIÁO - CHẠY SONG SONG VỚI GAME, KHÔNG VÀO HÀNG CHỜ) */}
+      <TeacherLiveVoiceCard
+        config={config}
+        teacherLiveStatus={teacherLiveStatus}
+        onUpdateConfig={onUpdateConfig}
+        onSpeakTeacherLiveVoice={onSpeakTeacherLiveVoice}
+        onStopTeacherLiveVoice={onStopTeacherLiveVoice}
+      />
+
+      {/* 0A. HÀNG CHỜ ĐỌC SỰ KIỆN & ĐỒNG BỘ GIỌNG ĐỌC CÔ GIÁO */}
       <section className="p-2.5 rounded-xl bg-stone-900/95 border border-amber-500/45 space-y-2 shadow-md">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -701,14 +769,14 @@ export const TabControl: React.FC<TabControlProps> = ({
                   studentLevelExpEnabled: !config.studentLevelExpEnabled,
                 })
               }
-              title="Bật/tắt hiển thị thẻ Cấp độ (Lv) và điểm kinh nghiệm (+EXP) của học sinh"
+              title="Bật/tắt hiển thị huy hiệu Rank Cấp độ (Lv) của học sinh (EXP tích lũy = Điểm)"
               className={`px-1.5 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition select-none ${
                 config.studentLevelExpEnabled
                   ? 'bg-sky-500/25 border-sky-400 text-sky-200'
                   : 'bg-stone-950 border-stone-700 text-stone-400 hover:bg-stone-800'
               }`}
             >
-              <span>🎖️ Cấp độ (Lv/EXP): {config.studentLevelExpEnabled ? 'Bật' : 'Tắt'}</span>
+              <span>🎖️ Rank (Lv): {config.studentLevelExpEnabled ? 'Bật' : 'Tắt'}</span>
             </button>
 
             <label
@@ -1136,27 +1204,31 @@ export const TabControl: React.FC<TabControlProps> = ({
                 })}
               </div>
 
-              {/* Hàng 3: Chọn bộ đề theo dạng list, tên đề đặt theo tên file txt + Nạp tiếp / Nạp đè / Nạp đầu */}
-              <div className="space-y-1.5 pt-1 border-t border-stone-800">
-                <div className="flex items-center gap-1.5">
+              {/* Hàng 3: Chọn bộ đề rút gọn không tràn khung + nút Tải .txt + nút ✕ xóa */}
+              <div className="space-y-1.5 pt-1 border-t border-stone-800 min-w-0">
+                <div className="flex items-center gap-1 w-full min-w-0">
                   <select
                     value={selectedDeckId}
                     onChange={(e) => onUpdateConfig({ activeQuizDeckId: e.target.value })}
-                    className="flex-1 px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[10.5px] font-bold text-cyan-200 focus:outline-none truncate"
+                    title={selectedDeck ? `${selectedDeck.name} (${selectedDeck.questions.length} câu)` : ''}
+                    className="w-0 min-w-0 flex-1 px-1.5 py-1 rounded bg-stone-900 border border-stone-700 text-[10px] font-bold text-cyan-200 focus:outline-none truncate"
                   >
-                    {quizDecks.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        📄 {d.name} ({d.questions.length} câu)
-                      </option>
-                    ))}
+                    {quizDecks.map((d) => {
+                      const spec = getQuizLevelRewardInfo(d.name);
+                      return (
+                        <option key={d.id} value={d.id}>
+                          📄 {d.name} ({d.questions.length} câu • {spec.label})
+                        </option>
+                      );
+                    })}
                   </select>
 
                   <label
-                    title="Nạp file .txt mới và tạo bộ đề theo tên file"
-                    className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 text-[10px] font-bold text-stone-200 flex items-center gap-1 cursor-pointer shrink-0"
+                    title="Tải đề .txt lên (trùng tên tienganh-de / thuong / kho / OMG hoặc đề đã có sẽ ghi đè; khác tên sẽ tạo bộ đề riêng)"
+                    className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-cyan-500/45 text-[10px] font-bold text-cyan-100 flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap transition"
                   >
-                    <FileUp className="w-3 h-3 text-cyan-400" />
-                    <span>+Tệp .txt</span>
+                    <FileUp className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span>+Tải .txt</span>
                     <input
                       type="file"
                       accept=".txt,text/plain"
@@ -1171,12 +1243,17 @@ export const TabControl: React.FC<TabControlProps> = ({
                   <button
                     type="button"
                     onClick={handleDeleteSelectedDeck}
-                    title={`Xóa tệp câu hỏi "${selectedDeck?.name || ''}" đã load vào`}
-                    className="px-2 py-1 rounded bg-rose-950/85 hover:bg-rose-900 border border-rose-500/50 text-[10px] font-bold text-rose-200 flex items-center gap-1 cursor-pointer shrink-0 transition"
+                    title={`Xóa bộ đề "${selectedDeck?.name || ''}"`}
+                    className="w-6 h-6 rounded bg-rose-950/90 hover:bg-rose-800 border border-rose-500/60 text-[11px] font-black text-rose-200 flex items-center justify-center cursor-pointer shrink-0 leading-none transition"
                   >
-                    <Trash2 className="w-3 h-3 text-rose-300" />
-                    <span>Xóa tệp</span>
+                    ✕
                   </button>
+                </div>
+                <div className="text-[9px] text-stone-400 leading-snug">
+                  Quy ước tên file: <span className="text-emerald-300 font-mono">tienganh-de</span> (5/10/8/7) •{' '}
+                  <span className="text-sky-300 font-mono">tienganh-thuong</span> (7/12/10/9) •{' '}
+                  <span className="text-amber-300 font-mono">tienganh-kho</span> (9/15/13/12) •{' '}
+                  <span className="text-rose-300 font-mono">tienganh-OMG</span> (12/20/18/16). Trùng tên ghi đè, khác tên tạo bộ đề mới.
                 </div>
 
                 {/* Nút bật/tắt xáo trộn + 3 Nút Nạp Đề Tiêu Đề Ngắn Gọn */}
@@ -1201,13 +1278,13 @@ export const TabControl: React.FC<TabControlProps> = ({
                           customQuizQuestions: tiered15,
                         });
                         setQuizImportFeedback(
-                          '🎯 Đã trích ngẫu nhiên 15 câu chuẩn (9 câu 500 từ dễ + 3 câu 300 TB + 2 câu 200 Khó vừa + 1 câu 200 Nâng cao)!'
+                          '🎯 Đã trích ngẫu nhiên 15 câu kiểm tra 15 phút (8 câu Dễ + 5 câu Thường + 2 câu Khó)!'
                         );
                       }}
-                      title="Trích ngẫu nhiên 15 câu theo đúng cấu trúc: 9 câu đầu bộ 500 từ dễ + 3 câu bộ 300 trung bình + 2 câu bộ 200 khó vừa + 1 câu cuối bộ 200 khó nâng cao"
+                      title="Trích ngẫu nhiên 15 câu kiểm tra 15 phút: 8 câu đầu Dễ (tienganh-de) + 5 câu kế Thường (tienganh-thuong) + 2 câu kế Khó (tienganh-kho)"
                       className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
                     >
-                      🎯 Trích 15 câu (9+3+2+1)
+                      🎯 Trích 15 câu (8+5+2)
                     </button>
                     <button
                       type="button"

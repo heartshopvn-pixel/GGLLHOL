@@ -2234,6 +2234,72 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             </div>
           </div>
 
+          {/* Điều chỉnh vị trí dọc của Vương Miện Top 1 trên đầu học sinh (Lên / Xuống) */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-amber-500/25 text-[10.5px]">
+            <span className="font-bold text-yellow-300">
+              👑 Vị trí dọc Vương miện Top 1:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    top1CrownOffsetY: Math.max(
+                      -60,
+                      (config.top1CrownOffsetY ?? 0) - 1
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+                title="Nâng vương miện lên cao (-1px)"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={-60}
+                max={60}
+                step={1}
+                value={config.top1CrownOffsetY ?? 0}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    top1CrownOffsetY: parseInt(e.target.value, 10) || 0,
+                  })
+                }
+                className="w-20 accent-yellow-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    top1CrownOffsetY: Math.min(
+                      60,
+                      (config.top1CrownOffsetY ?? 0) + 1
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-yellow-500/20 hover:bg-yellow-500/35 border border-yellow-400/40 flex items-center justify-center text-yellow-300 cursor-pointer"
+                title="Hạ vương miện xuống thấp (+1px)"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ top1CrownOffsetY: 0 })}
+                className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[9px] font-mono text-stone-300 cursor-pointer"
+                title="Đặt về mặc định (0px)"
+              >
+                0px
+              </button>
+              <span className="w-11 text-right font-mono font-bold text-yellow-300 tabular-nums">
+                {(config.top1CrownOffsetY ?? 0) > 0
+                  ? `+${config.top1CrownOffsetY}`
+                  : config.top1CrownOffsetY ?? 0}
+                px
+              </span>
+            </div>
+          </div>
+
           {/* THẺ COMBO TRẢ LỜI ĐÚNG LIÊN TIẾP (ĐẶT SÁT BÊN DEV THẺ TÊN): CHỈNH FONT + SIZE */}
           <div className="pt-2 border-t border-amber-500/25 space-y-1.5">
             <div className="flex items-center justify-between gap-2 text-[10.5px]">
