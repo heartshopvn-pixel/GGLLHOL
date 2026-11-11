@@ -286,6 +286,7 @@ class TempleSoundService {
   >();
   private inFlightPrefetches = new Map<string, Promise<string | null>>();
   private readonly MAX_BLOB_CACHE = 45;
+  private currentUtterance: SpeechSynthesisUtterance | null = null;
 
   private ttsDiagnostic: TtsVoiceDiagnosticSnapshot = {
     health: 'healthy',
@@ -454,7 +455,7 @@ class TempleSoundService {
             const oldestKey = this.audioBlobCache.keys().next().value;
             if (oldestKey) {
               const oldBlobUrl = this.audioBlobCache.get(oldestKey);
-              if (oldBlobUrl) {
+              if (oldBlobUrl && this.currentAudio?.src !== oldBlobUrl) {
                 try {
                   URL.revokeObjectURL(oldBlobUrl);
                 } catch {
@@ -502,12 +503,17 @@ class TempleSoundService {
   ): GameConfig {
     // Quy chuẩn đồng nhất 100%: Mọi giọng đọc Tiếng Việt (Cô giáo giảng bài, Sự kiện quà/comment, Chủ phòng Live)
     // đều dùng chung 1 giọng Nữ Node.js duy nhất (vi-VN-HoaiMyNeural) để không bao giờ bị nhảy loạn màu giọng
+    const resolvedHostEngine =
+      config.hostTtsEngine || config.ttsEngine || 'node_edge';
     if (isHostLive) {
       return {
         ...config,
         ttsEnabled: true,
-        ttsEngine: 'node_edge',
-        nodeVoice: 'vi-VN-HoaiMyNeural',
+        ttsEngine: resolvedHostEngine,
+        nodeVoice:
+          resolvedHostEngine === 'google_stream'
+            ? 'google-vi-gtx'
+            : 'vi-VN-HoaiMyNeural',
         selectedSystemVoiceURI:
           config.hostSystemVoiceURI !== undefined
             ? config.hostSystemVoiceURI
@@ -519,10 +525,14 @@ class TempleSoundService {
       };
     }
 
+    const resolvedEngine = config.ttsEngine || 'node_edge';
     return {
       ...config,
-      ttsEngine: 'node_edge',
-      nodeVoice: 'vi-VN-HoaiMyNeural',
+      ttsEngine: resolvedEngine,
+      nodeVoice:
+        resolvedEngine === 'google_stream'
+          ? 'google-vi-gtx'
+          : 'vi-VN-HoaiMyNeural',
       ttsPitch: 1.0,
     };
   }
@@ -535,9 +545,16 @@ class TempleSoundService {
     speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): string | null {
     const eff = this.buildEffectiveItemConfig(config, isHostLive, speakerRole);
+    if (eff.ttsEngine === 'web_speech') return null;
     const preparedText =
       lang === 'en' ? this.normalizeEnglishVocabText(text) : text;
     const shortText = preparedText.slice(0, 195);
+    if (eff.ttsEngine === 'google_stream') {
+      const gVoice = lang === 'en' ? 'google-en-gtx' : 'google-vi-gtx';
+      return `/api/tts?lang=${lang}&voice=${encodeURIComponent(
+        gVoice
+      )}&text=${encodeURIComponent(shortText)}`;
+    }
     const targetEdgeVoice =
       lang === 'en' ? 'en-US-AndrewNeural' : 'vi-VN-HoaiMyNeural';
     const candidates = this.buildNodeTtsCandidateUrls(
@@ -935,7 +952,15 @@ class TempleSoundService {
       clearTimeout(this.mutedSimTimer);
       this.mutedSimTimer = null;
     }
-    if ('speechSynthesis' in window) {
+    if (this.currentUtterance) {
+      this.currentUtterance.onend = null;
+      this.currentUtterance.onerror = null;
+      this.currentUtterance = null;
+    }
+    if (
+      'speechSynthesis' in window &&
+      (window.speechSynthesis.speaking || window.speechSynthesis.pending)
+    ) {
       window.speechSynthesis.cancel();
     }
     if (this.currentAudio) {
@@ -2308,7 +2333,7 @@ class TempleSoundService {
       .trim();
     if (!cleaned) return false;
 
-    const chunks = this.splitLongLessonText(cleaned, 175);
+    const chunks = this.splitLongLessonText(cleaned, 115);
     if (chunks.length === 0) return false;
 
     // Nếu đang có câu khác phát trên kênh chính thì ngắt gọn để tuyệt đối không bao giờ bị 2 giọng đọc đè chồng lên nhau khi Live
@@ -2715,48 +2740,65 @@ class TempleSoundService {
   }
 
   /**
-   * Tách câu dài (> 175 ký tự) theo dấu câu hoặc khoảng trắng để không bao giờ bị cắt cụt ở giới hạn 195 ký tự của stream TTS
+   * Tách câu theo dấu kết thúc câu (. ! ?) và giới hạn độ dài an toàn (<= 115 ký tự Tiếng Việt)
+   * để không bao giờ bị Google Translate TTS cắt cụt ở giới hạn ~180 byte UTF-8 hoặc bị trình duyệt ngắt giữa chừng ở câu ghép dài (Luồng 5 & 6).
    */
-  private splitLongLessonText(rawText: string, maxLen = 175): string[] {
+  private splitLongLessonText(rawText: string, maxLen = 115): string[] {
     const clean = (rawText || '').replace(/\s+/g, ' ').trim();
     if (!clean) return [];
-    if (clean.length <= maxLen) return [clean];
 
-    const clauses = clean
-      .split(/(?<=[.!?।,;:])\s+/)
+    // 1. Tách theo câu hoàn chỉnh (. ! ?) trước để tránh lỗi cắt vế sau dấu chấm than trên Google Stream / Web Speech
+    const sentences = clean
+      .split(/(?<=[.!?।])\s+/)
       .map((s) => s.trim())
       .filter(Boolean);
 
     const chunks: string[] = [];
-    let current = '';
 
-    const pushWords = (segment: string) => {
-      const words = segment.split(/\s+/).filter(Boolean);
-      for (const w of words) {
-        const candidate = current ? `${current} ${w}` : w;
+    const splitSingleSentence = (sentence: string) => {
+      if (sentence.length <= maxLen) {
+        chunks.push(sentence);
+        return;
+      }
+      const subClauses = sentence
+        .split(/(?<=[,;:])\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      let current = '';
+      const pushWords = (segment: string) => {
+        const words = segment.split(/\s+/).filter(Boolean);
+        for (const w of words) {
+          const candidate = current ? `${current} ${w}` : w;
+          if (candidate.length <= maxLen) {
+            current = candidate;
+          } else {
+            if (current) chunks.push(current);
+            current = w;
+          }
+        }
+      };
+
+      for (const clause of subClauses) {
+        if (clause.length > maxLen) {
+          pushWords(clause);
+          continue;
+        }
+        const candidate = current ? `${current} ${clause}` : clause;
         if (candidate.length <= maxLen) {
           current = candidate;
         } else {
           if (current) chunks.push(current);
-          current = w;
+          current = clause;
         }
       }
+      if (current) chunks.push(current);
     };
 
-    for (const clause of clauses) {
-      if (clause.length > maxLen) {
-        pushWords(clause);
-        continue;
-      }
-      const candidate = current ? `${current} ${clause}` : clause;
-      if (candidate.length <= maxLen) {
-        current = candidate;
-      } else {
-        if (current) chunks.push(current);
-        current = clause;
-      }
+    for (const sentence of sentences) {
+      splitSingleSentence(sentence);
     }
-    if (current) chunks.push(current);
+
     return chunks.length > 0 ? chunks : [clean];
   }
 
@@ -2787,7 +2829,7 @@ class TempleSoundService {
     }> = [];
 
     for (const rawIt of items) {
-      const chunks = this.splitLongLessonText(rawIt.text, 175);
+      const chunks = this.splitLongLessonText(rawIt.text, 115);
       chunks.forEach((chunkText, chunkIdx) => {
         const isLastChunk = chunkIdx === chunks.length - 1;
         expandedItems.push({
@@ -3106,18 +3148,27 @@ class TempleSoundService {
         // Ignore
       }
     }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-
     const isHostLiveItem = Boolean(
       !isDharmaLine && (nextItem?.isHostLive || nextItem?.meta?.isHostLive)
     );
-    const playbackConfig = this.buildEffectiveItemConfig(
+    const effectivePlaybackConfig = this.buildEffectiveItemConfig(
       config,
       isHostLiveItem,
       nextItem?.meta?.speakerRole
     );
+
+    if (this.currentUtterance) {
+      this.currentUtterance.onend = null;
+      this.currentUtterance.onerror = null;
+      this.currentUtterance = null;
+    }
+    if (
+      effectivePlaybackConfig.ttsEngine !== 'web_speech' &&
+      'speechSynthesis' in window &&
+      (window.speechSynthesis.speaking || window.speechSynthesis.pending)
+    ) {
+      window.speechSynthesis.cancel();
+    }
 
     this.isSpeaking = true;
     this.isSpeakingDharma = isDharmaLine;
@@ -3164,7 +3215,14 @@ class TempleSoundService {
       if (completedItem) {
         this.notifyItemFinished(completedItem);
       }
-      this.scheduleNextDharmaStep(isDharmaLine ? 380 : 80);
+      const nextSameStep = Boolean(
+        completedItem?.meta?.lessonStepLabel &&
+          this.ttsQueue[0]?.meta?.lessonStepLabel ===
+            completedItem.meta.lessonStepLabel
+      );
+      this.scheduleNextDharmaStep(
+        isDharmaLine ? 380 : nextSameStep ? 35 : 80
+      );
     };
     this.activeFinishCallback = finish;
 
@@ -3177,14 +3235,14 @@ class TempleSoundService {
       const wordCount = nextText.split(/\s+/).filter(Boolean).length;
       const effectiveMutedRate =
         itemLang === 'en'
-          ? playbackConfig.englishTtsRate ?? 0.95
-          : playbackConfig.ttsRate || 1;
+          ? effectivePlaybackConfig.englishTtsRate ?? 0.95
+          : effectivePlaybackConfig.ttsRate || 1;
       const simDurationMs = Math.max(
-        1400,
+        2200,
         Math.min(
-          8500,
+          18000,
           Math.round(
-            (wordCount * 310) / Math.max(0.5, effectiveMutedRate)
+            (wordCount * 460 + 1200) / Math.max(0.5, effectiveMutedRate)
           )
         )
       );
@@ -3192,12 +3250,44 @@ class TempleSoundService {
       return;
     }
 
+    if (effectivePlaybackConfig.ttsEngine === 'web_speech') {
+      this.playViaWebSpeech(
+        itemLang === 'en' ? this.normalizeEnglishVocabText(nextText) : nextText,
+        effectivePlaybackConfig,
+        token,
+        finish,
+        itemLang === 'en'
+          ? {
+              lang: 'en-US',
+              rate: Math.max(
+                0.5,
+                Math.min(2.0, effectivePlaybackConfig.englishTtsRate ?? 0.95)
+              ),
+            }
+          : { lang: 'vi-VN' },
+        false
+      );
+      return;
+    }
+
+    if (effectivePlaybackConfig.ttsEngine === 'google_stream') {
+      this.playViaGoogleStream(
+        itemLang === 'en' ? this.normalizeEnglishVocabText(nextText) : nextText,
+        effectivePlaybackConfig,
+        token,
+        finish,
+        false,
+        itemLang
+      );
+      return;
+    }
+
     if (itemLang === 'en') {
       // 100% từ vựng Tiếng Anh dùng giọng Nam bản xứ Node.js Edge AI (en-US-AndrewNeural / en-US-GuyNeural)
-      this.playViaNodeEdge(nextText, playbackConfig, token, finish, 'en');
+      this.playViaNodeEdge(nextText, effectivePlaybackConfig, token, finish, 'en');
     } else {
       // 100% Tiếng Việt dùng chung 1 giọng Nữ duy nhất Node.js Edge AI (vi-VN-HoaiMyNeural)
-      this.playViaNodeEdge(nextText, playbackConfig, token, finish, 'vi');
+      this.playViaNodeEdge(nextText, effectivePlaybackConfig, token, finish, 'vi');
     }
   }
 
@@ -3336,14 +3426,18 @@ class TempleSoundService {
 
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
-        fallbackOnce('Server Node.js (#3) trễ >6.4s ➔ Tự chuyển sang #2 Google Stream');
+        fallbackOnce('Server Node.js (#3) trễ >8.5s ➔ Tự chuyển sang #2 Google Stream');
       }
-    }, 6400);
+    }, 8500);
 
-    // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
+    // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF), tính cả thời gian chờ mạng + tốc độ đọc
+    const approxRate = Math.max(0.5, Number(config.ttsRate || 1));
     const estimatedPlayMs = Math.max(
-      5500,
-      Math.min(20000, text.split(/\s+/).length * 460 + 3200)
+      9500,
+      Math.min(
+        28000,
+        Math.ceil(((text.split(/\s+/).length * 560 + 5500) / approxRate))
+      )
     );
     let playbackWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
@@ -3368,7 +3462,7 @@ class TempleSoundService {
         const cand = candidateUrls[i];
         const found = await this.getOrFetchAudioBlobUrl(
           cand,
-          i === 0 ? 5200 : 2000
+          i === 0 ? 7500 : 2500
         );
         if (fallbackTriggered || token !== this.speechTokenSeq) {
           clearNodeTimers();
@@ -3410,14 +3504,14 @@ class TempleSoundService {
           if (playbackWatchdog) clearTimeout(playbackWatchdog);
           const exactMs =
             Math.ceil((audio.duration / Math.max(0.5, effectiveRate)) * 1000) +
-            1500;
+            2200;
           playbackWatchdog = setTimeout(() => {
             if (fallbackTriggered || token !== this.speechTokenSeq) return;
             fallbackTriggered = true;
             clearNodeTimers();
             cleanupAudio();
             onDone();
-          }, Math.max(2200, exactMs));
+          }, Math.max(3000, exactMs));
         }
       };
 
@@ -3574,7 +3668,7 @@ class TempleSoundService {
       );
     };
 
-    const timeoutBudget = isFallbackFromNode ? 1800 : 2300;
+    const timeoutBudget = isFallbackFromNode ? 3400 : 3800;
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
         fallbackOnce(
@@ -3584,9 +3678,13 @@ class TempleSoundService {
     }, timeoutBudget);
 
     // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
+    const approxStreamRate = Math.max(0.5, Number(config.ttsRate || 1));
     const estimatedPlayMs = Math.max(
-      5500,
-      Math.min(20000, shortText.split(/\s+/).length * 460 + 3200)
+      8500,
+      Math.min(
+        28000,
+        Math.ceil(((shortText.split(/\s+/).length * 560 + 4500) / approxStreamRate))
+      )
     );
     let playbackWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
@@ -3792,16 +3890,41 @@ class TempleSoundService {
     }
 
     let settled = false;
+    let cancelDelayTimer: ReturnType<typeof setTimeout> | null = null;
     const settleOnce = () => {
       if (settled || token !== this.speechTokenSeq) return;
       settled = true;
+      if (cancelDelayTimer) {
+        clearTimeout(cancelDelayTimer);
+        cancelDelayTimer = null;
+      }
       clearTimeout(safetyWatchdog);
+      if (this.currentUtterance) {
+        this.currentUtterance.onend = null;
+        this.currentUtterance.onerror = null;
+        this.currentUtterance = null;
+      }
       onDone();
     };
 
-    // Bảo vệ trường hợp trình duyệt treo sự kiện onend của WebSpeech
+    const targetLang = override?.lang || 'vi-VN';
+    const defaultRate = targetLang.toLowerCase().startsWith('en')
+      ? config.englishTtsRate ?? 0.95
+      : config.ttsRate;
+    const resolvedRate = Math.max(
+      0.5,
+      Math.min(2.0, override?.rate ?? defaultRate ?? 1.0)
+    );
+
+    // Bảo vệ trường hợp trình duyệt treo sự kiện onend của WebSpeech (tính theo tốc độ đọc thực tế để không ngắt nhầm câu dài ở Luồng 5 & 6)
     const wordCount = text.split(/\s+/).filter(Boolean).length;
-    const maxExpectedMs = Math.max(4000, Math.min(18000, wordCount * 550 + 2500));
+    const maxExpectedMs = Math.max(
+      6500,
+      Math.min(
+        28000,
+        Math.ceil(((wordCount * 580 + 3200) / Math.max(0.5, resolvedRate)))
+      )
+    );
     const safetyWatchdog = setTimeout(() => {
       if (!settled && token === this.speechTokenSeq) {
         this.recordTtsDiagnosticIncident(
@@ -3822,77 +3945,104 @@ class TempleSoundService {
       settleOnce();
     }, maxExpectedMs);
 
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      const targetLang = override?.lang || 'vi-VN';
-      utter.lang = targetLang;
-      const defaultRate = targetLang.toLowerCase().startsWith('en')
-        ? config.englishTtsRate ?? 0.95
-        : config.ttsRate;
-      utter.rate = Math.max(0.5, Math.min(2.0, override?.rate ?? defaultRate));
-      utter.pitch = override?.pitch ?? config.ttsPitch;
-      utter.volume = config.ttsVolume;
+    const startSpeakingUtterance = () => {
+      if (settled || token !== this.speechTokenSeq) return;
+      try {
+        const utter = new SpeechSynthesisUtterance(text);
+        // Giữ tham chiếu mạnh trên class để trình dọn rác V8 (Chromium GC) tuyệt đối không thu hồi giữa chừng khi đọc câu dài ở Luồng 5 & 6!
+        this.currentUtterance = utter;
+        utter.lang = targetLang;
+        utter.rate = resolvedRate;
+        utter.pitch = override?.pitch ?? config.ttsPitch ?? 1.0;
+        utter.volume = config.ttsVolume;
 
-      const voices = window.speechSynthesis.getVoices();
-      let chosenVoiceName = 'Mặc định trình duyệt';
-      if (targetLang.toLowerCase().startsWith('en')) {
-        const enVoice = voices.find((v) => v.lang.toLowerCase().startsWith('en'));
-        if (enVoice) {
-          utter.voice = enVoice;
-          chosenVoiceName = enVoice.name;
-        }
-      } else {
-        let chosen = config.selectedSystemVoiceURI
-          ? voices.find((v) => v.voiceURI === config.selectedSystemVoiceURI)
-          : undefined;
-        if (!chosen) {
-          chosen = voices.find((v) => v.lang.toLowerCase().includes('vi'));
-        }
-        if (chosen) {
-          utter.voice = chosen;
-          chosenVoiceName = chosen.name;
-        }
-      }
-
-      if (!isFallbackFromStream) {
-        this.ttsDiagnostic = {
-          ...this.ttsDiagnostic,
-          configuredEngineLabel: this.getConfiguredEngineLabel(config),
-          health: 'healthy',
-          activeServerLabel: `Web Speech (#1 • ${chosenVoiceName.slice(0, 22)})`,
-          statusHeadline: 'Ổn định • Đang phát qua #1 Web Speech nội bộ',
-          statusDetail: `Giọng hệ thống: ${chosenVoiceName} (0ms mạng)`,
-          lastLatencyMs: 0,
-          lastUpdatedAt: Date.now(),
-        };
-        this.emitEventQueue();
-      }
-
-      utter.onend = settleOnce;
-      utter.onerror = (ev) => {
-        if (
-          token === this.speechTokenSeq &&
-          ev.error !== 'interrupted' &&
-          ev.error !== 'canceled'
-        ) {
-          this.recordTtsDiagnosticIncident(
-            {
-              type: 'disconnected',
-              fromSource: '#1 Web Speech',
-              toSource: 'Bỏ qua câu lỗi',
-              reason: `Lỗi giọng đọc trình duyệt (${ev.error || 'unknown'})`,
-              textSample: text.slice(0, 48),
-            },
-            {
-              health: 'disconnected',
-              statusHeadline: `❌ Giọng #1 Web Speech báo lỗi (${ev.error || 'ngắt quãng'})`,
-            }
+        const voices = window.speechSynthesis.getVoices();
+        let chosenVoiceName = 'Mặc định trình duyệt';
+        if (targetLang.toLowerCase().startsWith('en')) {
+          const enVoices = voices.filter((v) =>
+            v.lang.toLowerCase().startsWith('en')
           );
+          const maleEnVoice = enVoices.find((v) =>
+            /male|guy|andrew|david|mark|daniel|alex|google uk english male/i.test(
+              v.name
+            )
+          );
+          const enVoice = maleEnVoice || enVoices[0];
+          if (enVoice) {
+            utter.voice = enVoice;
+            chosenVoiceName = enVoice.name;
+          }
+        } else {
+          const viVoices = voices.filter((v) =>
+            v.lang.toLowerCase().includes('vi')
+          );
+          let chosen = config.selectedSystemVoiceURI
+            ? voices.find((v) => v.voiceURI === config.selectedSystemVoiceURI)
+            : undefined;
+          if (!chosen) {
+            chosen =
+              viVoices.find((v) =>
+                /hoaimy|female|linh|google tiếng việt/i.test(v.name)
+              ) || viVoices[0];
+          }
+          if (chosen) {
+            utter.voice = chosen;
+            chosenVoiceName = chosen.name;
+          }
         }
+
+        if (!isFallbackFromStream) {
+          this.ttsDiagnostic = {
+            ...this.ttsDiagnostic,
+            configuredEngineLabel: this.getConfiguredEngineLabel(config),
+            health: 'healthy',
+            activeServerLabel: `Web Speech (#1 • ${chosenVoiceName.slice(0, 22)})`,
+            statusHeadline: 'Ổn định • Đang phát qua #1 Web Speech nội bộ',
+            statusDetail: `Giọng hệ thống: ${chosenVoiceName} (0ms mạng)`,
+            lastLatencyMs: 0,
+            lastUpdatedAt: Date.now(),
+          };
+          this.emitEventQueue();
+        }
+
+        utter.onend = settleOnce;
+        utter.onerror = (ev) => {
+          if (
+            token === this.speechTokenSeq &&
+            ev.error !== 'interrupted' &&
+            ev.error !== 'canceled'
+          ) {
+            this.recordTtsDiagnosticIncident(
+              {
+                type: 'disconnected',
+                fromSource: '#1 Web Speech',
+                toSource: 'Bỏ qua câu lỗi',
+                reason: `Lỗi giọng đọc trình duyệt (${ev.error || 'unknown'})`,
+                textSample: text.slice(0, 48),
+              },
+              {
+                health: 'disconnected',
+                statusHeadline: `❌ Giọng #1 Web Speech báo lỗi (${ev.error || 'ngắt quãng'})`,
+              }
+            );
+          }
+          settleOnce();
+        };
+        window.speechSynthesis.speak(utter);
+      } catch {
         settleOnce();
-      };
-      window.speechSynthesis.speak(utter);
+      }
+    };
+
+    try {
+      const needCancel =
+        window.speechSynthesis.speaking || window.speechSynthesis.pending;
+      if (needCancel) {
+        window.speechSynthesis.cancel();
+        cancelDelayTimer = setTimeout(startSpeakingUtterance, 45);
+      } else {
+        startSpeakingUtterance();
+      }
     } catch {
       settleOnce();
     }

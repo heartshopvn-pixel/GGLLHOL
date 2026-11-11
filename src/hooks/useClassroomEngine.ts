@@ -3997,10 +3997,20 @@ export function useClassroomEngine() {
         }
 
         const latestBoard = classBoardStateRef.current;
+        const startedAtWallMs =
+          latestBoard.phaseEndAt &&
+          latestBoard.phaseEndAt > 0 &&
+          latestBoard.totalDurationMs
+            ? latestBoard.phaseEndAt - latestBoard.totalDurationMs
+            : 0;
+        const exactFinishedElapsedMs =
+          startedAtWallMs > 0
+            ? Math.max(0, Date.now() - startedAtWallMs)
+            : latestBoard.elapsedPhaseMs || 0;
         const nextBoard: ClassBoardRuntimeState = {
           ...latestBoard,
           ttsFinishedForPhase: true,
-          ttsFinishedAtElapsedMs: latestBoard.elapsedPhaseMs || 0,
+          ttsFinishedAtElapsedMs: exactFinishedElapsedMs,
         };
         classBoardStateRef.current = nextBoard;
         setClassBoardState(nextBoard);
@@ -10340,12 +10350,20 @@ export function useClassroomEngine() {
 
       // Bù trễ phản hồi server 2s: Sau khi đồng hồ hiển thị đếm về 0s, vẫn giữ luồng 'asking' thêm 2000ms (2s) để nhận câu trả lời thực tế
       const ASKING_POST_ZERO_GRACE_MS = 2000;
+      const stillPendingPhaseTts =
+        !soundEngine.isTabMuted() &&
+        Boolean(prev.activeFlowToken) &&
+        soundEngine.hasPendingFlowToken(prev.activeFlowToken);
+      const finishedAtElapsed = prev.ttsFinishedAtElapsedMs ?? 0;
+      const postTtsGapMs = Math.max(0, nextElapsed - finishedAtElapsed);
 
       let shouldAdvance = false;
       if (prev.phase === 'lesson_start') {
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 2200) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            postTtsGapMs >= 550 &&
+            nextElapsed >= 2200) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 45000));
       } else if (prev.phase === 'preparing') {
         shouldAdvance = nextLeft <= 0;
       } else if (prev.phase === 'asking') {
@@ -10365,37 +10383,56 @@ export function useClassroomEngine() {
       } else if (prev.phase === 'answer_flash') {
         const postTtsWaitMs4 =
           Math.max(0, Number(cfg.lessonFlow4PostTtsDelaySec ?? 1)) * 1000;
-        const finishedAtElapsed = prev.ttsFinishedAtElapsedMs ?? 0;
         shouldAdvance =
           (Boolean(prev.ttsFinishedForPhase) &&
-            nextElapsed - finishedAtElapsed >= postTtsWaitMs4 &&
+            postTtsGapMs >= postTtsWaitMs4 &&
             nextElapsed >= 600) ||
-          nextLeft <= 0;
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 40000));
       } else if (prev.phase === 'result_summary') {
+        // Luồng 5: Bắt buộc đọc trọn vẹn 100% câu vinh danh kết quả + nghỉ tự nhiên 650ms sau khi kết thúc câu rồi mới chuyển sang Luồng 6
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 2800) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            !stillPendingPhaseTts &&
+            postTtsGapMs >= 650 &&
+            nextElapsed >= 2800) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 45000));
       } else if (prev.phase === 'ranking_board' || prev.phase === 'reveal') {
+        // Luồng 6: Bắt buộc đọc trọn vẹn 100% câu bảng xếp hạng + nghỉ tự nhiên 650ms sau khi kết thúc câu rồi mới sang câu hỏi tiếp theo
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 3200) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            !stillPendingPhaseTts &&
+            postTtsGapMs >= 650 &&
+            nextElapsed >= 3200) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 45000));
       } else if (prev.phase === 'round_end') {
-        // Luồng Kết Thúc (sau câu 15): chờ Cô đọc xong + tiếng vỗ tay kết thúc mới kết thúc vòng và sang game mới
+        // Luồng Kết Thúc: chờ Cô đọc xong toàn bộ các vế + tiếng vỗ tay kết thúc mới sang game mới
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 4500) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            !stillPendingPhaseTts &&
+            nextElapsed >= 4500) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 65000));
       } else if (prev.phase === 'record_notice') {
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 2600) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            !stillPendingPhaseTts &&
+            postTtsGapMs >= 650 &&
+            nextElapsed >= 2600) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 45000));
       } else if (prev.phase === 'punishment_notice') {
         shouldAdvance =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= 2500) ||
-          nextLeft <= 0;
+          (Boolean(prev.ttsFinishedForPhase) &&
+            !stillPendingPhaseTts &&
+            postTtsGapMs >= 650 &&
+            nextElapsed >= 2500) ||
+          (nextLeft <= 0 && (!stillPendingPhaseTts || nextElapsed >= 45000));
       }
 
       const followerExtraGraceMs =
-        prev.phase === 'asking' ? ASKING_POST_ZERO_GRACE_MS + 2500 : 2500;
+        prev.phase === 'asking'
+          ? ASKING_POST_ZERO_GRACE_MS + 2500
+          : prev.phase === 'preparing'
+          ? 2500
+          : 10000;
       const followerGraceExpired =
         isPassiveFollowerTab &&
         shouldAdvance &&
@@ -10521,6 +10558,7 @@ export function useClassroomEngine() {
           lessonStepNumber: 1,
           activeFlowToken: undefined,
           ttsFinishedForPhase: false,
+          ttsFinishedAtElapsedMs: undefined,
           idleChatTriggered: false,
           elapsedPhaseMs: 0,
           timeLeftMs: prepDurMs,
@@ -10584,6 +10622,7 @@ export function useClassroomEngine() {
           lessonStepNumber: 2,
           activeFlowToken: undefined,
           ttsFinishedForPhase: false,
+          ttsFinishedAtElapsedMs: undefined,
           idleChatTriggered: false,
           elapsedPhaseMs: 0,
           timeLeftMs: askDurMs,
@@ -10681,15 +10720,6 @@ export function useClassroomEngine() {
       if (prev.phase === 'answer_flash') {
         const cWinners = prev.classWinners || [];
         const oWinners = prev.outsideWinners || [];
-
-        // CẬP NHẬT CHỖ NGỒI NGAY KHI BẮT ĐẦU LUỒNG SỐ 5:
-        // Loại học sinh trong lớp không trả lời / trả lời sai, đẩy học sinh Top Rank từ Hàng Chờ vào lớp, và thêm đợt NPC mới vào Hàng Chờ
-        ensureResultSummaryPhaseSideEffects(
-          prev.roundSeq || 1,
-          prev.questionIndex,
-          cWinners,
-          oWinners
-        );
 
         const classRightCount = cWinners.length;
         const outsideRightCount = oWinners.length;
@@ -10803,12 +10833,23 @@ export function useClassroomEngine() {
                 },
               ]
             : [];
+        // Đưa câu đọc Luồng 5 của Cô Giáo lên phát TRƯỚC KHI thực hiện cập nhật chỗ ngồi,
+        // đảm bảo lời chào học sinh vào lớp (nếu bật) luôn xếp sau câu đọc kết quả chứ không chiếm kênh trước!
         const enqueued5 =
           flow5TtsItems.length > 0
             ? soundEngine.enqueueLessonFlowItems(flow5TtsItems, cfg)
             : false;
 
-        const fallbackDur5 = enqueued5 ? 15000 : 3800;
+        // CẬP NHẬT CHỖ NGỒI NGAY KHI BẮT ĐẦU LUỒNG SỐ 5:
+        // Loại học sinh trong lớp không trả lời / trả lời sai, đẩy học sinh Top Rank từ Hàng Chờ vào lớp, và thêm đợt NPC mới vào Hàng Chờ
+        ensureResultSummaryPhaseSideEffects(
+          prev.roundSeq || 1,
+          prev.questionIndex,
+          cWinners,
+          oWinners
+        );
+
+        const fallbackDur5 = enqueued5 ? 24000 : 3800;
 
         // Khóa camera vào bạn trả lời nhanh nhất TRONG LỚP trong 2s ngay khi mới vào Luồng 5
         if (flow5CameraLockTimerRef.current !== null) {
@@ -10868,13 +10909,14 @@ export function useClassroomEngine() {
           lessonStepNumber: 5,
           activeFlowToken: flowToken5,
           ttsFinishedForPhase: !enqueued5,
+          ttsFinishedAtElapsedMs: !enqueued5 ? 0 : undefined,
           elapsedPhaseMs: 0,
           timeLeftMs: fallbackDur5,
           totalDurationMs: fallbackDur5,
           phaseEndAt: Date.now() + fallbackDur5,
           showResultEngine: true,
           seatUpdateTriggered: true,
-          totalQuestions: quizList.length,
+          totalQuestions: QUESTIONS_PER_ROUND,
           currentQuestion: curQuiz,
         };
         classBoardStateRef.current = resultSummaryState;
@@ -11255,13 +11297,14 @@ export function useClassroomEngine() {
             }, 7000);
           }
 
-          const fallbackDurRoundEnd = enqueuedRoundEnd ? 32000 : 11000;
+          const fallbackDurRoundEnd = enqueuedRoundEnd ? 36000 : 11000;
           const roundEndState: ClassBoardRuntimeState = {
             ...prev,
             phase: 'round_end',
             lessonStepNumber: 6,
             activeFlowToken: flowTokenRoundEnd,
             ttsFinishedForPhase: !enqueuedRoundEnd,
+            ttsFinishedAtElapsedMs: !enqueuedRoundEnd ? 0 : undefined,
             elapsedPhaseMs: 0,
             timeLeftMs: fallbackDurRoundEnd,
             totalDurationMs: fallbackDurRoundEnd,
@@ -11374,13 +11417,14 @@ export function useClassroomEngine() {
           cfg
         );
 
-        const fallbackDur6 = enqueued6 ? 16000 : 5000;
+        const fallbackDur6 = enqueued6 ? 24000 : 5000;
         const rankingBoardState: ClassBoardRuntimeState = {
           ...prev,
           phase: 'ranking_board',
           lessonStepNumber: 6,
           activeFlowToken: flowToken6,
           ttsFinishedForPhase: !enqueued6,
+          ttsFinishedAtElapsedMs: !enqueued6 ? 0 : undefined,
           elapsedPhaseMs: 0,
           timeLeftMs: fallbackDur6,
           totalDurationMs: fallbackDur6,
@@ -11504,6 +11548,7 @@ export function useClassroomEngine() {
           podiumWinners: undefined,
           activeFlowToken: flowTokenStartNew,
           ttsFinishedForPhase: !enqueuedStartNew,
+          ttsFinishedAtElapsedMs: !enqueuedStartNew ? 0 : undefined,
           idleChatTriggered: false,
           elapsedPhaseMs: 0,
           timeLeftMs: dur0New,
@@ -11521,7 +11566,6 @@ export function useClassroomEngine() {
           state: newRoundStartState,
           customQuizQuestions: newRoundQuizList,
           lessonTtsItems: startTtsItemsNew,
-          force: true,
         });
         return;
       }
@@ -11629,7 +11673,7 @@ export function useClassroomEngine() {
             cfg
           );
 
-          const fallbackDurRecord = enqueuedRecord ? 15000 : 4500;
+          const fallbackDurRecord = enqueuedRecord ? 22000 : 4500;
           const nowRecordMs = Date.now();
           setCameraFocus({
             pilgrimId: top1SeatedStudent.id,
@@ -11648,6 +11692,7 @@ export function useClassroomEngine() {
             lessonStepNumber: 6,
             activeFlowToken: flowTokenRecord,
             ttsFinishedForPhase: !enqueuedRecord,
+            ttsFinishedAtElapsedMs: !enqueuedRecord ? 0 : undefined,
             elapsedPhaseMs: 0,
             timeLeftMs: fallbackDurRecord,
             totalDurationMs: fallbackDurRecord,
@@ -11803,13 +11848,14 @@ export function useClassroomEngine() {
             cfg
           );
 
-          const fallbackDurPunish = enqueuedPunish ? 15000 : 4200;
+          const fallbackDurPunish = enqueuedPunish ? 22000 : 4200;
           const punishNoticeState: ClassBoardRuntimeState = {
             ...prev,
             phase: 'punishment_notice',
             lessonStepNumber: 6,
             activeFlowToken: flowTokenPunish,
             ttsFinishedForPhase: !enqueuedPunish,
+            ttsFinishedAtElapsedMs: !enqueuedPunish ? 0 : undefined,
             elapsedPhaseMs: 0,
             timeLeftMs: fallbackDurPunish,
             totalDurationMs: fallbackDurPunish,
@@ -11920,6 +11966,7 @@ export function useClassroomEngine() {
         lessonStepNumber: 1,
         activeFlowToken: undefined,
         ttsFinishedForPhase: false,
+        ttsFinishedAtElapsedMs: undefined,
         idleChatTriggered: false,
         elapsedPhaseMs: 0,
         timeLeftMs: prepDurMs,
@@ -13738,6 +13785,25 @@ export function useClassroomEngine() {
               !p.force &&
               (incRound < curRound ||
                 (incRound === curRound && incOrder < curOrder))
+            ) {
+              break;
+            }
+
+            // Chống cắt ngang câu đang đọc giữa chừng ở Luồng 5 / Luồng 6 do tab khác (VD: tab tắt tiếng hoặc tab chạy giả lập nhanh hơn) gửi gói tự chuyển luồng sớm:
+            // Nếu tab hiện tại đang BẬT tiếng và Cô Giáo vẫn đang đọc dở câu thuộc luồng hiện tại (activeFlowToken), bỏ qua gói tự chuyển luồng sớm để đọc trọn câu 100%!
+            const isAutoPhaseAdvanceFromPeer =
+              !p.force &&
+              incoming.isRunning &&
+              current.isRunning &&
+              (incoming.phase !== current.phase || incRound !== curRound);
+            const isActivelySpeakingCurrentFlowLocally =
+              !soundEngine.isTabMuted() &&
+              Boolean(current.activeFlowToken) &&
+              !current.ttsFinishedForPhase &&
+              soundEngine.hasPendingFlowToken(current.activeFlowToken);
+            if (
+              isAutoPhaseAdvanceFromPeer &&
+              isActivelySpeakingCurrentFlowLocally
             ) {
               break;
             }

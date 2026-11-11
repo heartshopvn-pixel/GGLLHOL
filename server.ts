@@ -579,7 +579,7 @@ async function startServer() {
     for (let idx = 0; idx < endpoints.length; idx++) {
       const ep = endpoints[idx];
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2200);
+      const timeout = setTimeout(() => controller.abort(), 3500);
       try {
         const response = await fetch(ep.url, {
           signal: controller.signal,
@@ -696,13 +696,13 @@ async function startServer() {
 
       const guardTimer = setTimeout(() => {
         doneErr(new Error(`Edge Neural TTS timeout (${edgeVoice})`));
-      }, 4800);
+      }, 8000);
 
       (async () => {
         try {
           ttsInstance = new MsEdgeTTS({
-            connectionTimeoutMs: 3800,
-            synthesisTimeoutMs: 4400,
+            connectionTimeoutMs: 4500,
+            synthesisTimeoutMs: 7500,
           });
           await ttsInstance.setMetadata(
             edgeVoice,
