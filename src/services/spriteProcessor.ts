@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 
-const CACHE_VERSION = 'v8_auto_downscale_vram_cache';
+const CACHE_VERSION = 'v9_teacher_hd_512x768';
 const processedCache = new Map<string, string[]>();
 const pendingPromises = new Map<string, Promise<string[]>>();
+
+export interface SpriteFrameDimensions {
+  width: number;
+  height: number;
+}
 
 /**
  * Bộ 44 file PNG nền trong suốt đã được tách nền, khử bóng sàn & cắt chuẩn từng frame (180x260) sẵn trên đĩa.
@@ -155,7 +160,8 @@ function canvasToObjectUrl(canvas: HTMLCanvasElement): Promise<string> {
  */
 export function processHorizontalSpritesheet(
   url: string,
-  expectedFrames: number
+  expectedFrames: number,
+  customFrameSize?: SpriteFrameDimensions
 ): Promise<string[]> {
   if (BAKED_STATIC_FRAMES[url] && BAKED_STATIC_FRAMES[url].length === expectedFrames) {
     return Promise.resolve(BAKED_STATIC_FRAMES[url]);
@@ -168,7 +174,14 @@ export function processHorizontalSpritesheet(
     return Promise.resolve(BAKED_STATIC_FRAMES[normalizedUrl]);
   }
 
-  const cacheKey = `${CACHE_VERSION}::${url}::${expectedFrames}`;
+  // Mở giới hạn độ phân giải riêng cho Thầy/Cô (expectedFrames === 8) lên chuẩn HD 512x768 mỗi ô;
+  // giữ nguyên 180x260 cho Học sinh (expectedFrames === 10) để nhẹ VRAM khi đông người.
+  const outW =
+    customFrameSize?.width || (expectedFrames === 8 ? 512 : 180);
+  const outH =
+    customFrameSize?.height || (expectedFrames === 8 ? 768 : 260);
+
+  const cacheKey = `${CACHE_VERSION}::${url}::${expectedFrames}::${outW}x${outH}`;
   if (processedCache.has(cacheKey)) {
     return Promise.resolve(processedCache.get(cacheKey)!);
   }
@@ -424,13 +437,32 @@ export function processHorizontalSpritesheet(
           }
         }
 
+        // Kiểm tra nếu ảnh được thiết kế chuẩn theo lưới ô đều nhau (VD: 8 ô 512x768 = 4096x768) và không bị tràn viền giữa các ô
+        const cellAspect = W / expectedFrames / Math.max(1, cropH);
+        const targetAspect = outW / outH;
+        let cleanUniformGridBorders = true;
+        for (let i = 1; i < expectedFrames; i++) {
+          const borderX = Math.round((i * W) / expectedFrames);
+          if (colHasPixel[borderX]) {
+            cleanUniformGridBorders = false;
+            break;
+          }
+        }
+        const isDesignedUniformGrid =
+          cleanUniformGridBorders && Math.abs(cellAspect - targetAspect) < 0.08;
+
+        const uniformGridSegments: { startX: number; endX: number }[] =
+          Array.from({ length: expectedFrames }, (_, i) => ({
+            startX: Math.round((i * W) / expectedFrames),
+            endX: Math.round(((i + 1) * W) / expectedFrames) - 1,
+          }));
+
         const finalSegments: { startX: number; endX: number }[] =
-          mergedSegments.length === expectedFrames
+          isDesignedUniformGrid
+            ? uniformGridSegments
+            : mergedSegments.length === expectedFrames
             ? mergedSegments
-            : Array.from({ length: expectedFrames }, (_, i) => ({
-                startX: Math.round((i * W) / expectedFrames),
-                endX: Math.round(((i + 1) * W) / expectedFrames) - 1,
-              }));
+            : uniformGridSegments;
 
         let globalMaxY = Math.round(cropH * 0.96);
         let globalMinY = Math.round(cropH * 0.04);
@@ -457,49 +489,78 @@ export function processHorizontalSpritesheet(
           if (found) break;
         }
 
+        const bottomPadPx = Math.max(2, Math.round(outH * 0.01));
         const charSpanH = Math.max(100, globalMaxY - globalMinY + 6);
-        const outW = 180;
-        const outH = 260;
-        const scale = (outH - 6) / charSpanH;
+        const maxSegW = Math.max(
+          1,
+          ...finalSegments.map((s) => s.endX - s.startX + 1)
+        );
+        const scale = Math.min(
+          (outH - bottomPadPx * 2) / charSpanH,
+          (outW - 4) / maxSegW
+        );
+
+        // Nếu người dùng thiết kế sẵn PNG nền trong suốt chuẩn lưới 2:3 (VD: đúng 512x768 mỗi ô = 4096x768),
+        // cắt nguyên bản 1:1 từng ô (không tự dịch tâm hay co kéo lại) để giữ trọn 100% độ nét pixel & tâm chân gốc!
+        const preserveExactArtistCell = !cornerWhite && isDesignedUniformGrid;
 
         const frameCanvases = finalSegments.map((seg) => {
           const segW = seg.endX - seg.startX + 1;
-          let frameMaxY = globalMaxY;
-          for (let y = cropH - 1; y >= globalMinY; y--) {
-            let count = 0;
-            for (let x = seg.startX; x <= seg.endX; x++) {
-              if (data[(y * W + x) * 4 + 3] > 80) {
-                count++;
-                if (count >= 2) break;
-              }
-            }
-            if (count >= 2) {
-              frameMaxY = y;
-              break;
-            }
-          }
-
-          const sliceH = Math.max(40, frameMaxY - globalMinY + 1);
           const fCanvas = document.createElement('canvas');
           fCanvas.width = outW;
           fCanvas.height = outH;
           const fCtx = fCanvas.getContext('2d');
           if (fCtx) {
-            const drawW = segW * scale;
-            const drawH = sliceH * scale;
-            const dx = (outW - drawW) / 2;
-            const dy = outH - 2 - drawH;
-            fCtx.drawImage(
-              workCanvas,
-              seg.startX,
-              globalMinY,
-              segW,
-              sliceH,
-              dx,
-              dy,
-              drawW,
-              drawH
-            );
+            fCtx.imageSmoothingEnabled = true;
+            fCtx.imageSmoothingQuality = 'high';
+
+            if (preserveExactArtistCell) {
+              fCtx.drawImage(
+                workCanvas,
+                seg.startX,
+                0,
+                segW,
+                cropH,
+                0,
+                0,
+                outW,
+                outH
+              );
+            } else {
+              let frameMaxY = globalMaxY;
+              if (!isDesignedUniformGrid) {
+                for (let y = cropH - 1; y >= globalMinY; y--) {
+                  let count = 0;
+                  for (let x = seg.startX; x <= seg.endX; x++) {
+                    if (data[(y * W + x) * 4 + 3] > 80) {
+                      count++;
+                      if (count >= 2) break;
+                    }
+                  }
+                  if (count >= 2) {
+                    frameMaxY = y;
+                    break;
+                  }
+                }
+              }
+
+              const sliceH = Math.max(40, frameMaxY - globalMinY + 1);
+              const drawW = segW * scale;
+              const drawH = sliceH * scale;
+              const dx = (outW - drawW) / 2;
+              const dy = outH - bottomPadPx - drawH;
+              fCtx.drawImage(
+                workCanvas,
+                seg.startX,
+                globalMinY,
+                segW,
+                sliceH,
+                dx,
+                dy,
+                drawW,
+                drawH
+              );
+            }
           }
           return fCanvas;
         });
@@ -588,15 +649,22 @@ export function getStaticBakedFrames(
 export function useProcessedSpriteFrames(
   url: string | null,
   expectedFrames: number,
-  fallbackUrl?: string | null
+  fallbackUrl?: string | null,
+  customFrameSize?: SpriteFrameDimensions
 ): string[] | null {
   const defaultStatic = getStaticBakedFrames(fallbackUrl, expectedFrames);
+  const outW =
+    customFrameSize?.width || (expectedFrames === 8 ? 512 : 180);
+  const outH =
+    customFrameSize?.height || (expectedFrames === 8 ? 768 : 260);
 
   const [frames, setFrames] = useState<string[] | null>(() => {
     const directBaked = getStaticBakedFrames(url, expectedFrames);
     if (directBaked) return directBaked;
     if (url) {
-      const cached = processedCache.get(`${CACHE_VERSION}::${url}::${expectedFrames}`);
+      const cached = processedCache.get(
+        `${CACHE_VERSION}::${url}::${expectedFrames}::${outW}x${outH}`
+      );
       if (cached && cached.length === expectedFrames) return cached;
     }
     return defaultStatic;
@@ -613,7 +681,10 @@ export function useProcessedSpriteFrames(
       return;
     }
     let cancelled = false;
-    processHorizontalSpritesheet(url, expectedFrames).then((res) => {
+    processHorizontalSpritesheet(url, expectedFrames, {
+      width: outW,
+      height: outH,
+    }).then((res) => {
       if (cancelled) return;
       if (res && res.length === expectedFrames) {
         setFrames((prev) => (prev === res ? prev : res));
@@ -624,7 +695,7 @@ export function useProcessedSpriteFrames(
     return () => {
       cancelled = true;
     };
-  }, [url, expectedFrames, defaultStatic]);
+  }, [url, expectedFrames, defaultStatic, outW, outH]);
 
   return frames || defaultStatic;
 }
@@ -833,13 +904,15 @@ export function processSingleCutoutImage(rawUrl: string): Promise<string> {
         const cropW = maxX - minX + 1;
         const cropH = maxY - minY + 1;
 
-        // Auto-Downscale Sprite Cache: Giới hạn kích thước bitmap giải nén trong VRAM (tối đa 320px cho học sinh/vật phẩm, 420px cho bàn học/giáo viên)
-        // Giúp giảm 15-20 lần dung lượng VRAM trên TikTok Live Studio mà vẫn giữ độ nét Retina 2x
-        const isLargeStageProp =
-          url.includes('Desk') ||
-          url.includes('Teacher') ||
-          url.includes('zombie');
-        const maxAllowedDim = isLargeStageProp ? 420 : 320;
+        // Auto-Downscale Sprite Cache: Mở riêng giới hạn 768px (chuẩn 512x768) cho Giáo Viên để zoom cận cảnh sắc nét;
+        // giữ 420px cho bàn học/zombie và 320px cho học sinh/vật phẩm để tiết kiệm VRAM.
+        const isTeacherCutout = url.includes('Teacher');
+        const isLargeStageProp = url.includes('Desk') || url.includes('zombie');
+        const maxAllowedDim = isTeacherCutout
+          ? 768
+          : isLargeStageProp
+          ? 420
+          : 320;
         const maxCropSide = Math.max(cropW, cropH);
         const downscaleRatio =
           maxCropSide > maxAllowedDim ? maxAllowedDim / maxCropSide : 1;

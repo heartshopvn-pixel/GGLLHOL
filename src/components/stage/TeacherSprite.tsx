@@ -70,7 +70,10 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
       ? customAssets.seniorNoviceSpritesheetUrl
       : customAssets.juniorNoviceSpritesheetUrl;
 
-  const customFrames = useProcessedSpriteFrames(rawSheetUrl, 8, null);
+  const customFrames = useProcessedSpriteFrames(rawSheetUrl, 8, null, {
+    width: 512,
+    height: 768,
+  });
   const frameIdx = getTeacherFrameIndex(monk);
   const customFrameSrc =
     rawSheetUrl && customFrames && customFrames[frameIdx]
@@ -195,7 +198,9 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
           <img
             src={customFrameSrc}
             alt={monk.name}
-            className="w-16 h-24 object-contain select-none pointer-events-none"
+            decoding="async"
+            draggable={false}
+            className="w-16 h-24 object-contain object-bottom select-none pointer-events-none"
             style={{
               transform: monk.facingLeft ? 'scaleX(-1)' : undefined,
             }}
@@ -205,6 +210,8 @@ const TeacherSpriteInner: React.FC<TeacherSpriteProps> = ({
             <img
               src={processedDefaultTeacherSrc}
               alt={monk.name}
+              decoding="async"
+              draggable={false}
               className="w-16 h-24 object-contain object-bottom select-none pointer-events-none"
             />
           </div>

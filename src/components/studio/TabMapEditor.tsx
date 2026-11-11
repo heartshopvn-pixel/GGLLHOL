@@ -3656,14 +3656,14 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           />
 
           <AssetUploadRow
-            label="3. Spritesheet Cô Thảo (8 frames)"
+            label="3. Spritesheet Cô Thảo (8 ô • HD 512×768/ô = 4096×768)"
             hasCustom={Boolean(customAssets.abbotSpritesheetUrl)}
             onSelectFile={(f) => onUploadAsset('abbotSpritesheetUrl', f)}
             onReset={() => onResetAsset('abbotSpritesheetUrl')}
           />
 
           <AssetUploadRow
-            label="4. Spritesheet Thầy Tùng (8 frames)"
+            label="4. Spritesheet Thầy Tùng (8 ô • HD 512×768/ô = 4096×768)"
             hasCustom={Boolean(customAssets.seniorNoviceSpritesheetUrl)}
             onSelectFile={(f) => onUploadAsset('seniorNoviceSpritesheetUrl', f)}
             onReset={() => onResetAsset('seniorNoviceSpritesheetUrl')}

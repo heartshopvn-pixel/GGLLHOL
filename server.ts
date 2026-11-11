@@ -628,42 +628,53 @@ async function startServer() {
     throw lastErr || new Error('All Google TTS mirrors failed');
   }
 
-  async function synthesizeEdgeNeuralBuffer(
+  const edgeClientPool = new Map<string, MsEdgeTTS>();
+
+  async function synthesizeEdgeNeuralOnce(
     text: string,
-    edgeVoice: 'vi-VN-HoaiMyNeural' | 'vi-VN-NamMinhNeural'
+    edgeVoice: 'vi-VN-HoaiMyNeural' | 'vi-VN-NamMinhNeural',
+    forceReconnect = false
   ): Promise<Buffer> {
-    const cacheKey = `edge:${edgeVoice}:${text}`;
-    const cached = ttsBufferCache.get(cacheKey);
-    if (cached) {
-      ttsBufferCache.delete(cacheKey);
-      ttsBufferCache.set(cacheKey, cached);
-      return cached;
+    if (forceReconnect) {
+      const old = edgeClientPool.get(edgeVoice);
+      edgeClientPool.delete(edgeVoice);
+      try {
+        old?.close();
+      } catch {
+        // Ignore
+      }
     }
 
     return new Promise<Buffer>((resolve, reject) => {
       let settled = false;
-      let ttsInstance: MsEdgeTTS | null = null;
       const doneErr = (err: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(guardTimer);
+        const broken = edgeClientPool.get(edgeVoice);
+        edgeClientPool.delete(edgeVoice);
         try {
-          ttsInstance?.close();
+          broken?.close();
         } catch {
-          // Ignore close error
+          // Ignore
         }
         reject(err instanceof Error ? err : new Error(String(err)));
       };
+
       const guardTimer = setTimeout(() => {
         doneErr(new Error('Edge Neural TTS timeout'));
-      }, 1900);
+      }, 3400);
 
       (async () => {
         try {
-          ttsInstance = new MsEdgeTTS({
-            connectionTimeoutMs: 1600,
-            synthesisTimeoutMs: 1800,
-          });
+          let ttsInstance = edgeClientPool.get(edgeVoice);
+          if (!ttsInstance) {
+            ttsInstance = new MsEdgeTTS({
+              connectionTimeoutMs: 2600,
+              synthesisTimeoutMs: 3000,
+            });
+            edgeClientPool.set(edgeVoice, ttsInstance);
+          }
           await ttsInstance.setMetadata(
             edgeVoice,
             OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3
@@ -685,21 +696,11 @@ async function startServer() {
             if (settled) return;
             settled = true;
             clearTimeout(guardTimer);
-            try {
-              ttsInstance?.close();
-            } catch {
-              // Ignore
-            }
             const fullBuf = Buffer.concat(chunks);
             if (fullBuf.length < 128) {
-              reject(new Error('Empty Edge TTS buffer'));
+              doneErr(new Error('Empty Edge TTS buffer'));
               return;
             }
-            if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
-              const oldestKey = ttsBufferCache.keys().next().value;
-              if (oldestKey) ttsBufferCache.delete(oldestKey);
-            }
-            ttsBufferCache.set(cacheKey, fullBuf);
             resolve(fullBuf);
           });
         } catch (err) {
@@ -707,6 +708,33 @@ async function startServer() {
         }
       })();
     });
+  }
+
+  async function synthesizeEdgeNeuralBuffer(
+    text: string,
+    edgeVoice: 'vi-VN-HoaiMyNeural' | 'vi-VN-NamMinhNeural'
+  ): Promise<Buffer> {
+    const cacheKey = `edge:${edgeVoice}:${text}`;
+    const cached = ttsBufferCache.get(cacheKey);
+    if (cached) {
+      ttsBufferCache.delete(cacheKey);
+      ttsBufferCache.set(cacheKey, cached);
+      return cached;
+    }
+
+    let fullBuf: Buffer;
+    try {
+      fullBuf = await synthesizeEdgeNeuralOnce(text, edgeVoice, false);
+    } catch {
+      fullBuf = await synthesizeEdgeNeuralOnce(text, edgeVoice, true);
+    }
+
+    if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
+      const oldestKey = ttsBufferCache.keys().next().value;
+      if (oldestKey) ttsBufferCache.delete(oldestKey);
+    }
+    ttsBufferCache.set(cacheKey, fullBuf);
+    return fullBuf;
   }
 
   const handleTtsHttpRequest = async (req: Request, res: Response) => {
@@ -718,6 +746,7 @@ async function startServer() {
         .slice(0, 200);
       const voiceVariant = String(req.query.voice || 'google-vi-gtx').trim();
       const lang = String(req.query.lang || 'vi').trim().toLowerCase();
+      const strictEdge = String(req.query.strictEdge || '') === '1';
 
       const isEdgeNeuralRequest =
         lang !== 'en' &&
@@ -747,7 +776,10 @@ async function startServer() {
           res.send(edgeBuf);
           return;
         } catch {
-          // Nếu môi trường Cloud chặn WSS của Bing -> tự động dự phòng mượt sang giọng Nữ/Nam tương ứng của Google TTS
+          if (strictEdge) {
+            res.status(503).json({ error: 'Edge Neural unavailable' });
+            return;
+          }
           const fallbackGoogleVoice =
             edgeVoice === 'vi-VN-NamMinhNeural'
               ? 'google-vi-male-deep'

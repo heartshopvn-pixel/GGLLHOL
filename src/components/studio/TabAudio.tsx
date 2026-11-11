@@ -3389,7 +3389,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           <div className="text-[10px] text-stone-400 font-medium">
             Chọn nhanh Tông Giọng mẫu:
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1">
             <button
               type="button"
               onClick={() =>
@@ -3408,12 +3408,39 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                   : 'bg-stone-950 hover:bg-stone-800 border-amber-500/40 text-amber-200'
               }`}
             >
-              🤖 Nữ Node.js (Hoài My)
+              🤖 Nữ Node (Hoài My)
             </button>
             <button
               type="button"
               onClick={() =>
                 onUpdateConfig({
+                  ttsEngine: 'node_edge',
+                  nodeVoice: 'vi-VN-NamMinhNeural',
+                  ttsRate: 1.02,
+                  ttsPitch: 1.0,
+                  ttsReverb: 0,
+                })
+              }
+              className={`px-1.5 py-1 rounded border text-[10px] font-semibold cursor-pointer truncate transition ${
+                config.ttsEngine === 'node_edge' &&
+                config.nodeVoice === 'vi-VN-NamMinhNeural'
+                  ? 'bg-cyan-400 text-stone-950 border-cyan-300 font-bold'
+                  : 'bg-stone-950 hover:bg-stone-800 border-cyan-500/40 text-cyan-200'
+              }`}
+            >
+              🤖 Nam Node (Nam Minh)
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  ...(config.ttsEngine === 'web_speech'
+                    ? { ttsEngine: 'google_stream' }
+                    : {}),
+                  nodeVoice:
+                    config.ttsEngine === 'node_edge'
+                      ? 'vi-VN-HoaiMyNeural'
+                      : 'google-vi-gtx',
                   ttsRate: 1.05,
                   ttsPitch: 1.0,
                   ttsReverb: 0,
@@ -3427,8 +3454,12 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               type="button"
               onClick={() =>
                 onUpdateConfig({
-                  ttsRate: 0.95,
-                  ttsPitch: 1.1,
+                  ...(config.ttsEngine === 'web_speech'
+                    ? { ttsEngine: 'google_stream' }
+                    : {}),
+                  nodeVoice: 'google-vi-twob',
+                  ttsRate: 0.96,
+                  ttsPitch: 1.08,
                   ttsReverb: 0,
                 })
               }
@@ -3440,8 +3471,15 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               type="button"
               onClick={() =>
                 onUpdateConfig({
-                  ttsRate: 0.95,
-                  ttsPitch: 0.82,
+                  ...(config.ttsEngine === 'web_speech'
+                    ? { ttsEngine: 'google_stream' }
+                    : {}),
+                  nodeVoice:
+                    config.ttsEngine === 'node_edge'
+                      ? 'vi-VN-NamMinhNeural'
+                      : 'google-vi-male-deep',
+                  ttsRate: 0.96,
+                  ttsPitch: config.ttsEngine === 'node_edge' ? 1.0 : 0.82,
                   ttsReverb: 0,
                 })
               }
