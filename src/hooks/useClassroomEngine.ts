@@ -1058,10 +1058,6 @@ export function useClassroomEngine() {
           const isOldScoreRecordText =
             !savedRecordText ||
             savedRecordText.includes('Kỷ lục hôm nay với [ĐiểmKỷLục] điểm');
-          const effectiveMainEngine =
-            parsed.config.ttsEngine || DEFAULT_CONFIG.ttsEngine;
-          const effectiveHostEngine =
-            parsed.config.hostTtsEngine || DEFAULT_CONFIG.hostTtsEngine;
           const mergedCfg: GameConfig = {
             ...DEFAULT_CONFIG,
             ...parsed.config,
@@ -1074,21 +1070,14 @@ export function useClassroomEngine() {
               parsed.config.nodeTtsEndpoint === 'http://localhost:3000/tts'
                 ? DEFAULT_CONFIG.nodeTtsEndpoint
                 : parsed.config.nodeTtsEndpoint,
-            nodeVoice:
-              effectiveMainEngine === 'node_edge' &&
-              (!parsed.config.nodeVoice ||
-                parsed.config.nodeVoice === 'google-vi-gtx')
-                ? 'vi-VN-HoaiMyNeural'
-                : parsed.config.nodeVoice || DEFAULT_CONFIG.nodeVoice,
-            ttsPitch: parsed.config.ttsPitch ?? DEFAULT_CONFIG.ttsPitch,
-            hostNodeVoice:
-              effectiveHostEngine === 'node_edge' &&
-              (!parsed.config.hostNodeVoice ||
-                parsed.config.hostNodeVoice === 'google-vi-gtx')
-                ? 'vi-VN-HoaiMyNeural'
-                : parsed.config.hostNodeVoice || DEFAULT_CONFIG.hostNodeVoice,
-            hostTtsPitch:
-              parsed.config.hostTtsPitch ?? DEFAULT_CONFIG.hostTtsPitch,
+            ttsEngine: 'node_edge',
+            nodeVoice: 'vi-VN-HoaiMyNeural',
+            ttsPitch: 1.0,
+            hostTtsEngine: 'node_edge',
+            hostNodeVoice: 'vi-VN-HoaiMyNeural',
+            hostTtsPitch: 1.0,
+            teacherLiveEngine: 'node_edge',
+            teacherLiveVoice: 'vi-VN-HoaiMyNeural',
             quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
             quizDecks: mergedDecks,
             activeQuizDeckId:
@@ -10345,14 +10334,17 @@ export function useClassroomEngine() {
           queueSnapNow.detailedQueue.some((it) =>
             Boolean(it.meta?.lessonStepLabel?.includes('Luồng 2'))
           );
+        // Chỉ phát "Luồng 3: Câu nói vu vơ" khi hàng chờ âm thanh đang thực sự rảnh (!soundEngine.getBusyState()),
+        // tuyệt đối không chèn câu nhắc bài phụ khi đang đọc cảm ơn quà tặng hoặc comment của học sinh trên Live!
         if (
           !isPassiveFollowerTab &&
           prev.phase === 'asking' &&
           !prev.idleChatTriggered &&
           !isStillReadingQuestion2 &&
+          !soundEngine.getBusyState() &&
           cfg.lessonIdleChatEnabled !== false &&
           nextElapsed >= idleDelayMs &&
-          nextLeft >= 900
+          nextLeft >= 2200
         ) {
           const idlePool = Array.isArray(cfg.lessonIdleChatTexts)
             ? cfg.lessonIdleChatTexts.map((s) => (s || '').trim()).filter(Boolean)

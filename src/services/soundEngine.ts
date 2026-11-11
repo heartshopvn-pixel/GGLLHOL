@@ -440,6 +440,8 @@ class TempleSoundService {
         const isEdgeNeuralUrl =
           url.includes('HoaiMy') ||
           url.includes('NamMinh') ||
+          url.includes('AndrewNeural') ||
+          url.includes('GuyNeural') ||
           url.includes('Neural');
         const isFallbackVoiceSource =
           isEdgeNeuralUrl &&
@@ -485,41 +487,43 @@ class TempleSoundService {
     return p;
   }
 
+  private normalizeEnglishVocabText(rawText: string): string {
+    const trimmed = (rawText || '').trim();
+    if (/^[A-Z\s'-]{2,}$/.test(trimmed)) {
+      return trimmed.toLowerCase();
+    }
+    return trimmed;
+  }
+
   private buildEffectiveItemConfig(
     config: GameConfig,
     isHostLive?: boolean,
     _speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): GameConfig {
+    // Quy chuẩn đồng nhất 100%: Mọi giọng đọc Tiếng Việt (Cô giáo giảng bài, Sự kiện quà/comment, Chủ phòng Live)
+    // đều dùng chung 1 giọng Nữ Node.js duy nhất (vi-VN-HoaiMyNeural) để không bao giờ bị nhảy loạn màu giọng
     if (isHostLive) {
-      const hostEngine = config.hostTtsEngine || 'google_stream';
-      const rawHostVoice =
-        config.hostNodeVoice ||
-        (hostEngine === 'node_edge' ? 'vi-VN-HoaiMyNeural' : 'google-vi-gtx');
       return {
         ...config,
         ttsEnabled: true,
-        ttsEngine: hostEngine,
-        nodeVoice: rawHostVoice,
+        ttsEngine: 'node_edge',
+        nodeVoice: 'vi-VN-HoaiMyNeural',
         selectedSystemVoiceURI:
           config.hostSystemVoiceURI !== undefined
             ? config.hostSystemVoiceURI
             : config.selectedSystemVoiceURI,
-        ttsRate: config.hostTtsRate ?? 1.0,
-        ttsPitch: config.hostTtsPitch ?? 1.0,
+        ttsRate: config.hostTtsRate ?? config.ttsRate ?? 1.0,
+        ttsPitch: 1.0,
         ttsVolume: config.hostTtsVolume ?? config.ttsVolume ?? 1.0,
         ttsReverb: 0,
       };
     }
 
-    // Tôn trọng 100% giọng đọc (Nam / Nữ / Node.js / Google Stream / Web Speech) và Cao độ (Pitch) do người dùng chọn
-    const resolvedVoice =
-      config.nodeVoice ||
-      (config.ttsEngine === 'node_edge'
-        ? 'vi-VN-HoaiMyNeural'
-        : 'google-vi-gtx');
     return {
       ...config,
-      nodeVoice: resolvedVoice,
+      ttsEngine: 'node_edge',
+      nodeVoice: 'vi-VN-HoaiMyNeural',
+      ttsPitch: 1.0,
     };
   }
 
@@ -531,48 +535,39 @@ class TempleSoundService {
     speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): string | null {
     const eff = this.buildEffectiveItemConfig(config, isHostLive, speakerRole);
-    const shortText = text.slice(0, 195);
-    if (lang === 'en') {
-      return `/api/tts?lang=en&voice=google-en-gtx&text=${encodeURIComponent(shortText)}`;
-    }
-    const voice =
-      eff.ttsEngine === 'node_edge'
-        ? eff.nodeVoice || 'vi-VN-HoaiMyNeural'
-        : eff.nodeVoice || 'google-vi-gtx';
-    if (eff.ttsEngine === 'google_stream') {
-      const streamVoice =
-        voice === 'vi-VN-NamMinhNeural'
-          ? 'google-vi-male-deep'
-          : voice === 'vi-VN-HoaiMyNeural'
-          ? 'google-vi-gtx'
-          : voice;
-      return `/api/tts?lang=vi&voice=${encodeURIComponent(streamVoice)}&text=${encodeURIComponent(shortText)}`;
-    }
-    if (eff.ttsEngine === 'node_edge') {
-      const candidates = this.buildNodeTtsCandidateUrls(
-        shortText,
-        voice,
-        eff.nodeTtsEndpoint
-      );
-      return candidates[0] || null;
-    }
-    return null;
+    const preparedText =
+      lang === 'en' ? this.normalizeEnglishVocabText(text) : text;
+    const shortText = preparedText.slice(0, 195);
+    const targetEdgeVoice =
+      lang === 'en' ? 'en-US-AndrewNeural' : 'vi-VN-HoaiMyNeural';
+    const candidates = this.buildNodeTtsCandidateUrls(
+      shortText,
+      targetEdgeVoice,
+      eff.nodeTtsEndpoint,
+      lang
+    );
+    return candidates[0] || null;
   }
 
   private buildNodeTtsCandidateUrls(
     shortText: string,
     voice: string,
-    rawEndpoint?: string
+    rawEndpoint?: string,
+    lang: 'vi' | 'en' = 'vi'
   ): string[] {
     const isEdgeNeural =
       voice.includes('HoaiMy') ||
       voice.includes('NamMinh') ||
-      voice.startsWith('vi-VN-');
+      voice.includes('AndrewNeural') ||
+      voice.includes('GuyNeural') ||
+      voice.startsWith('vi-VN-') ||
+      voice.startsWith('en-US-');
     const strictParam = isEdgeNeural ? 'strictEdge=1&' : '';
-    const query = `${strictParam}voice=${encodeURIComponent(
+    const langParam = `lang=${encodeURIComponent(lang)}&`;
+    const query = `${strictParam}${langParam}voice=${encodeURIComponent(
       voice
     )}&text=${encodeURIComponent(shortText)}`;
-    const plainQuery = `voice=${encodeURIComponent(
+    const plainQuery = `${langParam}voice=${encodeURIComponent(
       voice
     )}&text=${encodeURIComponent(shortText)}`;
     const trimmed = (rawEndpoint || '').trim();
@@ -591,7 +586,7 @@ class TempleSoundService {
     };
 
     if (isDefaultEndpoint) {
-      // Ưu tiên route Node.js /tts cùng tên miền (0ms trễ IPv6/CORS, giữ kết nối WebSocket MsEdgeTTS liên tục),
+      // Ưu tiên route Node.js /tts cùng tên miền (mỗi request chạy instance MsEdgeTTS độc lập, 0ms trễ CORS),
       // dự phòng sang cổng Node Bridge cục bộ 127.0.0.1:8080 nếu mạng máy chủ chặn Edge
       addUnique('/tts', query);
       addUnique('http://127.0.0.1:8080/tts', plainQuery);
@@ -606,18 +601,19 @@ class TempleSoundService {
 
   private prefetchNextQueueItems(config: GameConfig) {
     if (this.localTabMuted || this.remoteSlaveMode) return;
-    const upcoming = this.ttsQueue.slice(0, 2);
-    for (const item of upcoming) {
-      const streamUrl = this.buildStreamUrlForEngine(
-        item.text,
-        config,
-        Boolean(item.isHostLive),
-        item.lang || item.meta?.lang || 'vi',
-        item.meta?.speakerRole
-      );
-      if (streamUrl) {
-        void this.getOrFetchAudioBlobUrl(streamUrl, 3000);
-      }
+    // Chỉ tải trước tối đa 1 câu kế tiếp khi không có quá nhiều kết nối đang mở để giữ đường truyền Live luôn mượt
+    if (this.inFlightPrefetches.size >= 2) return;
+    const nextItem = this.ttsQueue[0];
+    if (!nextItem) return;
+    const streamUrl = this.buildStreamUrlForEngine(
+      nextItem.text,
+      config,
+      Boolean(nextItem.isHostLive),
+      nextItem.lang || nextItem.meta?.lang || 'vi',
+      nextItem.meta?.speakerRole
+    );
+    if (streamUrl) {
+      void this.getOrFetchAudioBlobUrl(streamUrl, 3400);
     }
   }
 
@@ -2315,15 +2311,21 @@ class TempleSoundService {
     const chunks = this.splitLongLessonText(cleaned, 175);
     if (chunks.length === 0) return false;
 
-    // Nếu Thầy đang nói câu cũ thì ngắt riêng câu cũ của Thầy để đọc ngay câu mới (không đụng tới Cô Thảo)
+    // Nếu đang có câu khác phát trên kênh chính thì ngắt gọn để tuyệt đối không bao giờ bị 2 giọng đọc đè chồng lên nhau khi Live
+    if (this.isSpeaking) {
+      const interrupted = this.activeEventItem;
+      this.stopCurrentUtteranceOnly();
+      if (interrupted) {
+        this.notifyItemFinished(interrupted);
+      }
+    }
+
     const token = ++this.teacherLiveTokenSeq;
     this.stopTeacherLiveAudioNodesOnly();
 
-    const engine = options?.engine || config.teacherLiveEngine || 'google_stream';
-    const voice =
-      options?.voice ||
-      config.teacherLiveVoice ||
-      (engine === 'node_edge' ? 'vi-VN-NamMinhNeural' : 'google-vi-male-deep');
+    // Quy chuẩn đồng nhất 100% Tiếng Việt dùng giọng Nữ Hoài My Node.js
+    const engine: 'node_edge' = 'node_edge';
+    const voice = 'vi-VN-HoaiMyNeural';
     const desiredRate = Math.max(
       0.5,
       Math.min(2.0, Number(options?.rate ?? config.teacherLiveRate ?? 1.0))
@@ -2332,24 +2334,9 @@ class TempleSoundService {
       0,
       Math.min(2.0, Number(options?.volume ?? config.teacherLiveVolume ?? 1.0))
     );
-    const isNativeMaleNeural = voice === 'vi-VN-NamMinhNeural';
-    const isNativeFemaleVoice =
-      voice === 'vi-VN-HoaiMyNeural' ||
-      voice === 'google-vi-gtx' ||
-      voice === 'google-vi-twob' ||
-      voice === 'google-vi-bright' ||
-      voice === 'google-vi-slow';
-    const desiredPitch = Math.max(
-      0.65,
-      Math.min(
-        1.25,
-        Number(
-          options?.pitch ??
-            config.teacherLivePitch ??
-            (isNativeFemaleVoice ? 1.0 : isNativeMaleNeural ? 0.96 : 0.8)
-        )
-      )
-    );
+    const isNativeMaleNeural = false;
+    const isNativeFemaleVoice = true;
+    const desiredPitch = 1.0;
 
     this.emitTeacherLiveStatus(true, cleaned);
 
@@ -2371,47 +2358,39 @@ class TempleSoundService {
 
     const buildGoogleFallbackUrl = (chunkText: string): string => {
       const shortChunk = chunkText.slice(0, 195);
-      const streamVoice =
-        voice === 'vi-VN-NamMinhNeural'
-          ? 'google-vi-male-deep'
-          : voice === 'vi-VN-HoaiMyNeural'
-          ? 'google-vi-gtx'
-          : voice;
-      return `/api/tts?lang=vi&voice=${encodeURIComponent(
-        streamVoice
-      )}&text=${encodeURIComponent(shortChunk)}`;
+      return `/api/tts?lang=vi&voice=google-vi-gtx&text=${encodeURIComponent(
+        shortChunk
+      )}`;
     };
 
     const resolveChunkBlobUrl = async (
       chunkText: string
     ): Promise<{ blobUrl: string | null; usedFallbackStream: boolean }> => {
       const shortChunk = chunkText.slice(0, 195);
-      if (engine === 'node_edge') {
-        const candidates = this.buildNodeTtsCandidateUrls(
-          shortChunk,
-          voice,
-          config.nodeTtsEndpoint
+      const candidates = this.buildNodeTtsCandidateUrls(
+        shortChunk,
+        voice,
+        config.nodeTtsEndpoint,
+        'vi'
+      );
+      for (let i = 0; i < candidates.length; i++) {
+        const candUrl = candidates[i];
+        const found = await this.getOrFetchAudioBlobUrl(
+          candUrl,
+          i === 0 ? 3200 : 1800
         );
-        for (const candUrl of candidates) {
-          const found = await this.getOrFetchAudioBlobUrl(candUrl, 1600);
-          if (token !== this.teacherLiveTokenSeq) {
-            return { blobUrl: null, usedFallbackStream: false };
-          }
-          if (found) {
-            return { blobUrl: found, usedFallbackStream: false };
-          }
+        if (token !== this.teacherLiveTokenSeq) {
+          return { blobUrl: null, usedFallbackStream: false };
         }
-        const fb = await this.getOrFetchAudioBlobUrl(
-          buildGoogleFallbackUrl(chunkText),
-          2200
-        );
-        return { blobUrl: fb, usedFallbackStream: true };
+        if (found) {
+          return { blobUrl: found, usedFallbackStream: false };
+        }
       }
-      const direct = await this.getOrFetchAudioBlobUrl(
+      const fb = await this.getOrFetchAudioBlobUrl(
         buildGoogleFallbackUrl(chunkText),
         2200
       );
-      return { blobUrl: direct, usedFallbackStream: false };
+      return { blobUrl: fb, usedFallbackStream: true };
     };
 
     const playChunkAt = async (idx: number) => {
@@ -2715,9 +2694,12 @@ class TempleSoundService {
       this.stopCurrentUtteranceOnly();
     }
 
-    this.prefetchNextQueueItems(config);
+    if (!this.isSpeaking) {
+      this.processQueue(config);
+    } else {
+      this.prefetchNextQueueItems(config);
+    }
     this.emitEventQueue();
-    this.processQueue(config);
     return true;
   }
 
@@ -2855,11 +2837,17 @@ class TempleSoundService {
       this.dharmaNextTimer = null;
     }
 
-    // Khi chuyển luồng bảng lớp mới (Luồng 0 -> 6): Luôn ngắt câu đang phát (trừ Live Text trực tiếp của Chủ Phòng)
-    // để giọng đọc của Cô Thảo trên Hàng Chờ Âm Thanh luôn khớp 100% với nội dung hiển thị trên bảng lớp!
+    // Chống cắt ngang vô lý khi đang Live:
+    // Chỉ ngắt nếu câu đang phát là thuyết pháp nền (Dharma) hoặc là câu thuộc luồng bảng lớp cũ chưa đọc xong.
+    // Tuyệt đối KHÔNG cắt ngang giữa chừng câu cảm ơn quà tặng, câu comment của học sinh hoặc phát biểu của Chủ Phòng đang đọc dở!
+    const activeIsStaleLessonFlow = Boolean(
+      this.activeEventItem &&
+        !this.activeEventItem.isHostLive &&
+        (this.activeEventItem.meta?.lessonStepLabel ||
+          this.activeEventItem.meta?.lessonFlowToken)
+    );
     const isInterruptibleActive =
-      this.isSpeakingDharma ||
-      (this.isSpeaking && !this.activeEventItem?.isHostLive);
+      this.isSpeakingDharma || (this.isSpeaking && activeIsStaleLessonFlow);
 
     if (isInterruptibleActive) {
       const interruptedItem = this.activeEventItem;
@@ -2869,9 +2857,12 @@ class TempleSoundService {
       }
     }
 
-    this.prefetchNextQueueItems(config);
+    if (!this.isSpeaking) {
+      this.processQueue(config);
+    } else {
+      this.prefetchNextQueueItems(config);
+    }
     this.emitEventQueue();
-    this.processQueue(config);
     return true;
   }
 
@@ -2975,9 +2966,12 @@ class TempleSoundService {
       }
     }
 
-    this.prefetchNextQueueItems(config);
+    if (!this.isSpeaking) {
+      this.processQueue(config);
+    } else {
+      this.prefetchNextQueueItems(config);
+    }
     this.emitEventQueue();
-    this.processQueue(config);
     return true;
   }
 
@@ -3147,8 +3141,8 @@ class TempleSoundService {
     );
     this.emitEventQueue();
 
-    // Tải trước (Pre-fetch) câu kế tiếp trong hàng chờ vào RAM ngay khi bắt đầu đọc câu hiện tại (triệt tiêu độ trễ mạng giữa các câu)
-    this.prefetchNextQueueItems(config);
+    // Không gọi prefetch cùng lúc với câu hiện tại để tránh dồn kết nối WebSocket khi Live;
+    // câu kế tiếp sẽ được tải trước ngay khi câu hiện tại bắt đầu phát (onplaying).
 
     const finish = () => {
       if (finishedOnce || token !== this.speechTokenSeq) return;
@@ -3199,14 +3193,11 @@ class TempleSoundService {
     }
 
     if (itemLang === 'en') {
-      // Phát âm chuẩn Tiếng Anh bản xứ (tl=en)
-      this.playViaGoogleStream(nextText, playbackConfig, token, finish, false, 'en');
-    } else if (playbackConfig.ttsEngine === 'node_edge') {
-      this.playViaNodeEdge(nextText, playbackConfig, token, finish);
-    } else if (playbackConfig.ttsEngine === 'google_stream') {
-      this.playViaGoogleStream(nextText, playbackConfig, token, finish, false, 'vi');
+      // 100% từ vựng Tiếng Anh dùng giọng Nam bản xứ Node.js Edge AI (en-US-AndrewNeural / en-US-GuyNeural)
+      this.playViaNodeEdge(nextText, playbackConfig, token, finish, 'en');
     } else {
-      this.playViaWebSpeech(nextText, playbackConfig, token, finish);
+      // 100% Tiếng Việt dùng chung 1 giọng Nữ duy nhất Node.js Edge AI (vi-VN-HoaiMyNeural)
+      this.playViaNodeEdge(nextText, playbackConfig, token, finish, 'vi');
     }
   }
 
@@ -3281,15 +3272,20 @@ class TempleSoundService {
     text: string,
     config: GameConfig,
     token: number,
-    onDone: () => void
+    onDone: () => void,
+    lang: 'vi' | 'en' = 'vi'
   ) {
-    const shortText = text.slice(0, 195);
-    const voice = config.nodeVoice || 'vi-VN-HoaiMyNeural';
+    const preparedText =
+      lang === 'en' ? this.normalizeEnglishVocabText(text) : text;
+    const shortText = preparedText.slice(0, 195);
+    const voice =
+      lang === 'en' ? 'en-US-AndrewNeural' : 'vi-VN-HoaiMyNeural';
     const endpoint = config.nodeTtsEndpoint || 'http://localhost:8080/tts';
     const candidateUrls = this.buildNodeTtsCandidateUrls(
       shortText,
       voice,
-      endpoint
+      endpoint,
+      lang
     );
 
     let fallbackTriggered = false;
@@ -3315,7 +3311,7 @@ class TempleSoundService {
       activeAudio = null;
     };
 
-    const fallbackOnce = (reasonText = 'Server Node.js (#3) phản hồi quá hạn (>2.6s) hoặc mất kết nối') => {
+    const fallbackOnce = (reasonText = 'Server Node.js (#3) phản hồi quá hạn hoặc mất kết nối') => {
       if (fallbackTriggered || token !== this.speechTokenSeq) return;
       fallbackTriggered = true;
       clearTimeout(lagTimeout);
@@ -3335,15 +3331,14 @@ class TempleSoundService {
           statusDetail: reasonText,
         }
       );
-      // Ưu tiên dự phòng sang Google Cloud Stream đa máy chủ (/api/tts) trước để giữ đồng nhất màu giọng MP3 và âm lượng, nếu vẫn lỗi mới xuống WebSpeech
-      this.playViaGoogleStream(text, config, token, onDone, true);
+      this.playViaGoogleStream(preparedText, config, token, onDone, true, lang);
     };
 
     const lagTimeout = setTimeout(() => {
       if (!hasStartedPlaying) {
-        fallbackOnce('Server Node.js (#3) trễ >4.8s ➔ Tự chuyển sang #2 Google Stream');
+        fallbackOnce('Server Node.js (#3) trễ >6.4s ➔ Tự chuyển sang #2 Google Stream');
       }
-    }, 4800);
+    }, 6400);
 
     // Bộ đếm bảo hiểm chống treo sự kiện onended trên OBS Browser Source (CEF)
     const estimatedPlayMs = Math.max(
@@ -3373,7 +3368,7 @@ class TempleSoundService {
         const cand = candidateUrls[i];
         const found = await this.getOrFetchAudioBlobUrl(
           cand,
-          i === 0 ? 3200 : 1800
+          i === 0 ? 5200 : 2000
         );
         if (fallbackTriggered || token !== this.speechTokenSeq) {
           clearNodeTimers();
@@ -3396,7 +3391,15 @@ class TempleSoundService {
       activeAudio = audio;
       this.currentAudio = audio;
       const { effectiveRate, preservePitch } =
-        this.computeStreamPlaybackRateAndPitch(voice, config);
+        lang === 'en'
+          ? {
+              effectiveRate: Math.max(
+                0.5,
+                Math.min(2.0, config.englishTtsRate ?? 0.95)
+              ),
+              preservePitch: true,
+            }
+          : this.computeStreamPlaybackRateAndPitch(voice, config);
 
       const refreshPlaybackWatchdogFromDuration = () => {
         if (
@@ -3448,13 +3451,15 @@ class TempleSoundService {
           config.ttsVolume
         );
         refreshPlaybackWatchdogFromDuration();
+        // Bắt đầu tải trước 1 câu kế tiếp sau khi câu hiện tại đã phát lên loa (không gây nghẽn đa luồng)
+        this.prefetchNextQueueItems(this.latestConfig || config);
         this.ttsDiagnostic = {
           ...this.ttsDiagnostic,
           configuredEngineLabel: this.getConfiguredEngineLabel(config),
           health: 'healthy',
           activeServerLabel:
             meta?.source === 'ram-cache'
-              ? 'Node.js (#3 • RAM Cache 0ms)'
+              ? `Node.js (#3 • ${voice} • Cache 0ms)`
               : `Node.js (#3 • ${voice})`,
           statusHeadline: 'Ổn định • Đang phát trực tiếp từ Server Node.js (#3)',
           statusDetail:

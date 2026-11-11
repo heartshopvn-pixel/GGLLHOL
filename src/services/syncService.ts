@@ -40,10 +40,44 @@ class LiveSyncService {
     );
   }
 
+  private serverPeerCounts = { totalPeers: 1, obsPeers: 0 };
+  private heartbeatObsPeers = new Map<string, number>();
+
+  private emitCombinedPeerCounts() {
+    const now = Date.now();
+    for (const [id, lastAt] of this.heartbeatObsPeers.entries()) {
+      if (now - lastAt > 6500) {
+        this.heartbeatObsPeers.delete(id);
+      }
+    }
+    const hbObs = this.heartbeatObsPeers.size;
+    const obsPeers = Math.max(this.serverPeerCounts.obsPeers, hbObs);
+    const totalPeers = Math.max(
+      this.serverPeerCounts.totalPeers,
+      obsPeers + (this.isObsView() ? 0 : 1)
+    );
+    this.peerListeners.forEach((fn) => fn({ totalPeers, obsPeers }));
+  }
+
+  private recordObsHeartbeat(senderId?: string) {
+    if (!senderId || senderId === this.clientId) return;
+    this.heartbeatObsPeers.set(senderId, Date.now());
+    this.emitCombinedPeerCounts();
+  }
+
   constructor() {
     if ('BroadcastChannel' in window) {
       this.channel = new BroadcastChannel('chua_online_live_sync_v1');
       this.channel.onmessage = (ev) => {
+        if (ev.data?.type === 'OBS_HEARTBEAT') {
+          this.recordObsHeartbeat(ev.data.senderId);
+          return;
+        }
+        if (ev.data?.type === 'OBS_CLOSING' && ev.data.senderId) {
+          this.heartbeatObsPeers.delete(ev.data.senderId);
+          this.emitCombinedPeerCounts();
+          return;
+        }
         if (ev.data?.type === 'ADMIN_SYNC') {
           this.dispatchIncomingSync(ev.data as SyncPacket);
         }
@@ -56,6 +90,49 @@ class LiveSyncService {
           this.connectWebSocket('ws://localhost:8080');
         }
       }, 500);
+
+      // Nếu cửa sổ hiện tại là màn hình Live (?obs=1 / ?view=live), phát nhịp tim định kỳ qua cả BroadcastChannel & Local WS
+      // để Tab Điều Khiển tự động chuyển sang chế độ tắt tiếng cục bộ (không bao giờ phát trùng 2 giọng đè nhau)
+      if (this.isObsView()) {
+        const sendObsBeat = () => {
+          const beat = { type: 'OBS_HEARTBEAT', senderId: this.clientId };
+          try {
+            this.channel?.postMessage(beat);
+          } catch {
+            // Ignore
+          }
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+              this.ws.send(JSON.stringify(beat));
+            } catch {
+              // Ignore
+            }
+          }
+        };
+        setTimeout(sendObsBeat, 150);
+        setInterval(sendObsBeat, 2500);
+        window.addEventListener('beforeunload', () => {
+          const bye = { type: 'OBS_CLOSING', senderId: this.clientId };
+          try {
+            this.channel?.postMessage(bye);
+          } catch {
+            // Ignore
+          }
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+              this.ws.send(JSON.stringify(bye));
+            } catch {
+              // Ignore
+            }
+          }
+        });
+      } else {
+        setInterval(() => {
+          if (this.heartbeatObsPeers.size > 0) {
+            this.emitCombinedPeerCounts();
+          }
+        }, 3000);
+      }
     }
   }
 
@@ -164,9 +241,11 @@ class LiveSyncService {
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'PEER_STATUS') {
-            this.peerListeners.forEach((fn) =>
-              fn({ totalPeers: data.totalPeers || 1, obsPeers: data.obsPeers || 0 })
-            );
+            this.serverPeerCounts = {
+              totalPeers: data.totalPeers || 1,
+              obsPeers: data.obsPeers || 0,
+            };
+            this.emitCombinedPeerCounts();
           } else if (data.type === 'ADMIN_SYNC') {
             this.dispatchIncomingSync(data as SyncPacket);
           } else if (data.type === 'TIKTOK_LIVE_STATUS') {
@@ -569,6 +648,23 @@ class LiveSyncService {
 
   private handleRawTikTokPayload(raw: any) {
     if (!raw || typeof raw !== 'object') return;
+    if (raw.type === 'OBS_HEARTBEAT') {
+      this.recordObsHeartbeat(raw.senderId);
+      return;
+    }
+    if (raw.type === 'OBS_CLOSING' && raw.senderId) {
+      this.heartbeatObsPeers.delete(raw.senderId);
+      this.emitCombinedPeerCounts();
+      return;
+    }
+    if (raw.type === 'PEER_STATUS') {
+      this.serverPeerCounts = {
+        totalPeers: raw.totalPeers || 1,
+        obsPeers: raw.obsPeers || 0,
+      };
+      this.emitCombinedPeerCounts();
+      return;
+    }
     if (raw.type === 'ADMIN_SYNC') {
       this.dispatchIncomingSync(raw as SyncPacket);
       return;
@@ -707,8 +803,26 @@ class LiveSyncService {
       socket.onopen = () => {
         this.setStatus('connected');
         this.appendTikTokLog(`🔌 Đã kết nối WebSocket: ${this.lastWsUrl}`);
+        try {
+          socket.send(
+            JSON.stringify({
+              type: 'REGISTER_PEER_ROLE',
+              clientId: this.clientId,
+              role: this.isObsView() ? 'obs' : 'admin',
+            })
+          );
+        } catch {
+          // Ignore
+        }
         // Khi kết nối WebSocket thành công, nếu đây là màn hình Live (?obs=1) thì lập tức xin đồng bộ toàn bộ vị trí bảng & cấu hình từ Chrome
         if (this.isObsView()) {
+          try {
+            socket.send(
+              JSON.stringify({ type: 'OBS_HEARTBEAT', senderId: this.clientId })
+            );
+          } catch {
+            // Ignore
+          }
           setTimeout(() => {
             this.sendCommand('REQUEST_FULL_SYNC', {});
           }, 120);
