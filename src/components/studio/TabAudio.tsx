@@ -867,13 +867,13 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
         </div>
 
-        {/* Thầy Giáo Khích Lệ Học Sinh Chiến Đấu (Sự Kiện Zombie) */}
+        {/* Cô Thảo Khích Lệ Học Sinh Chiến Đấu (Sự Kiện Zombie) */}
         <div className="p-2.5 rounded-lg bg-gradient-to-br from-amber-950/50 via-stone-950 to-red-950/40 border border-amber-500/40 space-y-2 shadow-inner">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
               <MessageSquareQuote className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="text-xs font-black text-amber-200">
-                ⚔️ Thầy Giáo Khích Lệ Học Sinh Chiến Đấu (Event Zombie)
+                ⚔️ Cô Thảo Khích Lệ Học Sinh Chiến Đấu (Event Zombie)
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -913,7 +913,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
 
           <div className="flex items-center justify-between gap-2 text-[10.5px] text-stone-300">
-            <span>Chu kỳ Thầy Giáo hô khích lệ:</span>
+            <span>Chu kỳ Cô Thảo hô khích lệ:</span>
             <div className="flex items-center gap-1.5">
               <input
                 type="range"
@@ -1715,7 +1715,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     {
                       text:
                         config.lessonStartTtsText ||
-                        'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
+                        'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
                       lang: 'vi',
                     },
                   ],
@@ -1736,7 +1736,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               rows={2}
               value={
                 config.lessonStartTtsText ??
-                'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'
+                'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'
               }
               onChange={(e) =>
                 onUpdateConfig({ lessonStartTtsText: e.target.value })
@@ -2847,10 +2847,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           );
         })()}
 
-        {/* LUỒNG KẾT THÚC (THAY CHO LUỒNG 6 Ở CÂU THỨ 15 CUỐI VÒNG): TỔNG KẾT TOP 1, 2, 3 + TẶNG TRÀ SỮA MATCHA LATTE + VỖ TAY */}
+        {/* LUỒNG KẾT THÚC (THAY CHO LUỒNG 6 Ở CÂU THỨ 15 CUỐI VÒNG): TỔNG KẾT TOP 1, 2, 3 + TRAO CÚP VÀNG + VỖ TAY */}
         {(() => {
           const defaultRoundEndTpl =
-            'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Tặng 3 bạn 3 ly trà sữa mat cha lat te phun tóp ping, mấy cưng ở dưới vỗ tay nào !';
+            'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Trao tặng 3 bạn những chiếc cúp vàng danh giá, mấy cưng ở dưới vỗ tay nào !';
           const currentRoundEndTpl =
             config.lessonRoundEndTtsTemplate ?? defaultRoundEndTpl;
 
@@ -2862,7 +2862,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     Luồng Kết Thúc
                   </span>
                   <span className="text-[11px] font-bold text-emerald-200">
-                    Tổng kết vòng 15 câu (Thay Luồng 6 ở câu cuối • Vinh danh Top 1, 2, 3 & Tặng Trà Sữa)
+                    Tổng kết vòng 10 câu (Thay Luồng 6 ở câu cuối • Vinh danh Top 1, 2, 3 &amp; Trao Cúp Vàng)
                   </span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -2907,8 +2907,8 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                       [top1], [Điểm top 1], [top2], [Điểm top 2], [top3], [Điểm top 3]
                     </span>
                   </span>
-                  <span className="text-[9.5px] text-amber-300">
-                    🧋 Tự động khóa cam Top 1→2→3, phát 3 ly trà sữa (200%/150%/100%) & vỗ tay
+                  <span className="text-[9.5px] text-yellow-300">
+                    🏆 Khóa cam Top 1→2→3, trao 3 Cúp Vàng (+3/+2/+1 🏆 • 200%/150%/100%) &amp; vỗ tay
                   </span>
                 </div>
                 <textarea
@@ -2919,7 +2919,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                       lessonRoundEndTtsTemplate: e.target.value,
                     })
                   }
-                  placeholder="Nhập nội dung tổng kết kết thúc vòng 15 câu..."
+                  placeholder="Nhập nội dung tổng kết kết thúc vòng 10 câu..."
                   className="w-full px-2 py-1.5 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-100 focus:outline-none focus:border-emerald-400 resize-y"
                 />
               </div>
@@ -2927,14 +2927,14 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
                 <span className="text-stone-400">Hiệu ứng kết thúc vòng:</span>
                 <span className="font-mono font-bold text-emerald-300">
-                  🔒 Vỗ tay xong → Reset toàn bộ điểm về 0 (giữ nguyên chỗ ngồi) & sang vòng 15 câu mới
+                  🔒 Vỗ tay xong → Reset toàn bộ điểm về 0 (giữ nguyên chỗ ngồi) & sang vòng 10 câu mới
                 </span>
               </div>
             </div>
           );
         })()}
 
-        {/* LUỒNG KỶ LỤC MỚI (SAU LUỒNG 6): KHI TOP 1 BẢNG KỶ LỤC HÔM NAY THAY ĐỔI */}
+        {/* LUỒNG KỶ LỤC MỚI (SAU LUỒNG 6): KHI TOP 1 BẢNG KỶ LỤC CÚP VÀNG TRONG NGÀY THAY ĐỔI */}
         {(() => {
           const recList =
             Array.isArray(config.lessonRecordTtsTemplates) &&
@@ -2942,7 +2942,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               ? config.lessonRecordTtsTemplates
               : [
                   config.lessonRecordTtsTemplate ||
-                    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục hôm nay với [ĐiểmKỷLục] điểm!',
+                    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng!',
                 ];
 
           const updateRecItem = (idx: number, val: string) => {
@@ -2957,7 +2957,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           const addRecItem = () => {
             const next = [
               ...recList,
-              'Quá đỉnh luôn! Bạn [Top1KỷLục] vừa xác lập kỷ lục mới cao nhất hôm nay với [ĐiểmKỷLục] điểm!',
+              'Quá đỉnh luôn! Bạn [Top1KỷLục] vừa xác lập kỷ lục mới cao nhất hôm nay với [ĐiểmKỷLục] cúp vàng!',
             ];
             onUpdateConfig({
               lessonRecordTtsTemplates: next,
@@ -2975,14 +2975,14 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           };
 
           return (
-            <div className="p-2.5 rounded-lg bg-stone-950/90 border border-orange-500/45 space-y-2">
+            <div className="p-2.5 rounded-lg bg-stone-950/90 border border-yellow-500/45 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="px-1.5 py-0.5 rounded bg-orange-500/25 border border-orange-400/60 text-orange-300 font-mono font-black text-[10px] shrink-0">
+                  <span className="px-1.5 py-0.5 rounded bg-yellow-500/20 border border-yellow-400/60 text-yellow-300 font-mono font-black text-[10px] shrink-0">
                     Luồng Kỷ Lục
                   </span>
-                  <span className="text-[11px] font-bold text-orange-200 truncate">
-                    Khi Top 1 &quot;Kỷ lục hôm nay&quot; thay đổi (Chèn luồng &amp; khen)
+                  <span className="text-[11px] font-bold text-yellow-200 truncate">
+                    Khi Top 1 &quot;Kỷ lục cúp vàng&quot; trong ngày thay đổi (Chèn luồng &amp; khen)
                   </span>
                 </div>
 
@@ -2992,17 +2992,17 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     onClick={() => {
                       const raw =
                         recList[Math.floor(Math.random() * recList.length)] ||
-                        'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục hôm nay với [ĐiểmKỷLục] điểm!';
+                        'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng!';
                       const preview = raw
                         .replace(/\[Top1KỷLục\]|\[Tên\]|\[Top1\]/gi, 'Bảo Ngọc')
-                        .replace(/\[ĐiểmKỷLục\]|\[Điểm\]/gi, '250')
+                        .replace(/\[ĐiểmKỷLục\]|\[Điểm\]|\[Cúp\]/gi, '6')
                         .replace(/\[KỷLụcCũ\]/gi, 'Minh Khang');
                       soundEngine.enqueueLessonFlowItems(
                         [{ text: preview, lang: 'vi' }],
                         config
                       );
                     }}
-                    className="px-2 py-0.5 rounded bg-orange-600/30 hover:bg-orange-500/45 border border-orange-400/50 text-[9.5px] font-bold text-orange-200 cursor-pointer"
+                    className="px-2 py-0.5 rounded bg-yellow-600/30 hover:bg-yellow-500/45 border border-yellow-400/50 text-[9.5px] font-bold text-yellow-200 cursor-pointer"
                   >
                     Nghe thử
                   </button>
@@ -3010,13 +3010,13 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                   <button
                     type="button"
                     onClick={addRecItem}
-                    className="px-2 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-400/45 text-[9.5px] font-bold text-orange-200 flex items-center gap-0.5 cursor-pointer"
+                    className="px-2 py-0.5 rounded bg-yellow-500/20 hover:bg-yellow-500/35 border border-yellow-400/45 text-[9.5px] font-bold text-yellow-200 flex items-center gap-0.5 cursor-pointer"
                   >
                     <Plus className="w-2.5 h-2.5" />
                     <span>Thêm câu</span>
                   </button>
 
-                  <label className="flex items-center gap-1 text-[10px] font-bold text-orange-300 cursor-pointer select-none">
+                  <label className="flex items-center gap-1 text-[10px] font-bold text-yellow-300 cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={config.lessonRecordFlowEnabled !== false}
@@ -3025,7 +3025,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                           lessonRecordFlowEnabled: e.target.checked,
                         })
                       }
-                      className="accent-orange-500 w-3.5 h-3.5 rounded cursor-pointer"
+                      className="accent-yellow-500 w-3.5 h-3.5 rounded cursor-pointer"
                     />
                     <span>
                       {config.lessonRecordFlowEnabled !== false ? 'Bật' : 'Tắt'}
@@ -3036,11 +3036,11 @@ export const TabAudio: React.FC<TabAudioProps> = ({
 
               <div className="text-[9.5px] text-stone-400">
                 Biến hỗ trợ:{' '}
-                <code className="text-orange-300 font-mono">[Top1KỷLục]</code>{' '}
-                (hoặc <code className="text-orange-300 font-mono">[Tên]</code>),{' '}
-                <code className="text-orange-300 font-mono">[ĐiểmKỷLục]</code>{' '}
-                (hoặc <code className="text-orange-300 font-mono">[Điểm]</code>),{' '}
-                <code className="text-orange-300 font-mono">[KỷLụcCũ]</code>
+                <code className="text-yellow-300 font-mono">[Top1KỷLục]</code>{' '}
+                (hoặc <code className="text-yellow-300 font-mono">[Tên]</code>),{' '}
+                <code className="text-yellow-300 font-mono">[ĐiểmKỷLục]</code>{' '}
+                (số cúp vàng trong ngày),{' '}
+                <code className="text-yellow-300 font-mono">[KỷLụcCũ]</code>
               </div>
 
               <div className="space-y-1 max-h-36 overflow-y-auto pr-0.5">
@@ -3049,15 +3049,15 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     key={`rec-flow-tpl-${idx}`}
                     className="flex items-center gap-1"
                   >
-                    <span className="text-[9.5px] font-mono text-orange-400 w-4 shrink-0">
+                    <span className="text-[9.5px] font-mono text-yellow-400 w-4 shrink-0">
                       #{idx + 1}
                     </span>
                     <input
                       type="text"
                       value={txt}
                       onChange={(e) => updateRecItem(idx, e.target.value)}
-                      placeholder="Nhập mẫu câu khen Top 1 Kỷ lục hôm nay..."
-                      className="flex-1 px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-100 focus:outline-none focus:border-orange-400"
+                      placeholder="Nhập mẫu câu khen Top 1 Kỷ lục cúp vàng..."
+                      className="flex-1 px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-100 focus:outline-none focus:border-yellow-400"
                     />
                     {recList.length > 1 && (
                       <button

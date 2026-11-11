@@ -35,6 +35,8 @@ export interface GiftModelScalesConfig {
   deskCatOffsetY?: number;
   snackBagOffsetX?: number;
   snackBagOffsetY?: number;
+  deskPigOffsetX?: number;
+  deskPigOffsetY?: number;
   maxDeskCats?: number;
 }
 
@@ -67,6 +69,20 @@ export type ZombieProjectileKind =
   | 'chair'
   | 'desk_mate';
 
+export type ZombieHeartProjectileVariant =
+  | 'pencil_case'
+  | 'blue_ruler'
+  | 'casio';
+
+export interface ZombieProjectileScalesConfig {
+  pencilCase: number;
+  blueRuler: number;
+  casio: number;
+  book: number;
+  chair: number;
+  deskMate: number;
+}
+
 export type ZombieEventPhase =
   | 'idle'
   | 'queued'
@@ -97,6 +113,7 @@ export interface ZombieEntityState {
 export interface ZombieProjectileFX {
   id: string;
   kind: ZombieProjectileKind;
+  heartVariant?: ZombieHeartProjectileVariant;
   giftId?: ClassroomGiftEventId;
   startX: number;
   startY: number;
@@ -136,6 +153,40 @@ export interface FlyingMilkTeaFX {
   createdAt: number;
   durationMs: number;
   scale?: number;
+  variant?: 'milk_tea' | 'gold_trophy';
+}
+
+export interface PaperPlaneFX {
+  id: string;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  createdAt: number;
+  durationMs: number;
+  scale?: number;
+  projectileKind?: 'paper_plane' | 'rose_bouquet';
+  throwerUsername?: string;
+  targetUsername?: string;
+}
+
+export interface PaperPlaneHitBubbleFX {
+  id: string;
+  x: number;
+  y: number;
+  createdAt: number;
+  scale?: number;
+}
+
+export interface RoseHeartBurstFX {
+  id: string;
+  x: number;
+  y: number;
+  createdAt: number;
+  durationMs?: number;
+  scale?: number;
+  count?: number;
+  spread?: number;
 }
 
 export interface ZombieDamageEntry {
@@ -367,6 +418,7 @@ export interface HudLayoutConfig {
   waitingQueueBox?: HudBoxPosition;
   noticeBoardBox: HudBoxPosition;
   note1Box?: HudBoxPosition;
+  marqueeBox?: HudBoxPosition;
   lotusLeaderboardTitle: string;
   dailyRecordTitle?: string;
   guideTitle: string;
@@ -381,6 +433,12 @@ export interface HudLayoutConfig {
   note1FontSize?: number;
   note1Opacity?: number;
   showNote1Box?: boolean;
+  showMarqueeBox?: boolean;
+  marqueeContent?: string;
+  marqueeFontSize?: number;
+  marqueeSpeed?: number; // px/s
+  marqueeOpacity?: number;
+  marqueeTextColor?: string;
   guideCycle?: HudBoxCycleConfig;
   lotusLeaderboardCycle?: HudBoxCycleConfig;
   dailyRecordCycle?: HudBoxCycleConfig;
@@ -458,6 +516,8 @@ export interface CustomAssetsConfig {
   // Các Model Sự Kiện Zombie Tấn Công
   zombieSpriteUrl?: string | null;
   projPencilCaseUrl?: string | null;
+  projBlueRulerUrl?: string | null;
+  projCasioUrl?: string | null;
   projBookUrl?: string | null;
   projChairUrl?: string | null;
   projDeskMateUrl?: string | null;
@@ -587,6 +647,13 @@ export interface GameConfig {
   studentSeatingSpeed?: number; // Tốc độ di chuyển vào lớp / xếp chỗ ngồi (default: 110)
   studentGiftSpeed?: number; // Tốc độ di chuyển lên tặng hoa cho Thầy và Cô (default: 185)
 
+  // Cấu hình Máy Bay Giấy ném bạn trong lớp (@tên)
+  paperPlaneScale?: number; // Kích thước máy bay giấy (default: 1.0)
+  paperPlaneSpeed?: number; // Tốc độ bay máy bay giấy px/s (default: 460)
+
+  // Bộ lọc ẩn bong bóng chat khi comment trùng đáp án đúng trong thời gian trả lời câu hỏi
+  filterCorrectAnswerBubble?: boolean;
+
   // Bong bóng lời giảng của Giáo viên
   abbotBubbleEnabled: boolean;
   teacherBubbleScale?: number;
@@ -657,8 +724,10 @@ export interface GameConfig {
   dustParticleSize?: number;
   nameTagFontFamily: string;
   nameTagScale: number;
+  nameTagHeight?: number;
   nameTagMaxChars?: number;
   nameTagOffsetY?: number;
+  rankTrophyBadgeFontSize?: number;
   top1CrownOffsetY?: number;
   streakTagFontFamily?: string;
   streakTagScale?: number;
@@ -668,10 +737,18 @@ export interface GameConfig {
   scoreChangeFontSize?: number;
   scoreChangeStrokeWidth?: number;
   studentLevelExpEnabled?: boolean;
+  ieltsRankBadgeSchemaV1?: boolean;
   vfxFlower10Enabled?: boolean;
   vfxFlower10Scale?: number;
   vfxFlower10OffsetX?: number;
   vfxFlower10OffsetY?: number;
+  vfxRoseHeartBurstEnabled?: boolean;
+  vfxRoseHeartBurstScale?: number;
+  vfxRoseHeartBurstCount?: number;
+  vfxRoseHeartBurstSpread?: number;
+  vfxRoseHeartBurstDurationMs?: number;
+  vfxRoseHeartBurstOffsetX?: number;
+  vfxRoseHeartBurstOffsetY?: number;
   chatBubbleFontFamily: string;
   chatBubbleScale: number;
   chatBubbleDurationSec: number;
@@ -702,10 +779,11 @@ export interface GameConfig {
   zombieHeartBatchIntervalMs?: number;
   zombieNpcAutoAttack?: boolean;
   zombieMaxFlyingProjectiles?: number; // Giới hạn số đạn bay tối đa trong mỗi đợt / trên màn hình
-  zombieNormalProjectileDurationSec?: number; // Thời gian đạn thường bay (Thả tim Hộp Bút & Quà 1 xu - không áp dụng cho đạn 5, 10, 10+)
+  zombieNormalProjectileDurationSec?: number; // Thời gian đạn thường bay (Thả tim & Quà 1 xu - không áp dụng cho đạn 5, 10, 10+)
   zombieGift5ProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 5 xu (Ghế Ngồi + Khóa Camera)
   zombieGift10ProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 10 xu (Đứa Bàn Bên + Khóa Camera)
   zombieGift10PlusProjectileDurationSec?: number; // Thời gian bay riêng của Đạn Quà 10+ xu (Siêu Quà 10+ + Khóa Camera)
+  zombieProjectileScales?: ZombieProjectileScalesConfig; // Hệ số kích thước của tất cả loại đạn Event Zombie
   zombieGrowlMp3Url?: string | null;
   zombieGrowlMp3Title?: string;
   zombieBgmEnabled?: boolean;
@@ -823,6 +901,7 @@ export interface PilgrimData {
   lotusBurstUntil?: number;
   lotusBurstKey?: number;
   chatBubbleUntil?: number;
+  chatBubbleKey?: number;
   woodenFishRippleUntil?: number;
   hasSatOnce?: boolean;
   pendingGiftCoins?: number;
@@ -861,6 +940,9 @@ export interface PilgrimData {
   level?: number;
   expChangeDelta?: number;
   leveledUpInRound?: boolean;
+  rankUpStartAt?: number;
+  rankUpUntil?: number;
+  rankUpKey?: number;
   scoreCardUntil?: number;
   scoreCardKey?: number;
   punishmentMultiplier?: 3 | 6 | 9;
@@ -869,6 +951,11 @@ export interface PilgrimData {
   isPunishedInCurrentRound?: boolean;
   podiumRank?: 1 | 2 | 3;
   winnerMilkTeaScale?: number;
+  winnerTrophyScale?: number;
+  goldTrophies?: number;
+  floatingTrophyCount?: number;
+  floatingTrophyUntil?: number;
+  floatingTrophyKey?: number;
   isDetachedFlowerRunner?: boolean;
   leaveAfterGiftAction?: boolean;
   giftActionBusyUntil?: number;
@@ -1085,6 +1172,7 @@ export interface StudioBackupData {
   customWords?: string[];
   dailyRecords?: DailyRecordEntry[];
   studentExpMap?: Record<string, number>;
+  studentTrophyMap?: Record<string, number>;
 }
 
 export interface SyncPacket {
@@ -1130,6 +1218,8 @@ export interface SyncPacket {
     | 'TRIGGER_ZOMBIE_EVENT'
     | 'SYNC_ZOMBIE_EVENT_STATE'
     | 'SYNC_STUDENT_EXP'
+    | 'TRIGGER_PAPER_PLANE'
+    | 'TRIGGER_ROSE_HEART_BURST'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'
     | 'OBS_DISPLAY_CONTROL';

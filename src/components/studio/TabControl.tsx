@@ -58,7 +58,7 @@ import {
   getQuizLevelRewardInfo,
   normalizeQuizDeckFileName,
 } from '../../config/vocabDecks';
-import { Flower10BadgeIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
+import { Flower10BadgeIcon, GoldTrophyIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
 import {
   TeacherLiveVoiceOptions,
   TeacherLiveVoiceStatus,
@@ -610,7 +610,7 @@ export const TabControl: React.FC<TabControlProps> = ({
       : boardPhase === 'ranking_board'
       ? 'Luồng 6: Đọc BXH Trong Lớp [Nói xong → Câu tiếp]'
       : boardPhase === 'round_end'
-      ? 'Luồng Kết Thúc: Vinh danh Top 1, 2, 3 & Tặng Trà Sữa [Vỗ tay → Vòng mới]'
+      ? 'Luồng Kết Thúc: Vinh danh Top 1, 2, 3 & Trao Cúp Vàng [Vỗ tay → Vòng mới]'
       : `Pha: ${boardPhase}`;
 
   return (
@@ -767,16 +767,17 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onUpdateConfig({
                   studentLevelExpEnabled: !config.studentLevelExpEnabled,
+                  ieltsRankBadgeSchemaV1: true,
                 })
               }
-              title="Bật/tắt hiển thị huy hiệu Rank Cấp độ (Lv) của học sinh (EXP tích lũy = Điểm)"
+              title="Bật/tắt hiển thị thẻ Cấp độ IELTS (IEL 1.0 → 9.0 + % EXP) & Số Cúp Vàng luân phiên mỗi 10s dưới thẻ tên học sinh"
               className={`px-1.5 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition select-none ${
                 config.studentLevelExpEnabled
                   ? 'bg-sky-500/25 border-sky-400 text-sky-200'
                   : 'bg-stone-950 border-stone-700 text-stone-400 hover:bg-stone-800'
               }`}
             >
-              <span>🎖️ Rank (Lv): {config.studentLevelExpEnabled ? 'Bật' : 'Tắt'}</span>
+              <span>🎖️ Rank / Cúp: {config.studentLevelExpEnabled ? 'Bật' : 'Tắt'}</span>
             </button>
 
             <label
@@ -1048,7 +1049,32 @@ export const TabControl: React.FC<TabControlProps> = ({
                 ))}
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <label
+                  className="flex items-center gap-1 text-stone-300 cursor-pointer select-none"
+                  title="Khi bật: trong thời gian hỏi bài, comment trùng đáp án đúng vẫn được chấm điểm nhưng ẩn không hiện bong bóng chat (tránh lộ đáp án). Comment khác vẫn hiện bình thường."
+                >
+                  <input
+                    type="checkbox"
+                    checked={config.filterCorrectAnswerBubble !== false}
+                    onChange={(e) =>
+                      onUpdateConfig({
+                        filterCorrectAnswerBubble: e.target.checked,
+                      })
+                    }
+                    className="accent-amber-400 w-3 h-3"
+                  />
+                  <span
+                    className={
+                      config.filterCorrectAnswerBubble !== false
+                        ? 'text-amber-300 font-semibold'
+                        : 'text-stone-400'
+                    }
+                  >
+                    Lọc câu trả lời
+                  </span>
+                </label>
+
                 <label className="flex items-center gap-1 text-stone-300 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -1272,19 +1298,19 @@ export const TabControl: React.FC<TabControlProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const tiered15 = build15MinuteTieredRoundQuestions(config);
+                        const tiered10 = build15MinuteTieredRoundQuestions(config);
                         onUpdateConfig({
                           quizDecks,
-                          customQuizQuestions: tiered15,
+                          customQuizQuestions: tiered10,
                         });
                         setQuizImportFeedback(
-                          '🎯 Đã trích ngẫu nhiên 15 câu kiểm tra 15 phút (8 câu Dễ + 5 câu Thường + 2 câu Khó)!'
+                          '🎯 Đã trích ngẫu nhiên 10 câu kiểm tra 15 phút (6 câu Dễ + 3 câu Thường + 1 câu Khó)!'
                         );
                       }}
-                      title="Trích ngẫu nhiên 15 câu kiểm tra 15 phút: 8 câu đầu Dễ (tienganh-de) + 5 câu kế Thường (tienganh-thuong) + 2 câu kế Khó (tienganh-kho)"
+                      title="Trích ngẫu nhiên 10 câu kiểm tra 15 phút: 6 câu đầu Dễ (tienganh-de) + 3 câu kế Thường (tienganh-thuong) + 1 câu cuối Khó (tienganh-kho)"
                       className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
                     >
-                      🎯 Trích 15 câu (8+5+2)
+                      🎯 Trích 10 câu (6+3+1)
                     </button>
                     <button
                       type="button"
@@ -2653,13 +2679,173 @@ export const TabControl: React.FC<TabControlProps> = ({
         />
       </section>
 
-      {/* 4.9. BẢNG "KỶ LỤC HÔM NAY" (LƯU 5 BẠN ĐIỂM CAO NHẤT NGÀY + ANIMATION + RESET) */}
-      <section className="p-3 rounded-xl bg-stone-900/75 border border-orange-500/40 space-y-2.5">
+      {/* 4.8b. BẢNG CHẠY CHỮ 1 DÒNG NGANG LIÊN TỤC (THÔNG BÁO DÀI) */}
+      <section className="p-3 rounded-xl bg-stone-900/85 border border-cyan-500/45 space-y-2.5 shadow-md">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-1.5">
-            <Star className="w-3.5 h-3.5 text-orange-400" />
-            <h2 className="text-xs font-bold text-orange-200">
-              Bảng &quot;Kỷ lục hôm nay&quot; (Top 5 cao nhất ngày)
+            <MessageSquareQuote className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <h2 className="text-xs font-extrabold text-cyan-200">
+              📢 Bảng Chạy Chữ Ngang 1 Dòng (Thông Báo Dài)
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateHudLayout({
+                  showMarqueeBox: hud.showMarqueeBox === false ? true : false,
+                })
+              }
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition ${
+                hud.showMarqueeBox !== false
+                  ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                  : 'bg-stone-900 border-stone-700 text-stone-400'
+              }`}
+            >
+              {hud.showMarqueeBox !== false ? 'Đang Hiện' : 'Đang Ẩn'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateHudLayout({ editLayoutMode: !hud.editLayoutMode })
+              }
+              title="Bật chế độ kéo thả vị trí và kích thước khung Bảng Chạy Chữ trên sân khấu"
+              className={`px-2 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition ${
+                hud.editLayoutMode
+                  ? 'bg-amber-400 text-stone-950 border-amber-300'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
+              }`}
+            >
+              <Move className="w-2.5 h-2.5" />
+              <span>Kéo vị trí</span>
+            </button>
+          </div>
+        </div>
+
+        <textarea
+          rows={2}
+          value={
+            hud.marqueeContent ??
+            '📢 Chào mừng các bạn học sinh vào lớp 12A1! Gõ "vào lớp" hoặc trả lời đúng câu hỏi để ngồi vào bàn học • Ngồi trong lớp gõ @tên để ném máy bay giấy và tặng Hoa Hồng trong 10s để gửi bó hoa cho bạn nhé! ❤️'
+          }
+          onChange={(e) =>
+            onUpdateHudLayout({ marqueeContent: e.target.value })
+          }
+          placeholder="Nhập nội dung thông báo dài chạy chữ liên tục trên 1 dòng ngang..."
+          className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-xs text-amber-200 font-semibold focus:outline-none focus:border-cyan-400 resize-y"
+        />
+
+        <div className="grid grid-cols-2 gap-2 pt-0.5">
+          {/* Cỡ chữ (Font Size) */}
+          <div className="p-2 rounded-lg bg-stone-950/85 border border-stone-800 space-y-1">
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-stone-300 font-semibold">Cỡ chữ (Font size):</span>
+              <span className="font-mono font-bold text-amber-300">
+                {hud.marqueeFontSize ?? 12}px
+              </span>
+            </div>
+            <input
+              type="range"
+              min={8}
+              max={32}
+              step={0.5}
+              value={hud.marqueeFontSize ?? 12}
+              onChange={(e) =>
+                onUpdateHudLayout({
+                  marqueeFontSize: parseFloat(e.target.value) || 12,
+                })
+              }
+              className="w-full accent-amber-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+          </div>
+
+          {/* Tốc độ chạy chữ (px/s) */}
+          <div className="p-2 rounded-lg bg-stone-950/85 border border-stone-800 space-y-1">
+            <div className="flex items-center justify-between text-[10.5px]">
+              <span className="text-stone-300 font-semibold">Tốc độ chạy chữ:</span>
+              <span className="font-mono font-bold text-cyan-300">
+                {hud.marqueeSpeed ?? 65} px/s
+              </span>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={300}
+              step={5}
+              value={hud.marqueeSpeed ?? 65}
+              onChange={(e) =>
+                onUpdateHudLayout({
+                  marqueeSpeed: parseInt(e.target.value, 10) || 65,
+                })
+              }
+              className="w-full accent-cyan-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+          </div>
+        </div>
+
+        {/* Độ mờ nền & Màu chữ */}
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800/80 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-stone-400">Màu chữ:</span>
+            {[
+              { color: '#fde047', label: 'Vàng' },
+              { color: '#ffffff', label: 'Trắng' },
+              { color: '#67e8f9', label: 'Xanh' },
+              { color: '#fda4af', label: 'Hồng' },
+              { color: '#86efac', label: 'Lá' },
+            ].map((sw) => {
+              const activeColor = (hud.marqueeTextColor || '#fde047').toLowerCase();
+              const isSelected = activeColor === sw.color.toLowerCase();
+              return (
+                <button
+                  key={sw.color}
+                  type="button"
+                  onClick={() =>
+                    onUpdateHudLayout({ marqueeTextColor: sw.color })
+                  }
+                  title={`Màu chữ: ${sw.label}`}
+                  className={`w-4 h-4 rounded-full border cursor-pointer transition ${
+                    isSelected
+                      ? 'ring-2 ring-white scale-110 border-stone-950'
+                      : 'border-stone-600 opacity-80 hover:opacity-100'
+                  }`}
+                  style={{ backgroundColor: sw.color }}
+                />
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-stone-400">Độ mờ nền:</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={hud.marqueeOpacity ?? 0.88}
+              onChange={(e) =>
+                onUpdateHudLayout({
+                  marqueeOpacity: parseFloat(e.target.value),
+                })
+              }
+              className="w-20 accent-cyan-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+            <span className="text-[10.5px] font-mono font-bold text-cyan-300 w-9 text-right">
+              {Math.round((hud.marqueeOpacity ?? 0.88) * 100)}%
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* 4.9. BẢNG "KỶ LỤC CÚP VÀNG" (LƯU 5 BẠN NHIỀU CÚP VÀNG NHẤT TRONG NGÀY + ANIMATION + RESET) */}
+      <section className="p-3 rounded-xl bg-stone-900/75 border border-yellow-500/40 space-y-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <GoldTrophyIcon className="w-3.5 h-3.5" />
+            <h2 className="text-xs font-bold text-yellow-200">
+              Bảng &quot;Kỷ lục cúp vàng&quot; (Top 5 cúp vàng trong ngày)
             </h2>
           </div>
 
@@ -2686,10 +2872,10 @@ export const TabControl: React.FC<TabControlProps> = ({
                 type="button"
                 onClick={onResetDailyRecords}
                 className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow"
-                title="Reset bảng Kỷ lục hôm nay về 0"
+                title="Reset bảng Kỷ lục cúp vàng trong ngày về 0"
               >
                 <RotateCcw className="w-3 h-3" />
-                <span>Reset Kỷ Lục</span>
+                <span>Reset Cúp Ngày</span>
               </button>
             )}
           </div>
@@ -2702,19 +2888,19 @@ export const TabControl: React.FC<TabControlProps> = ({
             </label>
             <input
               type="text"
-              value={hud.dailyRecordTitle ?? 'Kỷ lục hôm nay'}
+              value={hud.dailyRecordTitle ?? 'Kỷ lục cúp vàng'}
               onChange={(e) =>
                 onUpdateHudLayout({ dailyRecordTitle: e.target.value })
               }
-              placeholder="Kỷ lục hôm nay"
-              className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-800 text-xs text-orange-200 font-semibold focus:outline-none focus:border-orange-400"
+              placeholder="Kỷ lục cúp vàng"
+              className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-800 text-xs text-yellow-200 font-semibold focus:outline-none focus:border-yellow-400"
             />
           </div>
 
           <div>
             <div className="flex items-center justify-between text-[10px] text-stone-400 mb-0.5">
               <span>Cỡ chữ ({hud.dailyRecordFontSize ?? 9.5}px):</span>
-              <span className="font-mono text-orange-300 font-bold">
+              <span className="font-mono text-yellow-300 font-bold">
                 Độ mờ: {Math.round((hud.dailyRecordOpacity ?? hud.hudOpacity ?? 0.9) * 100)}%
               </span>
             </div>
@@ -2730,7 +2916,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                     dailyRecordFontSize: parseFloat(e.target.value),
                   })
                 }
-                className="w-1/2 accent-orange-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                className="w-1/2 accent-yellow-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
               />
               <input
                 type="range"
@@ -2749,12 +2935,12 @@ export const TabControl: React.FC<TabControlProps> = ({
           </div>
         </div>
 
-        {/* Xem nhanh 5 bạn đang giữ kỷ lục hôm nay */}
+        {/* Xem nhanh 5 bạn đang giữ Kỷ lục cúp vàng trong ngày */}
         <div className="p-2 rounded-lg bg-stone-950/90 border border-stone-800 space-y-1">
           <div className="flex items-center justify-between text-[10px] text-stone-400 pb-0.5 border-b border-stone-800">
-            <span>Danh sách Top 5 Kỷ lục hôm nay:</span>
-            <span className="font-mono text-orange-300 font-bold">
-              Format: Avatar / Tên / Điểm cam / Top 1..5
+            <span>Danh sách Top 5 Kỷ lục cúp vàng (trong ngày):</span>
+            <span className="font-mono text-yellow-300 font-bold">
+              Format: Avatar / Tên / Cúp 🏆 / Top 1..5
             </span>
           </div>
           {dailyRecords.length > 0 ? (
@@ -2785,10 +2971,11 @@ export const TabControl: React.FC<TabControlProps> = ({
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="font-mono font-black text-orange-400">
-                      {rec.points.toLocaleString('vi-VN')}
+                    <span className="inline-flex items-center gap-0.5 font-mono font-black text-yellow-300 tabular-nums">
+                      <span>{rec.points.toLocaleString('vi-VN')}</span>
+                      <GoldTrophyIcon className="w-3 h-3" />
                     </span>
-                    <span className="px-1.5 py-0.2 rounded bg-orange-500/25 border border-orange-400/50 text-[9px] font-black text-orange-200">
+                    <span className="px-1.5 py-0.2 rounded bg-yellow-500/20 border border-yellow-400/50 text-[9px] font-black text-yellow-200">
                       Top {idx + 1}
                     </span>
                   </div>
@@ -2797,13 +2984,13 @@ export const TabControl: React.FC<TabControlProps> = ({
             </div>
           ) : (
             <div className="text-[10px] text-stone-500 italic text-center py-1">
-              Chưa có kỷ lục hôm nay (hoặc vừa Reset về 0)
+              Chưa có cúp vàng trong ngày (chỉ cộng ở cuối bài kiểm tra 15 phút: Top 1 +3, Top 2 +2, Top 3 +1)
             </div>
           )}
         </div>
 
         <HudCycleSettingsCard
-          title="Kỷ lục hôm nay"
+          title="Kỷ lục cúp vàng"
           cycle={hud.dailyRecordCycle}
           onChange={(nextCycle) =>
             onUpdateHudLayout({ dailyRecordCycle: nextCycle })

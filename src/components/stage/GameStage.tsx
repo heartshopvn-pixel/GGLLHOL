@@ -23,6 +23,9 @@ import {
   TempleMonkData,
   WaitingQueueItem,
   FlyingMilkTeaFX,
+  PaperPlaneFX,
+  PaperPlaneHitBubbleFX,
+  RoseHeartBurstFX,
   ZombieEntityState,
   ZombieEventRuntimeState,
   ZombieProjectileFX,
@@ -41,6 +44,9 @@ import {
 } from './SchoolGiftArt';
 import {
   FlyingMilkTeaSprite,
+  PaperPlaneEmptySpikyBubble,
+  PaperPlaneProjectileSprite,
+  RoseHeartBurstSprite,
   ZombieCharacterSprite,
   ZombieProjectileSprite,
   ZombieSpikyDamageBubble,
@@ -87,10 +93,14 @@ interface GameStageProps {
   zombieProjectiles?: ZombieProjectileFX[];
   zombieSpikyDamages?: ZombieSpikyDamageFX[];
   flyingMilkTeas?: FlyingMilkTeaFX[];
+  paperPlanes?: PaperPlaneFX[];
+  paperPlaneHitBubbles?: PaperPlaneHitBubbleFX[];
+  roseHeartBursts?: RoseHeartBurstFX[];
   eventBarFlashKey?: number;
   cameraFocus: CameraFocusState;
   speakingMeta?: {
     pilgrimId?: number;
+    chatBubbleKey?: number;
     username?: string;
     reason?: string;
     isBot?: boolean;
@@ -301,6 +311,9 @@ export const GameStage: React.FC<GameStageProps> = ({
   zombieProjectiles = [],
   zombieSpikyDamages = [],
   flyingMilkTeas = [],
+  paperPlanes = [],
+  paperPlaneHitBubbles = [],
+  roseHeartBursts = [],
   eventBarFlashKey,
   cameraFocus,
   speakingMeta,
@@ -408,6 +421,55 @@ export const GameStage: React.FC<GameStageProps> = ({
     zoneKey: ZoneKey;
     edge: RectEdge;
   } | null>(null);
+
+  const activeBoardEngine =
+    classBoardState?.engine ||
+    config.hudLayout.classBoardEngine ||
+    'english_quiz';
+  const isEnglish15MinLesson =
+    activeBoardEngine === 'english_quiz' || activeBoardEngine === 'result_board';
+
+  // Luân phiên đồng bộ giữa Thẻ Rank IELTS (10s) và Thẻ Số Cúp Vàng (4s) khi ở Tiết Tiếng Anh kiểm tra 15 phút
+  const RANK_BADGE_DURATION_MS = 10000;
+  const TROPHY_BADGE_DURATION_MS = 4000;
+  const SHARED_BADGE_CYCLE_MS =
+    RANK_BADGE_DURATION_MS + TROPHY_BADGE_DURATION_MS;
+
+  const [isIeltsCycleSlot, setIsIeltsCycleSlot] = useState<boolean>(
+    () => Date.now() % SHARED_BADGE_CYCLE_MS < RANK_BADGE_DURATION_MS
+  );
+
+  useEffect(() => {
+    if (!config.studentLevelExpEnabled || !isEnglish15MinLesson) {
+      return;
+    }
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNextSwitch = () => {
+      const nowMs = Date.now();
+      const elapsedInCycle = nowMs % SHARED_BADGE_CYCLE_MS;
+      const inRankPhase = elapsedInCycle < RANK_BADGE_DURATION_MS;
+      setIsIeltsCycleSlot((prev) => (prev !== inRankPhase ? inRankPhase : prev));
+      const msUntilNextSwitch = inRankPhase
+        ? RANK_BADGE_DURATION_MS - elapsedInCycle
+        : SHARED_BADGE_CYCLE_MS - elapsedInCycle;
+      timeoutId = setTimeout(
+        scheduleNextSwitch,
+        Math.max(25, msUntilNextSwitch + 10)
+      );
+    };
+    scheduleNextSwitch();
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [
+    SHARED_BADGE_CYCLE_MS,
+    config.studentLevelExpEnabled,
+    isEnglish15MinLesson,
+  ]);
+
+  const showIeltsInSharedBadge = Boolean(
+    config.studentLevelExpEnabled && isEnglish15MinLesson && isIeltsCycleSlot
+  );
 
   useEffect(() => {
     const updateScale = () => {
@@ -991,12 +1053,15 @@ export const GameStage: React.FC<GameStageProps> = ({
         onMoveWaypoint(draggingNode.kind, draggingNode.index, { x: nx, y: ny });
       } else if (draggingHudBox) {
         const box =
-          config.hudLayout[draggingHudBox.boxKey] || {
-            x: 12,
-            y: 154,
-            width: 136,
-            height: 34,
-          };
+          config.hudLayout[draggingHudBox.boxKey] ||
+          (draggingHudBox.boxKey === 'marqueeBox'
+            ? { x: 10, y: 924, width: 520, height: 28 }
+            : {
+                x: 12,
+                y: 154,
+                width: 136,
+                height: 34,
+              });
         const nx = Math.round(
           Math.max(0, Math.min(540 - box.width, stageX - draggingHudBox.offsetX))
         );
@@ -1009,7 +1074,7 @@ export const GameStage: React.FC<GameStageProps> = ({
         const dx = stageX - startX;
         const dy = stageY - startY;
         const minW = 68;
-        const minH = 26;
+        const minH = boxKey === 'marqueeBox' ? 18 : 26;
 
         let nextX = initialBox.x;
         let nextY = initialBox.y;
@@ -1230,12 +1295,16 @@ export const GameStage: React.FC<GameStageProps> = ({
       const scaleY = 960 / rect.height;
       const stageX = (clientX - rect.left) * scaleX;
       const stageY = (clientY - rect.top) * scaleY;
-      const box = config.hudLayout[boxKey] || {
-        x: 12,
-        y: 154,
-        width: 136,
-        height: 34,
-      };
+      const box =
+        config.hudLayout[boxKey] ||
+        (boxKey === 'marqueeBox'
+          ? { x: 10, y: 924, width: 520, height: 28 }
+          : {
+              x: 12,
+              y: 154,
+              width: 136,
+              height: 34,
+            });
       setDraggingHudBox({
         boxKey,
         offsetX: stageX - box.x,
@@ -1260,12 +1329,16 @@ export const GameStage: React.FC<GameStageProps> = ({
       const scaleY = 960 / rect.height;
       const stageX = (clientX - rect.left) * scaleX;
       const stageY = (clientY - rect.top) * scaleY;
-      const box = config.hudLayout[boxKey] || {
-        x: 12,
-        y: 154,
-        width: 136,
-        height: 34,
-      };
+      const box =
+        config.hudLayout[boxKey] ||
+        (boxKey === 'marqueeBox'
+          ? { x: 10, y: 924, width: 520, height: 28 }
+          : {
+              x: 12,
+              y: 154,
+              width: 136,
+              height: 34,
+            });
       setResizingHudBox({
         boxKey,
         corner,
@@ -1562,8 +1635,10 @@ export const GameStage: React.FC<GameStageProps> = ({
               useDefaultPngModels={config.useDefaultPngModels !== false}
               nameTagFontFamily={config.nameTagFontFamily}
               nameTagScale={config.nameTagScale ?? 1}
+              nameTagHeight={config.nameTagHeight ?? 20}
               nameTagMaxChars={config.nameTagMaxChars ?? 16}
               nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              rankTrophyBadgeFontSize={config.rankTrophyBadgeFontSize ?? 8}
               streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
               streakTagScale={config.streakTagScale ?? 1}
               scoreTagScale={config.scoreTagScale ?? 1}
@@ -1583,10 +1658,15 @@ export const GameStage: React.FC<GameStageProps> = ({
               chatBubbleOffsetY={config.chatBubbleOffsetY ?? 0}
               chatBubbleOffsetX={config.chatBubbleOffsetX ?? 24}
               isLeftSeatmate={false}
-              isSpeakingBubble={speakingPilgrim?.id === p.id}
+              isSpeakingBubble={
+                speakingPilgrim?.id === p.id &&
+                (!speakingMeta?.chatBubbleKey ||
+                  speakingMeta.chatBubbleKey === p.chatBubbleKey)
+              }
               isTop1InClass={false}
               top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
+              showIeltsInSharedBadge={showIeltsInSharedBadge}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />
@@ -1601,8 +1681,10 @@ export const GameStage: React.FC<GameStageProps> = ({
               useDefaultPngModels={config.useDefaultPngModels !== false}
               nameTagFontFamily={config.nameTagFontFamily}
               nameTagScale={config.nameTagScale ?? 1}
+              nameTagHeight={config.nameTagHeight ?? 20}
               nameTagMaxChars={config.nameTagMaxChars ?? 16}
               nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              rankTrophyBadgeFontSize={config.rankTrophyBadgeFontSize ?? 8}
               streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
               streakTagScale={config.streakTagScale ?? 1}
               scoreTagScale={config.scoreTagScale ?? 1}
@@ -1626,6 +1708,7 @@ export const GameStage: React.FC<GameStageProps> = ({
               isTop1InClass={false}
               top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
+              showIeltsInSharedBadge={showIeltsInSharedBadge}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />
@@ -1640,8 +1723,10 @@ export const GameStage: React.FC<GameStageProps> = ({
               useDefaultPngModels={config.useDefaultPngModels !== false}
               nameTagFontFamily={config.nameTagFontFamily}
               nameTagScale={config.nameTagScale ?? 1}
+              nameTagHeight={config.nameTagHeight ?? 20}
               nameTagMaxChars={config.nameTagMaxChars ?? 16}
               nameTagOffsetY={config.nameTagOffsetY ?? 0}
+              rankTrophyBadgeFontSize={config.rankTrophyBadgeFontSize ?? 8}
               streakTagFontFamily={config.streakTagFontFamily || config.nameTagFontFamily}
               streakTagScale={config.streakTagScale ?? 1}
               scoreTagScale={config.scoreTagScale ?? 1}
@@ -1666,10 +1751,15 @@ export const GameStage: React.FC<GameStageProps> = ({
               deskSeatY={
                 p.slotId ? seatMeta.deskYBySlotId.get(p.slotId) : undefined
               }
-              isSpeakingBubble={speakingPilgrim?.id === p.id}
+              isSpeakingBubble={
+                speakingPilgrim?.id === p.id &&
+                (!speakingMeta?.chatBubbleKey ||
+                  speakingMeta.chatBubbleKey === p.chatBubbleKey)
+              }
               isTop1InClass={p.id === top1InClassPilgrimId}
               top1CrownOffsetY={config.top1CrownOffsetY ?? 0}
               studentLevelExpEnabled={Boolean(config.studentLevelExpEnabled)}
+              showIeltsInSharedBadge={showIeltsInSharedBadge}
               giftModelScales={config.giftModelScales}
               walkWobbleIntensity={config.walkWobbleIntensity ?? 1}
             />
@@ -1834,8 +1924,10 @@ export const GameStage: React.FC<GameStageProps> = ({
               key={proj.id}
               proj={proj}
               customAssets={customAssets}
+              projectileScales={config.zombieProjectileScales}
               nameTagFontFamily={config.nameTagFontFamily}
               nameTagScale={config.nameTagScale}
+              nameTagHeight={config.nameTagHeight ?? 20}
               nameTagMaxChars={config.nameTagMaxChars}
             />
           ))}
@@ -1851,6 +1943,31 @@ export const GameStage: React.FC<GameStageProps> = ({
               customAssets={customAssets}
             />
           ))}
+
+          {/* Layer 3.4b: Máy bay giấy / Bó hoa hồng ném bạn trong lớp & Hiệu ứng trúng đạn (Bong bóng gai hoặc Nổ tim đỏ) */}
+          {paperPlanes.map((plane) => (
+            <PaperPlaneProjectileSprite
+              key={plane.id}
+              plane={plane}
+              planeScale={config.paperPlaneScale ?? 1}
+              customAssets={customAssets}
+              roseBouquetScale={config.giftModelScales?.roseBouquet ?? 1}
+            />
+          ))}
+
+          {paperPlaneHitBubbles.map((fx) => (
+            <PaperPlaneEmptySpikyBubble key={fx.id} fx={fx} />
+          ))}
+
+          {config.vfxRoseHeartBurstEnabled !== false &&
+            roseHeartBursts.map((fx) => (
+              <RoseHeartBurstSprite
+                key={fx.id}
+                fx={fx}
+                offsetX={config.vfxRoseHeartBurstOffsetX ?? 0}
+                offsetY={config.vfxRoseHeartBurstOffsetY ?? 0}
+              />
+            ))}
         </div>
 
         {/* Hiệu ứng ánh sáng môi trường Battle (tối dần rồi sáng lên nhịp nhàng + chớp đỏ khi Zombie trúng đạn) */}

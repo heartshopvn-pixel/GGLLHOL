@@ -19,8 +19,9 @@ import {
   CustomAssetsConfig,
   GameConfig,
   ZombieEventRuntimeState,
-  ZombieProjectileKind,
+  ZombieProjectileScalesConfig,
 } from '../../types/game';
+import { DEFAULT_ZOMBIE_PROJECTILE_SCALES } from '../../config/constants';
 import { soundEngine } from '../../services/soundEngine';
 
 interface TabEventProps {
@@ -83,6 +84,85 @@ export const TabEvent: React.FC<TabEventProps> = ({
   const teacherPos = config.zombieTeacherPos || { x: 392, y: 444 };
   const supervisorPos = config.zombieSupervisorPos || { x: 148, y: 498 };
 
+  const projScales: ZombieProjectileScalesConfig = {
+    ...DEFAULT_ZOMBIE_PROJECTILE_SCALES,
+    ...(config.zombieProjectileScales || {}),
+  };
+
+  const handleUpdateProjectileScale = (
+    key: keyof ZombieProjectileScalesConfig,
+    rawVal: number
+  ) => {
+    const safeVal = Math.max(
+      0.25,
+      Math.min(3.0, Math.round((rawVal || 1) * 100) / 100)
+    );
+    onUpdateConfig({
+      zombieProjectileScales: {
+        ...projScales,
+        [key]: safeVal,
+      },
+    });
+  };
+
+  const projectileScaleItems: Array<{
+    key: keyof ZombieProjectileScalesConfig;
+    label: string;
+    sub: string;
+    accentClass: string;
+    textClass: string;
+    borderClass: string;
+  }> = [
+    {
+      key: 'pencilCase',
+      label: '✏️ Hộp Bút',
+      sub: 'Đạn Tim (1/3)',
+      accentClass: 'accent-amber-400',
+      textClass: 'text-amber-300',
+      borderClass: 'border-amber-500/35',
+    },
+    {
+      key: 'blueRuler',
+      label: '📐 Thước Ê-ke Xanh',
+      sub: 'Đạn Tim (2/3)',
+      accentClass: 'accent-sky-400',
+      textClass: 'text-sky-300',
+      borderClass: 'border-sky-500/35',
+    },
+    {
+      key: 'casio',
+      label: '🧮 Máy Tính Casio',
+      sub: 'Đạn Tim (3/3)',
+      accentClass: 'accent-cyan-400',
+      textClass: 'text-cyan-300',
+      borderClass: 'border-cyan-500/35',
+    },
+    {
+      key: 'book',
+      label: '📕 Quyển Sách / Hoa',
+      sub: 'Quà 1 xu',
+      accentClass: 'accent-emerald-400',
+      textClass: 'text-emerald-300',
+      borderClass: 'border-emerald-500/35',
+    },
+    {
+      key: 'chair',
+      label: '🪑 Cái Ghế Gỗ',
+      sub: 'Quà 5 xu',
+      accentClass: 'accent-orange-400',
+      textClass: 'text-orange-300',
+      borderClass: 'border-orange-500/40',
+    },
+    {
+      key: 'deskMate',
+      label: '😱 Đứa Bàn Bên',
+      sub: 'Quà 10 & 10+ xu',
+      accentClass: 'accent-purple-400',
+      textClass: 'text-purple-300',
+      borderClass: 'border-purple-500/40',
+    },
+  ];
+
   const customAssetItems: Array<{
     key: keyof CustomAssetsConfig;
     title: string;
@@ -95,22 +175,32 @@ export const TabEvent: React.FC<TabEventProps> = ({
     },
     {
       key: 'projPencilCaseUrl',
-      title: '✏️ Đạn 1: Hộp Bút (Thả Tim)',
-      subtitle: '1 Tim = 1 điểm (gom nhịp bắn)',
+      title: '✏️ Đạn Tim 1: Hộp Bút',
+      subtitle: 'Random 1 trong 3 khi Thả Tim',
+    },
+    {
+      key: 'projBlueRulerUrl',
+      title: '📐 Đạn Tim 2: Thước Ê-ke Xanh Dương',
+      subtitle: 'Random 1 trong 3 khi Thả Tim',
+    },
+    {
+      key: 'projCasioUrl',
+      title: '🧮 Đạn Tim 3: Máy Tính Casio',
+      subtitle: 'Random 1 trong 3 khi Thả Tim',
     },
     {
       key: 'projBookUrl',
-      title: '📕 Đạn 2: Quyển Sách (Quà 1 xu / Hoa)',
+      title: '📕 Đạn Quà 1 xu: Quyển Sách / Hoa',
       subtitle: '1 xu = 50 điểm (bắn ngay)',
     },
     {
       key: 'projChairUrl',
-      title: '🪑 Đạn 3: Ghế Ngồi (Quà 5 xu)',
-      subtitle: '5 xu = 250 điểm (bắn ngay)',
+      title: '🪑 Đạn Quà 5 xu: Cái Ghế Ngồi',
+      subtitle: '5 xu = 250 điểm (bắn ngay + khóa Cam)',
     },
     {
       key: 'projDeskMateUrl',
-      title: '😱 Đạn 4: Đứa Bàn Bên :) (Quà 10+ xu)',
+      title: '😱 Đạn Quà 10+ xu: Đứa Bàn Bên :)',
       subtitle: '10 xu = 500 điểm (Meme ném bạn học)',
     },
     {
@@ -783,7 +873,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div>
                 <span className="text-[10.5px] font-extrabold text-sky-300">
-                  ✏️ Tốc độ Đạn Thường (Thả Tim Hộp Bút & Quà 1 xu)
+                  ✏️ Tốc độ Đạn Thường (Thả Tim: Hộp Bút / Ê-ke / Casio & Quà 1 xu)
                 </span>
                 <span className="block text-[9px] text-stone-400">
                   Không áp dụng cho đạn quà 5, 10, 10+ xu
@@ -920,6 +1010,94 @@ export const TabEvent: React.FC<TabEventProps> = ({
 
           <div className="text-[9.5px] text-amber-200/90 bg-amber-950/30 border border-amber-500/25 rounded px-2 py-1">
             🎥 <strong>Hàng chờ Camera Đạn Quà 5, 10, 10+ xu:</strong> Khi đang có viên đạn quà bay trên sân, lượt đạn quà mới sẽ chờ viên hiện tại chạm Zombie xong mới phóng tiếp và chuyển Camera qua viên đạn quà kế tiếp.
+          </div>
+        </div>
+
+        {/* Điều chỉnh Kích Thước (Scale) cho TẤT CẢ 6 Loại Đạn */}
+        <div className="p-2.5 rounded-lg bg-stone-950/95 border border-cyan-500/40 space-y-2">
+          <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-1.5">
+            <div>
+              <div className="text-[11px] font-extrabold text-cyan-300 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>
+                  Kích Thước Tất Cả Loại Đạn (Đạn Tim 3 Mẫu + Quà 1 • 5 • 10+ xu)
+                </span>
+              </div>
+              <p className="text-[9.5px] text-stone-400">
+                Áp dụng cho cả hình mặc định SVG lẫn hình ảnh PNG tải lên • Đạn Tim bắn random 1 trong 3: Hộp Bút / Thước Ê-ke Xanh / Casio
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  zombieProjectileScales: {
+                    ...DEFAULT_ZOMBIE_PROJECTILE_SCALES,
+                  },
+                })
+              }
+              className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9.5px] font-semibold text-stone-300 flex items-center gap-1 shrink-0 cursor-pointer"
+              title="Khôi phục kích thước 1.0x cho tất cả loại đạn"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Mặc định 1.0x</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            {projectileScaleItems.map((item) => {
+              const curScale = projScales[item.key] ?? 1.0;
+              return (
+                <div
+                  key={item.key}
+                  className={`p-2 rounded-lg bg-stone-900/90 border ${item.borderClass} space-y-1`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="min-w-0">
+                      <span
+                        className={`text-[10px] font-extrabold ${item.textClass} block truncate`}
+                      >
+                        {item.label}
+                      </span>
+                      <span className="text-[8.5px] text-stone-400 block truncate">
+                        {item.sub}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <input
+                        type="number"
+                        min={0.25}
+                        max={3.0}
+                        step={0.05}
+                        value={curScale}
+                        onChange={(e) =>
+                          handleUpdateProjectileScale(
+                            item.key,
+                            parseFloat(e.target.value) || 1.0
+                          )
+                        }
+                        className={`w-12 px-1 py-0.5 rounded bg-stone-950 border border-stone-700 text-[10.5px] font-mono font-bold ${item.textClass} text-right`}
+                      />
+                      <span className="text-[9px] text-stone-400">x</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.25}
+                    max={3.0}
+                    step={0.05}
+                    value={curScale}
+                    onChange={(e) =>
+                      handleUpdateProjectileScale(
+                        item.key,
+                        parseFloat(e.target.value) || 1.0
+                      )
+                    }
+                    className={`w-full ${item.accentClass} h-1.5 bg-stone-800 rounded-lg cursor-pointer`}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -1134,7 +1312,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           <div className="p-2.5 rounded-lg bg-stone-950/90 border border-sky-500/30 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-extrabold text-sky-300">
-                Luồng 4: Lời thoại + Chatbox Thầy Tùng (Giọng Nam)
+                Luồng 4: Lời thoại + Chatbox Cô Thảo kêu gọi (Giọng Nữ Chính)
               </span>
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-stone-400">T.gian tối thiểu:</span>
@@ -1320,8 +1498,8 @@ export const TabEvent: React.FC<TabEventProps> = ({
                   : '🤖 Bật Tự Động Đánh (Cho NPC tự giả lập thả tim xem thử)'}
               </span>
             </div>
-            <div className="text-[9.5px] text-stone-400 mt-0.5">
-              Tự động phóng mưa đạn Hộp Bút nối đuôi nhau giữa Trong Lớp ↔ Hàng Chờ ở Luồng 5 (Không tính vào Bảng Chiến Công)
+            <div className="text-[9.5px] text-stone-400">
+              Tự động phóng mưa đạn Tim (Random: Hộp Bút / Thước Ê-ke / Casio) giữa Trong Lớp ↔ Hàng Chờ
             </div>
           </div>
           <span
@@ -1361,7 +1539,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
               <span className="font-mono text-emerald-300">+15đ</span>
             </div>
             <div className="text-[9.5px] text-stone-400">
-              Từ vị trí ngồi ném Hộp Bút
+              Random: Hộp Bút / Ê-ke Xanh / Casio
             </div>
           </button>
 
@@ -1380,7 +1558,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
               <span className="font-mono text-emerald-300">+25đ</span>
             </div>
             <div className="text-[9.5px] text-stone-400">
-              1 đại diện cửa lớp ném Hộp Bút
+              Cửa lớp ném Hộp Bút / Ê-ke / Casio
             </div>
           </button>
 

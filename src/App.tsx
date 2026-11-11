@@ -414,6 +414,9 @@ export default function App() {
           zombieProjectiles={engine.zombieProjectiles}
           zombieSpikyDamages={engine.zombieSpikyDamages}
           flyingMilkTeas={engine.flyingMilkTeas}
+          paperPlanes={engine.paperPlanes}
+          paperPlaneHitBubbles={engine.paperPlaneHitBubbles}
+          roseHeartBursts={engine.roseHeartBursts}
           latestAltarOffering={engine.latestAltarOffering}
           burnerLotusBursts={engine.burnerLotusBursts}
           flyingLotuses={engine.flyingLotuses}
@@ -560,6 +563,9 @@ export default function App() {
           onStopZombieEvent={engine.handleStopZombieEvent}
           onKillZombieImmediately={engine.handleKillZombieImmediately}
           onTestZombieAttack={engine.handleTestZombieAttack}
+          onTestPaperPlaneThrow={engine.handleTestPaperPlaneThrow}
+          onTestRoseHeartBurst={engine.handleTestRoseHeartBurst}
+          onTestRoseBouquetThrow={engine.handleTestRoseBouquetThrow}
           compactRemoteStage={compactRemoteStage}
           onToggleCompactRemoteStage={handleToggleCompactRemoteStage}
           isFullscreen={obsIsFullscreen}

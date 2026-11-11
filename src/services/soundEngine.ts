@@ -8,6 +8,7 @@ export type TTSStatusListener = (
 
 export interface TTSQueueItemMeta {
   pilgrimId?: number;
+  chatBubbleKey?: number;
   username?: string;
   reason?: CameraFocusReason;
   isBot?: boolean;
@@ -468,28 +469,53 @@ class TempleSoundService {
     speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): GameConfig {
     if (isHostLive) {
+      const hostEngine = config.hostTtsEngine || 'google_stream';
+      const rawHostVoice = config.hostNodeVoice || 'google-vi-gtx';
+      const useFemaleForAbbot =
+        !speakerRole || speakerRole === 'abbot' || speakerRole === 'none';
+      const resolvedHostVoice =
+        useFemaleForAbbot &&
+        (rawHostVoice === 'google-vi-male-deep' ||
+          rawHostVoice === 'vi-VN-NamMinhNeural')
+          ? hostEngine === 'node_edge'
+            ? 'vi-VN-HoaiMyNeural'
+            : 'google-vi-gtx'
+          : rawHostVoice;
       return {
         ...config,
         ttsEnabled: true,
-        ttsEngine: config.hostTtsEngine || 'google_stream',
-        nodeVoice: config.hostNodeVoice || 'google-vi-male-deep',
+        ttsEngine: hostEngine,
+        nodeVoice: resolvedHostVoice,
         selectedSystemVoiceURI:
           config.hostSystemVoiceURI !== undefined
             ? config.hostSystemVoiceURI
             : config.selectedSystemVoiceURI,
-        ttsRate: config.hostTtsRate ?? 0.96,
-        ttsPitch: config.hostTtsPitch ?? 0.82,
+        ttsRate: config.hostTtsRate ?? 1.02,
+        ttsPitch: useFemaleForAbbot ? 1.0 : config.hostTtsPitch ?? 1.0,
         ttsVolume: config.hostTtsVolume ?? config.ttsVolume ?? 1.0,
         ttsReverb: 0,
       };
     }
-    if (speakerRole === 'senior_novice') {
-      // Giọng Nam cho Thầy Giám Thị (Luồng 4 Sự kiện Zombie)
+
+    // Cô Thảo (giọng nữ chuẩn, mượt, không bóp pitch gây đứt tiếng) làm giọng đọc chính cho tất cả các luồng tiết học & sự kiện
+    const isMaleVoiceSelected =
+      config.nodeVoice === 'google-vi-male-deep' ||
+      config.nodeVoice === 'vi-VN-NamMinhNeural';
+    if (
+      speakerRole === 'abbot' ||
+      speakerRole === 'senior_novice' ||
+      isMaleVoiceSelected
+    ) {
+      const cleanFemaleVoice =
+        config.ttsEngine === 'node_edge'
+          ? 'vi-VN-HoaiMyNeural'
+          : !config.nodeVoice || isMaleVoiceSelected
+          ? 'google-vi-gtx'
+          : config.nodeVoice;
       return {
         ...config,
-        ttsEnabled: true,
-        nodeVoice: 'google-vi-male-deep',
-        ttsPitch: 0.82,
+        nodeVoice: cleanFemaleVoice,
+        ttsPitch: 1.0,
       };
     }
     return config;
@@ -499,9 +525,10 @@ class TempleSoundService {
     text: string,
     config: GameConfig,
     isHostLive = false,
-    lang: 'vi' | 'en' = 'vi'
+    lang: 'vi' | 'en' = 'vi',
+    speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): string | null {
-    const eff = this.buildEffectiveItemConfig(config, isHostLive);
+    const eff = this.buildEffectiveItemConfig(config, isHostLive, speakerRole);
     const shortText = text.slice(0, 195);
     if (lang === 'en') {
       return `/api/tts?lang=en&voice=google-en-gtx&text=${encodeURIComponent(shortText)}`;
@@ -525,7 +552,8 @@ class TempleSoundService {
         item.text,
         config,
         Boolean(item.isHostLive),
-        item.lang || item.meta?.lang || 'vi'
+        item.lang || item.meta?.lang || 'vi',
+        item.meta?.speakerRole
       );
       if (streamUrl) {
         void this.getOrFetchAudioBlobUrl(streamUrl, 3000);

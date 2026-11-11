@@ -559,10 +559,10 @@ function sampleRandomQuestions(
 }
 
 /**
- * Xây dựng bộ đề thi 15 phút (15 câu) theo phân bố độ khó tăng dần:
- * - Câu 1..8 (8 câu đầu): Level Dễ (tienganh-de)
- * - Câu 9..13 (5 câu kế): Level Thường (tienganh-thuong)
- * - Câu 14..15 (2 câu kế): Level Khó (tienganh-kho)
+ * Xây dựng bộ đề thi 15 phút (10 câu) theo phân bố độ khó tăng dần:
+ * - Câu 1..6 (6 câu đầu): Level Dễ (tienganh-de)
+ * - Câu 7..9 (3 câu tiếp theo): Level Thường (tienganh-thuong)
+ * - Câu 10 (1 câu cuối): Level Khó (tienganh-kho)
  */
 export function build15MinuteTieredRoundQuestions(
   cfg?: GameConfig,
@@ -607,21 +607,21 @@ export function build15MinuteTieredRoundQuestions(
 
   const tier1 = sampleRandomQuestions(
     poolEasy,
-    8,
+    6,
     usedEnLower,
     deckEasy?.name || 'tienganh-de',
     'easy'
   );
   const tier2 = sampleRandomQuestions(
     poolNormal,
-    5,
+    3,
     usedEnLower,
     deckNormal?.name || 'tienganh-thuong',
     'normal'
   );
   const tier3 = sampleRandomQuestions(
     poolHard,
-    2,
+    1,
     usedEnLower,
     deckHard?.name || 'tienganh-kho',
     'hard'
@@ -649,7 +649,7 @@ export function build15MinuteTieredRoundQuestions(
     }
     return {
       ...item,
-      id: `en-r15-${now}-${idx + 1}-${Math.random().toString(36).slice(2, 5)}`,
+      id: `en-r10-${now}-${idx + 1}-${Math.random().toString(36).slice(2, 5)}`,
       luckyStars: stars,
     };
   });

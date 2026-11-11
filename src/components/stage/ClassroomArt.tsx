@@ -116,6 +116,8 @@ const DeskItem = React.memo<DeskItemProps>(
     const catOffsetY = giftModelScales?.deskCatOffsetY ?? 0;
     const snackOffsetX = giftModelScales?.snackBagOffsetX ?? 0;
     const snackOffsetY = giftModelScales?.snackBagOffsetY ?? 0;
+    const pigOffsetX = giftModelScales?.deskPigOffsetX ?? 0;
+    const pigOffsetY = giftModelScales?.deskPigOffsetY ?? 0;
     const maxCats = Math.max(
       1,
       Math.min(1, giftModelScales?.maxDeskCats ?? 1)
@@ -359,7 +361,7 @@ const DeskItem = React.memo<DeskItemProps>(
             key={`pig_desk_left_${leftPigDropAt || 1}`}
             className="absolute left-[28%] top-[-6%] z-20"
             style={{
-              transform: 'translate(-50%, 0)',
+              transform: `translate(-50%, 0) translate(${pigOffsetX}px, ${pigOffsetY}px)`,
             }}
           >
             <div
@@ -383,7 +385,7 @@ const DeskItem = React.memo<DeskItemProps>(
             key={`pig_desk_right_${rightPigDropAt || 1}`}
             className="absolute right-[28%] top-[-6%] z-20"
             style={{
-              transform: 'translate(50%, 0)',
+              transform: `translate(50%, 0) translate(${-pigOffsetX}px, ${pigOffsetY}px)`,
             }}
           >
             <div

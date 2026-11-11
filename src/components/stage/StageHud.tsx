@@ -33,7 +33,7 @@ import {
   getQuizPointsForRank,
 } from '../../config/vocabDecks';
 import { DEFAULT_GUIDE_ITEMS, ENGLISH_QUIZ_QUESTIONS } from '../../config/constants';
-import { Flower10BadgeIcon, SchoolGiftArt } from './SchoolGiftArt';
+import { Flower10BadgeIcon, GoldTrophyIcon, SchoolGiftArt } from './SchoolGiftArt';
 
 export type HudBoxKey =
   | 'templeSign'
@@ -46,7 +46,8 @@ export type HudBoxKey =
   | 'pilgrimCountBox'
   | 'waitingQueueBox'
   | 'noticeBoardBox'
-  | 'note1Box';
+  | 'note1Box'
+  | 'marqueeBox';
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -328,8 +329,9 @@ const StageHudInner: React.FC<StageHudProps> = ({
     waitingQueueBox,
     noticeBoardBox,
     note1Box,
+    marqueeBox,
     lotusLeaderboardTitle = 'Bảng Hoa Điểm 10',
-    dailyRecordTitle = 'Kỷ lục hôm nay',
+    dailyRecordTitle = 'Kỷ lục cúp vàng',
     guideTitle = 'Nội Quy & Quà Tặng',
     grandEventTitle = 'Kích hoạt sự kiện',
     pilgrimCountTitle = 'Sĩ số lớp',
@@ -342,6 +344,12 @@ const StageHudInner: React.FC<StageHudProps> = ({
     note1FontSize = 10,
     note1Opacity,
     showNote1Box = true,
+    showMarqueeBox = true,
+    marqueeContent = '📢 Chào mừng các bạn học sinh vào lớp 12A1! Gõ "vào lớp" hoặc trả lời đúng câu hỏi để ngồi vào bàn học • Ngồi trong lớp gõ @tên để ném máy bay giấy và tặng Hoa Hồng trong 10s để gửi bó hoa cho bạn nhé! ❤️',
+    marqueeFontSize = 12,
+    marqueeSpeed = 65,
+    marqueeOpacity,
+    marqueeTextColor = '#fde047',
     guideCycle,
     lotusLeaderboardCycle,
     dailyRecordCycle,
@@ -392,6 +400,8 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const safeClassBoardFontSize = Math.max(8, Math.min(26, classBoardFontSize || 13));
   const safeNoticeFontSize = Math.max(7, Math.min(24, noticeBoardFontSize || 10));
   const safeNote1FontSize = Math.max(7, Math.min(24, note1FontSize || 10));
+  const safeMarqueeFontSize = Math.max(7, Math.min(36, marqueeFontSize || 12));
+  const safeMarqueeSpeed = Math.max(10, Math.min(350, Number(marqueeSpeed || 65)));
   const safeGrandEventFontSize = Math.max(7, Math.min(24, grandEventFontSize || 10));
   const safeLotusLeaderboardFontSize = Math.max(7, Math.min(24, lotusLeaderboardFontSize || 10));
   const safeDailyRecordFontSize = Math.max(7, Math.min(24, dailyRecordFontSize || 9.5));
@@ -407,6 +417,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   const blurClassBoard = Math.max(0, Math.min(24, Number(classBoardBlur ?? 2)));
   const opNotice = clampOpacity(noticeBoardOpacity, defaultOp);
   const opNote1 = clampOpacity(note1Opacity, defaultOp);
+  const opMarquee = clampOpacity(marqueeOpacity, 0.88);
   const opGrandEvent = clampOpacity(grandEventOpacity, defaultOp);
   const opLotusLeaderboard = clampOpacity(lotusLeaderboardOpacity, defaultOp);
   const opDailyRecord = clampOpacity(dailyRecordOpacity, defaultOp);
@@ -488,6 +499,13 @@ const StageHudInner: React.FC<StageHudProps> = ({
     y: 60,
     width: 166,
     height: 30,
+  };
+
+  const safeMarqueeBox = marqueeBox || {
+    x: 10,
+    y: 924,
+    width: 520,
+    height: 28,
   };
 
   const safeLotusLeaderboardBox = lotusLeaderboardBox || {
@@ -1241,7 +1259,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                     }}
                   >
                     {isRoundEndPhase
-                      ? '🎉 Kết thúc vòng 15 câu - Vinh danh Top 1, 2, 3'
+                      ? '🎉 Kết thúc vòng 10 câu - Vinh danh Top 1, 2, 3'
                       : showTotalScoreBoard
                       ? 'Bảng xếp hạng trong lớp'
                       : 'Kết quả câu hỏi'}
@@ -1313,32 +1331,32 @@ const StageHudInner: React.FC<StageHudProps> = ({
               )}
             </div>
           ) : activeEngine === 'english_quiz' && isRecordNoticePhase ? (
-            /* LUỒNG KỶ LỤC MỚI (Sau Luồng 6): Vinh danh và khen ngợi khi Top 1 Kỷ Lục Hôm Nay thay đổi */
+            /* LUỒNG KỶ LỤC MỚI (Sau Luồng 6): Vinh danh và khen ngợi khi Top 1 Kỷ Lục Cúp Vàng trong ngày thay đổi */
             <div className="flex flex-col h-full justify-between py-1.5 px-2 select-none">
               <div
                 className="flex items-center justify-between gap-2 pb-1 shrink-0"
                 style={{
-                  borderBottom: '1px dashed rgba(251, 146, 60, 0.55)',
+                  borderBottom: '1px dashed rgba(250, 204, 21, 0.55)',
                 }}
               >
                 <div className="flex items-center gap-1 min-w-0">
-                  <Trophy className="w-3.5 h-3.5 text-amber-300 animate-bounce shrink-0" />
+                  <GoldTrophyIcon className="w-3.5 h-3.5 animate-bounce shrink-0" />
                   <span
-                    className="font-black tracking-wide text-amber-300 uppercase truncate"
+                    className="font-black tracking-wide text-yellow-300 uppercase truncate"
                     style={{
                       fontSize: `${Math.max(8, Math.round((safeClassBoardFontSize + 1) * 0.82 * 10) / 10)}px`,
                     }}
                   >
-                    🏆 Kỷ Lục Hôm Nay Mới!
+                    🏆 Kỷ Lục Cúp Vàng Mới!
                   </span>
                 </div>
-                <span className="px-1.5 py-[1px] rounded bg-gradient-to-r from-amber-500 to-orange-500 text-stone-950 font-black text-[7.5px] shrink-0 shadow">
-                  TOP 1 KỶ LỤC NGÀY
+                <span className="px-1.5 py-[1px] rounded bg-gradient-to-r from-yellow-300 to-amber-500 text-stone-950 font-black text-[7.5px] shrink-0 shadow">
+                  TOP 1 CÚP VÀNG NGÀY
                 </span>
               </div>
 
               {classBoardState?.recordBreaker && (
-                <div className="mx-auto my-auto px-3 py-1.5 rounded-xl bg-slate-950/75 border-2 border-amber-400/80 shadow-[0_0_16px_rgba(251,146,60,0.45)] flex items-center gap-2.5 max-w-full">
+                <div className="mx-auto my-auto px-3 py-1.5 rounded-xl bg-slate-950/75 border-2 border-yellow-400/85 shadow-[0_0_16px_rgba(250,204,21,0.45)] flex items-center gap-2.5 max-w-full">
                   <div
                     className="w-8 h-8 rounded-full border-2 border-yellow-300 overflow-hidden flex items-center justify-center shrink-0 text-[11px] font-black text-white shadow"
                     style={{
@@ -1368,8 +1386,11 @@ const StageHudInner: React.FC<StageHudProps> = ({
                         👑 Top 1
                       </span>
                     </div>
-                    <div className="text-[11px] font-mono font-black text-orange-400">
-                      🔥 {classBoardState.recordBreaker.points.toLocaleString('vi-VN')} điểm
+                    <div className="inline-flex items-center gap-1 text-[11px] font-mono font-black text-yellow-300">
+                      <GoldTrophyIcon className="w-3.5 h-3.5" />
+                      <span>
+                        {classBoardState.recordBreaker.points.toLocaleString('vi-VN')} cúp vàng
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1383,7 +1404,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
               >
                 "
                 {classBoardState?.recordNoticeText ||
-                  'Chúc mừng bạn đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục hôm nay!'}
+                  'Chúc mừng bạn đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay!'}
                 "
               </div>
             </div>
@@ -1471,7 +1492,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 }}
               >
                 {classBoardState?.lessonStartText ||
-                  'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'}
+                  'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.'}
               </div>
             </div>
           ) : activeEngine === 'english_quiz' && isPreparingPhase ? (
@@ -2447,20 +2468,20 @@ const StageHudInner: React.FC<StageHudProps> = ({
               }
             }
           `}</style>
-          {/* Tiêu đề Bảng Kỷ Lục Hôm Nay + Nút Reset */}
+          {/* Tiêu đề Bảng Kỷ Lục Cúp Vàng + Nút Reset */}
           <div
             className="flex items-center justify-between gap-1 pb-0.5 mb-0.5 shrink-0"
             style={{
               borderBottom:
                 opDailyRecord <= 0.005
                   ? 'none'
-                  : `1px solid rgba(251, 146, 60, ${(0.38 * opDailyRecord).toFixed(2)})`,
+                  : `1px solid rgba(250, 204, 21, ${(0.42 * opDailyRecord).toFixed(2)})`,
             }}
           >
             <div className="flex items-center gap-1 min-w-0">
-              <Trophy className="w-3 h-3 text-orange-400 shrink-0 animate-pulse" />
-              <span className="font-extrabold tracking-wide text-amber-200 uppercase truncate">
-                {dailyRecordTitle || 'Kỷ lục hôm nay'}
+              <GoldTrophyIcon className="w-3.5 h-3.5 shrink-0 animate-pulse" />
+              <span className="font-extrabold tracking-wide text-yellow-200 uppercase truncate">
+                {dailyRecordTitle || 'Kỷ lục cúp vàng'}
               </span>
             </div>
             <div className="flex items-center gap-1 shrink-0">
@@ -2473,19 +2494,19 @@ const StageHudInner: React.FC<StageHudProps> = ({
                     e.stopPropagation();
                     onResetDailyRecords();
                   }}
-                  title="Reset Kỷ lục hôm nay về 0"
+                  title="Reset Kỷ lục cúp vàng về 0"
                   className="pointer-events-auto px-1.5 py-0.2 rounded bg-rose-600/90 hover:bg-rose-500 border border-rose-300/70 text-[7.5px] font-black text-white shadow cursor-pointer transition-colors"
                 >
                   Reset
                 </button>
               )}
-              <span className="px-1 py-[1px] rounded bg-orange-500/25 border border-orange-400/50 text-[7.5px] font-black text-orange-200">
+              <span className="px-1 py-[1px] rounded bg-yellow-500/20 border border-yellow-400/55 text-[7.5px] font-black text-yellow-200">
                 Top 5
               </span>
             </div>
           </div>
 
-          {/* Danh sách 5 bạn điểm cao nhất ngày: Avatar / Tên / Điểm màu cam / Thẻ Top 1, 2, 3, 4, 5 */}
+          {/* Danh sách 5 bạn đạt nhiều Cúp Vàng nhất trong ngày: Avatar / Tên / Số Cúp Vàng + Icon Cúp Vàng / Thẻ Rank Top 1..5 */}
           <div className="flex-1 min-h-0 flex flex-col justify-between gap-0.5 overflow-hidden">
             {[0, 1, 2, 3, 4].map((idx) => {
               const rec = top5DailyRecords[idx];
@@ -2504,7 +2525,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
                   key={`daily-rec-${rank}-${rec?.username || 'empty'}`}
                   className={`flex items-center justify-between gap-1 px-1 py-0.2 rounded border transition-all duration-300 ${
                     rank === 1 && rec
-                      ? 'bg-orange-950/45 border-orange-400/60'
+                      ? 'bg-amber-950/45 border-yellow-400/65'
                       : 'bg-slate-950/45 border-white/10'
                   }`}
                   style={
@@ -2543,14 +2564,15 @@ const StageHudInner: React.FC<StageHudProps> = ({
                           : 'text-stone-500 italic'
                       }`}
                     >
-                      {rec ? rec.username : 'Chưa có kỷ lục'}
+                      {rec ? rec.username : 'Chưa có cúp vàng'}
                     </span>
                   </div>
 
-                  {/* 3. Điểm màu cam + 4. Thẻ Top 1, 2, 3, 4, 5 */}
+                  {/* 3. Số cúp vàng + Icon cúp vàng -> 4. Thẻ Rank (Top 1..5) */}
                   <div className="flex items-center gap-1 shrink-0">
-                    <span className="font-mono font-black text-orange-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
-                      {rec ? rec.points.toLocaleString('vi-VN') : '0'}
+                    <span className="inline-flex items-center gap-0.5 font-mono font-black text-yellow-300 drop-shadow-[0_1px_2px_rgba(0,0,0,0.95)] tabular-nums">
+                      <span>{rec ? rec.points.toLocaleString('vi-VN') : '0'}</span>
+                      <GoldTrophyIcon className="w-3 h-3" />
                     </span>
                     <span
                       className={`px-1 py-[0.5px] rounded text-[7px] font-black border leading-tight shrink-0 ${topTagClass}`}
@@ -2569,8 +2591,52 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 boxKey="dailyRecordBox"
                 onStartResizeHudBox={onStartResizeHudBox}
               />
-              <span className="absolute -top-5 left-0 px-1.5 py-0.5 rounded bg-orange-400 text-stone-950 text-[9px] font-bold flex items-center gap-0.5 whitespace-nowrap shadow">
-                <Move className="w-2.5 h-2.5" /> {dailyRecordTitle || 'Kỷ lục hôm nay'} ({safeDailyRecordBox.width}×{safeDailyRecordBox.height})
+              <span className="absolute -top-5 left-0 px-1.5 py-0.5 rounded bg-yellow-400 text-stone-950 text-[9px] font-bold flex items-center gap-0.5 whitespace-nowrap shadow">
+                <Move className="w-2.5 h-2.5" /> {dailyRecordTitle || 'Kỷ lục cúp vàng'} ({safeDailyRecordBox.width}×{safeDailyRecordBox.height})
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 10. BẢNG CHẠY CHỮ 1 DÒNG NGANG LIÊN TỤC (Marquee Ticker Thông Báo Dài) */}
+      {showMarqueeBox !== false && (
+        <div
+          onMouseDown={(e) =>
+            editLayoutMode && onStartDragHudBox('marqueeBox', e)
+          }
+          onTouchStart={(e) =>
+            editLayoutMode && onStartDragHudBox('marqueeBox', e)
+          }
+          className={`absolute z-30 rounded-lg border flex items-center select-none ${dragringClass}`}
+          style={{
+            left: `${safeMarqueeBox.x}px`,
+            top: `${safeMarqueeBox.y}px`,
+            width: `${safeMarqueeBox.width}px`,
+            height: `${safeMarqueeBox.height}px`,
+            fontSize: `${safeMarqueeFontSize}px`,
+            ...buildBoxSurfaceStyle(opMarquee, '56, 189, 248'),
+          }}
+        >
+          <HorizontalMarqueeTrack
+            text={
+              marqueeContent ||
+              '📢 Chào mừng các bạn học sinh vào lớp 12A1!'
+            }
+            fontSize={safeMarqueeFontSize}
+            speedPxPerSec={safeMarqueeSpeed}
+            boxWidth={safeMarqueeBox.width}
+            textColor={marqueeTextColor || '#fde047'}
+          />
+
+          {editLayoutMode && (
+            <>
+              <CornerResizeHandles
+                boxKey="marqueeBox"
+                onStartResizeHudBox={onStartResizeHudBox}
+              />
+              <span className="absolute -top-5 left-0 px-1.5 py-0.5 rounded bg-cyan-400 text-stone-950 text-[9px] font-bold flex items-center gap-0.5 whitespace-nowrap shadow">
+                <Move className="w-2.5 h-2.5" /> Bảng Chạy Chữ ({safeMarqueeBox.width}×{safeMarqueeBox.height})
               </span>
             </>
           )}
@@ -2579,6 +2645,87 @@ const StageHudInner: React.FC<StageHudProps> = ({
     </div>
   );
 };
+
+interface HorizontalMarqueeTrackProps {
+  text: string;
+  fontSize: number;
+  speedPxPerSec: number;
+  boxWidth: number;
+  textColor: string;
+}
+
+const HorizontalMarqueeTrack: React.FC<HorizontalMarqueeTrackProps> = React.memo(
+  ({ text, fontSize, speedPxPerSec, boxWidth, textColor }) => {
+    const sampleRef = React.useRef<HTMLSpanElement>(null);
+    const [unitWidth, setUnitWidth] = useState<number>(360);
+
+    const normalizedSingleLine = React.useMemo(
+      () => (text || '').replace(/\s*\r?\n\s*/g, '   •   ').trim(),
+      [text]
+    );
+
+    useEffect(() => {
+      const el = sampleRef.current;
+      if (!el) return;
+      const updateWidth = () => {
+        const w = el.offsetWidth;
+        if (w > 12) {
+          setUnitWidth(w);
+        }
+      };
+      updateWidth();
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(updateWidth);
+        ro.observe(el);
+        return () => ro.disconnect();
+      }
+    }, [normalizedSingleLine, fontSize]);
+
+    const safeSpeed = Math.max(10, Math.min(350, speedPxPerSec || 65));
+    const safeUnitW = Math.max(48, unitWidth);
+    const durationSec = Math.max(0.8, safeUnitW / safeSpeed);
+    const repeatCount = Math.max(2, Math.ceil(boxWidth / safeUnitW) + 2);
+
+    return (
+      <div className="relative w-full h-full overflow-hidden flex items-center px-1.5">
+        <style>{`
+          @keyframes classroomTickerMarqueeLoop {
+            0% {
+              transform: translate3d(0, 0, 0);
+            }
+            100% {
+              transform: translate3d(var(--marquee-shift), 0, 0);
+            }
+          }
+        `}</style>
+        <div
+          className="flex items-center whitespace-nowrap will-change-transform"
+          style={
+            {
+              '--marquee-shift': `-${safeUnitW}px`,
+              animation: `classroomTickerMarqueeLoop ${durationSec.toFixed(
+                2
+              )}s linear infinite`,
+              color: textColor,
+              fontSize: `${fontSize}px`,
+            } as React.CSSProperties
+          }
+        >
+          {Array.from({ length: repeatCount }, (_, idx) => (
+            <span
+              key={idx}
+              ref={idx === 0 ? sampleRef : undefined}
+              className="inline-flex items-center font-extrabold leading-none whitespace-nowrap pr-12 drop-shadow-[0_1px_2px_rgba(0,0,0,0.95)]"
+            >
+              <span>{normalizedSingleLine || ' '}</span>
+              <span className="ml-12 opacity-60 text-[0.85em]">✦</span>
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+);
 
 function areStageHudPilgrimsEqual(
   prevPilgrims: PilgrimData[] | undefined,

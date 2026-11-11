@@ -206,6 +206,9 @@ interface DevStudioProps {
       | 'desk_mate_10plus',
     customUsername?: string
   ) => void;
+  onTestPaperPlaneThrow?: () => void;
+  onTestRoseHeartBurst?: () => void;
+  onTestRoseBouquetThrow?: () => void;
   compactRemoteStage?: boolean;
   onToggleCompactRemoteStage?: () => void;
   isFullscreen?: boolean;
@@ -318,6 +321,9 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onStopZombieEvent,
   onKillZombieImmediately,
   onTestZombieAttack,
+  onTestPaperPlaneThrow,
+  onTestRoseHeartBurst,
+  onTestRoseBouquetThrow,
   compactRemoteStage = false,
   onToggleCompactRemoteStage,
   isFullscreen = false,
@@ -839,6 +845,7 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onClearLotusDonors={onClearLotusDonors}
             dailyRecords={dailyRecords}
             onResetDailyRecords={onResetDailyRecords}
+            onTestPaperPlaneThrow={onTestPaperPlaneThrow}
           />
         )}
 
@@ -877,6 +884,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             config={config}
             onUpdateConfig={onUpdateConfig}
             onTestFlower10Burst={() => onTriggerClassroomGift?.('Hoa Hồng', 1, undefined, null, true)}
+            onTestRoseHeartBurst={onTestRoseHeartBurst}
+            onTestRoseBouquetThrow={onTestRoseBouquetThrow}
           />
         )}
 

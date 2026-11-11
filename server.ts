@@ -31,18 +31,28 @@ async function startServer() {
     next(err);
   });
 
-  // Persistent JSON storage for Student EXP ({ [userId]: exp } with exp > 0)
+  // Persistent JSON storage for Student EXP & Gold Trophies ({ [userId]: exp/trophies } with value > 0)
   let serverStudentExpMap: Record<string, number> = {};
+  let serverStudentTrophyMap: Record<string, number> = {};
   try {
     if (fs.existsSync(STUDENT_EXP_JSON_PATH)) {
       const raw = fs.readFileSync(STUDENT_EXP_JSON_PATH, 'utf-8');
       const parsed = JSON.parse(raw);
-      const mapCandidate = parsed?.studentExpMap || parsed;
+      const mapCandidate = parsed?.studentExpMap || (!parsed?.studentTrophyMap ? parsed : null);
       if (mapCandidate && typeof mapCandidate === 'object') {
         for (const [k, v] of Object.entries(mapCandidate)) {
           const expVal = Math.floor(Number(v) || 0);
           if (k && expVal > 0) {
             serverStudentExpMap[k.trim().toLowerCase()] = expVal;
+          }
+        }
+      }
+      const trophyCandidate = parsed?.studentTrophyMap;
+      if (trophyCandidate && typeof trophyCandidate === 'object') {
+        for (const [k, v] of Object.entries(trophyCandidate)) {
+          const trophyVal = Math.floor(Number(v) || 0);
+          if (k && trophyVal > 0) {
+            serverStudentTrophyMap[k.trim().toLowerCase()] = trophyVal;
           }
         }
       }
@@ -59,7 +69,14 @@ async function startServer() {
       fs.promises
         .writeFile(
           STUDENT_EXP_JSON_PATH,
-          JSON.stringify({ studentExpMap: serverStudentExpMap }, null, 2),
+          JSON.stringify(
+            {
+              studentExpMap: serverStudentExpMap,
+              studentTrophyMap: serverStudentTrophyMap,
+            },
+            null,
+            2
+          ),
           'utf-8'
         )
         .catch(() => {
@@ -69,12 +86,19 @@ async function startServer() {
   };
 
   app.get('/api/student-exp', (_req: Request, res: Response) => {
-    res.json({ ok: true, studentExpMap: serverStudentExpMap });
+    res.json({
+      ok: true,
+      studentExpMap: serverStudentExpMap,
+      studentTrophyMap: serverStudentTrophyMap,
+    });
   });
 
   app.post('/api/student-exp', (req: Request, res: Response) => {
     const incoming = req.body?.studentExpMap;
+    const incomingTrophies = req.body?.studentTrophyMap;
     const replaceAll = Boolean(req.body?.replaceAll);
+    let mutated = false;
+
     if (incoming && typeof incoming === 'object') {
       if (replaceAll) {
         serverStudentExpMap = {};
@@ -87,9 +111,34 @@ async function startServer() {
           serverStudentExpMap[cleanKey] = replaceAll ? expVal : Math.max(prev, expVal);
         }
       }
+      mutated = true;
+    }
+
+    if (incomingTrophies && typeof incomingTrophies === 'object') {
+      if (replaceAll) {
+        serverStudentTrophyMap = {};
+      }
+      for (const [k, v] of Object.entries(incomingTrophies)) {
+        const cleanKey = String(k || '').trim().toLowerCase();
+        const trophyVal = Math.floor(Number(v) || 0);
+        if (cleanKey && trophyVal > 0) {
+          const prev = serverStudentTrophyMap[cleanKey] || 0;
+          serverStudentTrophyMap[cleanKey] = replaceAll
+            ? trophyVal
+            : Math.max(prev, trophyVal);
+        }
+      }
+      mutated = true;
+    }
+
+    if (mutated) {
       scheduleFlushExpToDisk();
     }
-    res.json({ ok: true, count: Object.keys(serverStudentExpMap).length });
+    res.json({
+      ok: true,
+      count: Object.keys(serverStudentExpMap).length,
+      trophyCount: Object.keys(serverStudentTrophyMap).length,
+    });
   });
 
   // Connected SSE clients (Admin Tabs + OBS Browser Source Windows)

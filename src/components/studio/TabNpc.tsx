@@ -556,18 +556,18 @@ export const TabNpc: React.FC<TabNpcProps> = ({
           </p>
         </div>
 
-        {/* Số NPC mới thêm vào hàng chờ mỗi khi xong 1 câu hỏi (±1,2,3) & Tỷ lệ NPC trả lời đúng */}
+        {/* Số NPC mới thêm chính xác vào hàng chờ mỗi khi xong 1 câu hỏi & Tỷ lệ NPC trả lời đúng */}
         <div className="grid grid-cols-2 gap-3 pt-1">
           <div>
             <div className="flex justify-between text-xs mb-1 gap-1">
               <span
                 className="text-amber-200/80 truncate"
-                title="Sau mỗi câu hỏi kết thúc, hệ thống sẽ thêm thẳng số NPC này (±1, 2, 3 ngẫu nhiên) vào hàng chờ"
+                title="Sau mỗi câu hỏi kết thúc, hệ thống sẽ thêm chính xác số lượng NPC này vào hàng chờ (không cộng trừ ngẫu nhiên)"
               >
                 NPC thêm vào hàng chờ / câu:
               </span>
               <span className="font-bold text-amber-400 shrink-0">
-                {config.botTargetCrowd} (±1~3)
+                {config.botTargetCrowd} NPC
               </span>
             </div>
             <input

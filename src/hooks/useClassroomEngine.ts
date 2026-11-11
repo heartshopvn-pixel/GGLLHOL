@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AVATAR_COLORS,
   buildDoubleDeskSlots,
+  computeStudentIeltsLevelFromExp,
   createSingleDoubleDeskSlots,
   DEFAULT_CONFIG,
   DEFAULT_GIFT_MODEL_SCALES,
@@ -9,7 +10,9 @@ import {
   DEFAULT_NPC_AVATARS,
   DEFAULT_NPC_SPEECH_CATEGORIES,
   DEFAULT_SPRITESHEETS,
+  DEFAULT_ZOMBIE_PROJECTILE_SCALES,
   ENGLISH_QUIZ_QUESTIONS,
+  getCharacterDepthScale,
   groupSlotsIntoDoubleDesks,
   INITIAL_DONORS,
   INITIAL_MONKS,
@@ -67,11 +70,14 @@ import {
   HudLayoutConfig,
   KneelSlot,
   OfferingGiftType,
+  PaperPlaneFX,
+  PaperPlaneHitBubbleFX,
   PilgrimData,
   Point2D,
   QueuedPilgrimRequest,
   RectBounds,
   RoamingCatAgent,
+  RoseHeartBurstFX,
   RunningPigAgent,
   SafetyActionMode,
   SafetyCategory,
@@ -82,6 +88,7 @@ import {
   ZombieDamageEntry,
   ZombieEntityState,
   ZombieEventRuntimeState,
+  ZombieHeartProjectileVariant,
   ZombieProjectileFX,
   ZombieProjectileKind,
   ZombieSpikyDamageFX,
@@ -91,7 +98,284 @@ import { ZoneKey } from '../components/stage/GameStage';
 
 const STORAGE_KEY = 'lop_hoc_12a1_studio_state_v3';
 const LEFT_DOOR_POS: Point2D = { x: 46, y: 500 };
-const QUESTIONS_PER_ROUND = 15;
+const QUESTIONS_PER_ROUND = 10;
+
+function normalizePaperPlaneTagText(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/^[^\p{L}\p{N}]+/gu, '')
+    .replace(/[đĐ]/g, 'd')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function computeStudentHeadAndHandCoords(
+  student: PilgrimData,
+  vipSlots: KneelSlot[],
+  normalSlots: KneelSlot[],
+  cfg: GameConfig
+): { headX: number; headY: number; handX: number; handY: number } {
+  const vipDesks = groupSlotsIntoDoubleDesks(vipSlots, 'vip');
+  const normalDesks = groupSlotsIntoDoubleDesks(normalSlots, 'norm');
+  const leftSeatIds = new Set<string>();
+  const deskYBySlotId = new Map<string, number>();
+
+  vipDesks.forEach((d) => {
+    leftSeatIds.add(d.leftSlot.id);
+    deskYBySlotId.set(d.leftSlot.id, d.centerY);
+    if (d.rightSlot) deskYBySlotId.set(d.rightSlot.id, d.centerY);
+  });
+  normalDesks.forEach((d) => {
+    leftSeatIds.add(d.leftSlot.id);
+    deskYBySlotId.set(d.leftSlot.id, d.centerY);
+    if (d.rightSlot) deskYBySlotId.set(d.rightSlot.id, d.centerY);
+  });
+
+  const now = Date.now();
+  const isRichKidDancing = Boolean(
+    student.richKidDanceUntil && now < student.richKidDanceUntil
+  );
+  const isSeated = student.state === 'pray_seated' && !isRichKidDancing;
+  const isAtDeskSeat =
+    Boolean(student.slotId) &&
+    (student.state === 'pray_seated' ||
+      student.state === 'walk_side_to_slot' ||
+      Math.abs(student.y - (student.slotY || student.y)) <= 8);
+
+  const deskSeatY = student.slotId
+    ? deskYBySlotId.get(student.slotId)
+    : undefined;
+  const effectiveBaseY =
+    isAtDeskSeat && typeof deskSeatY === 'number'
+      ? deskSeatY
+      : isAtDeskSeat && student.slotY
+      ? student.slotY
+      : student.y;
+
+  const depthScale = getCharacterDepthScale(effectiveBaseY);
+  const finalScale = depthScale * (cfg.characterScale || 1);
+  const safeNameTagHeight = Math.max(
+    12,
+    Math.min(40, Math.round(Number(cfg.nameTagHeight ?? 20)))
+  );
+  const nameTagHeightPx = Math.round(
+    (safeNameTagHeight + 13) * (cfg.nameTagScale || 1)
+  );
+  const isLeftSeatmate = Boolean(
+    student.slotId && leftSeatIds.has(student.slotId)
+  );
+  const seatmateYOffset =
+    isLeftSeatmate && isAtDeskSeat ? -nameTagHeightPx : 0;
+  const richKidDeskStandOffset = isRichKidDancing ? -24 : 0;
+  const renderedY = effectiveBaseY + seatmateYOffset + richKidDeskStandOffset;
+
+  return {
+    headX: student.x,
+    headY: renderedY - Math.round((isSeated ? 52 : 62) * finalScale),
+    handX: student.x,
+    handY: renderedY - Math.round((isSeated ? 36 : 44) * finalScale),
+  };
+}
+
+let nextChatBubbleSeq = 1;
+function issueChatBubbleKey(): number {
+  nextChatBubbleSeq = (nextChatBubbleSeq % 1_000_000_000) + 1;
+  return nextChatBubbleSeq;
+}
+
+function resolvePaperPlaneTargetInClass(opts: {
+  commentText: string;
+  thrower: PilgrimData;
+  allStudentsInClass: PilgrimData[];
+  vipSlots: KneelSlot[];
+  normalSlots: KneelSlot[];
+  lotusDonors: DonorEntry[];
+  nameTagMaxChars: number;
+}): PilgrimData | null {
+  const {
+    commentText,
+    thrower,
+    allStudentsInClass,
+    vipSlots,
+    normalSlots,
+    lotusDonors,
+    nameTagMaxChars,
+  } = opts;
+  if (!commentText || !commentText.includes('@')) return null;
+
+  const classmates = allStudentsInClass.filter((p) => p.id !== thrower.id);
+  if (classmates.length === 0) return null;
+
+  const safeMaxChars = Math.max(
+    3,
+    Math.min(60, Math.round(nameTagMaxChars || 16))
+  );
+
+  const pickNearestToThrower = (list: PilgrimData[]): PilgrimData => {
+    return [...list].sort((a, b) => {
+      const da = Math.hypot(a.x - thrower.x, a.y - thrower.y);
+      const db = Math.hypot(b.x - thrower.x, b.y - thrower.y);
+      return Math.abs(da - db) > 0.5 ? da - db : a.id - b.id;
+    })[0];
+  };
+
+  const preparedClassmates = classmates.map((student) => {
+    const rawFull = (student.username || '').trim();
+    const rawDisplay = rawFull.slice(0, safeMaxChars);
+    const normFull = normalizePaperPlaneTagText(rawFull);
+    const normDisplay = normalizePaperPlaneTagText(rawDisplay);
+    return {
+      student,
+      normFull,
+      normDisplay,
+      compactFull: normFull.replace(/\s+/g, ''),
+      compactDisplay: normDisplay.replace(/\s+/g, ''),
+    };
+  });
+
+  const mentionRegex = /@([^\s@]+(?:\s+[^\s@]+){0,3})/gu;
+  let match: RegExpExecArray | null;
+
+  while ((match = mentionRegex.exec(commentText)) !== null) {
+    const rawSegment = (match[1] || '').trim();
+    if (!rawSegment) continue;
+    const rawWords = rawSegment.split(/\s+/).filter(Boolean);
+    if (rawWords.length === 0) continue;
+
+    const firstWordNorm = normalizePaperPlaneTagText(rawWords[0]);
+    const twoWordsNorm =
+      rawWords.length >= 2
+        ? normalizePaperPlaneTagText(`${rawWords[0]} ${rawWords[1]}`)
+        : '';
+
+    // 1. Lệnh tắt thông minh: @bạn / @cùng bàn -> Ném bạn ngồi cùng bàn đôi (nếu ngồi 1 mình thì ném bạn gần nhất)
+    if (
+      twoWordsNorm === 'cung ban' ||
+      twoWordsNorm === 'ban ben' ||
+      firstWordNorm === 'cungban' ||
+      firstWordNorm === 'ban'
+    ) {
+      if (thrower.slotId) {
+        const allDesks = [
+          ...groupSlotsIntoDoubleDesks(vipSlots, 'vip'),
+          ...groupSlotsIntoDoubleDesks(normalSlots, 'norm'),
+        ];
+        const myDesk = allDesks.find(
+          (d) =>
+            d.leftSlot.id === thrower.slotId ||
+            d.rightSlot?.id === thrower.slotId
+        );
+        const mateSlotId = myDesk
+          ? myDesk.leftSlot.id === thrower.slotId
+            ? myDesk.rightSlot?.id
+            : myDesk.leftSlot.id
+          : undefined;
+        if (mateSlotId) {
+          const seatmate = classmates.find((c) => c.slotId === mateSlotId);
+          if (seatmate) return seatmate;
+        }
+      }
+      return pickNearestToThrower(classmates);
+    }
+
+    // 2. Lệnh tắt @top1 / @top2 / @top3 -> Ném bạn đang giữ Top 1, 2, 3 trong lớp
+    const topRankMatch =
+      firstWordNorm.match(/^top([123])$/) ||
+      twoWordsNorm.match(/^top\s+([123])$/);
+    if (topRankMatch) {
+      const desiredRank = parseInt(topRankMatch[1], 10);
+      const donorScoreMap = new Map<string, number>();
+      lotusDonors.forEach((d) => {
+        donorScoreMap.set(d.username.trim().toLowerCase(), d.coins);
+      });
+      const rankedInClass = [...allStudentsInClass].sort((a, b) => {
+        const sa =
+          donorScoreMap.get(a.username.trim().toLowerCase()) ??
+          a.currentScoreDisplay ??
+          0;
+        const sb =
+          donorScoreMap.get(b.username.trim().toLowerCase()) ??
+          b.currentScoreDisplay ??
+          0;
+        return sb !== sa ? sb - sa : a.id - b.id;
+      });
+      const exactRankTarget = rankedInClass[desiredRank - 1];
+      if (exactRankTarget && exactRankTarget.id !== thrower.id) {
+        return exactRankTarget;
+      }
+      const fallbackRival = rankedInClass.find((p) => p.id !== thrower.id);
+      if (fallbackRival) return fallbackRival;
+    }
+
+    // 3. Lệnh tắt @random / @ngẫu nhiên -> Chọn ngẫu nhiên (đồng bộ tất định giữa các tab) 1 bạn trong lớp
+    if (
+      twoWordsNorm === 'ngau nhien' ||
+      firstWordNorm === 'ngaunhien' ||
+      firstWordNorm === 'random' ||
+      firstWordNorm === 'rd'
+    ) {
+      let hash = thrower.id * 31 + commentText.length * 17;
+      for (let i = 0; i < commentText.length; i++) {
+        hash = (hash * 33 + commentText.charCodeAt(i)) >>> 0;
+      }
+      const sortedById = [...classmates].sort((a, b) => a.id - b.id);
+      return sortedById[hash % sortedById.length];
+    }
+
+    // 4. Quét khớp tên 3 tầng ưu tiên (từ cụm 4 từ giảm dần xuống 1 từ để tự tách phần chat phía sau @tên)
+    const maxWords = Math.min(4, rawWords.length);
+    for (let wCount = maxWords; wCount >= 1; wCount--) {
+      const candNorm = normalizePaperPlaneTagText(
+        rawWords.slice(0, wCount).join(' ')
+      );
+      const candCompact = candNorm.replace(/\s+/g, '');
+      if (candCompact.length < 2) continue;
+
+      // Ưu tiên 1 (Prefix Match >= 2 ký tự): Khớp ngay từ đầu chuỗi tên hiển thị hoặc tên đầy đủ
+      const prefixHits = preparedClassmates.filter(
+        (item) =>
+          (item.normDisplay && item.normDisplay.startsWith(candNorm)) ||
+          (item.normFull && item.normFull.startsWith(candNorm)) ||
+          (item.compactDisplay &&
+            item.compactDisplay.startsWith(candCompact)) ||
+          (item.compactFull && item.compactFull.startsWith(candCompact))
+      );
+      if (prefixHits.length > 0) {
+        return pickNearestToThrower(prefixHits.map((h) => h.student));
+      }
+
+      // Ưu tiên 2 (Word Match >= 2 ký tự): Khớp trọn vẹn từ hoặc cụm từ trong tên (VD: @ngọc hoặc @bảo ngọc -> Trần Bảo Ngọc)
+      const paddedCand = ` ${candNorm} `;
+      const wordHits = preparedClassmates.filter(
+        (item) =>
+          (item.normDisplay && ` ${item.normDisplay} `.includes(paddedCand)) ||
+          (item.normFull && ` ${item.normFull} `.includes(paddedCand))
+      );
+      if (wordHits.length > 0) {
+        return pickNearestToThrower(wordHits.map((h) => h.student));
+      }
+
+      // Ưu tiên 3 (Substring Match >= 3 ký tự): Khớp chuỗi con liền nhau cho ID TikTok viết liền (VD: @tuan99 -> hoangtuan99)
+      if (wCount <= 2 && candCompact.length >= 3) {
+        const subHits = preparedClassmates.filter(
+          (item) =>
+            (item.compactDisplay &&
+              item.compactDisplay.includes(candCompact)) ||
+            (item.compactFull && item.compactFull.includes(candCompact))
+        );
+        if (subHits.length > 0) {
+          return pickNearestToThrower(subHits.map((h) => h.student));
+        }
+      }
+    }
+  }
+
+  return null;
+}
 
 function sortRoundQuestionsByIncreasingDifficulty(
   sourceList: EnglishQuizItem[],
@@ -120,7 +404,7 @@ function sortRoundQuestionsByIncreasingDifficulty(
       const src = sortedByDifficulty[i % sortedByDifficulty.length];
       picked.push({
         ...src,
-        id: `en-r15-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+        id: `en-r10-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
       });
     }
   } else {
@@ -135,7 +419,7 @@ function sortRoundQuestionsByIncreasingDifficulty(
       const src = sortedByDifficulty[idx];
       picked.push({
         ...src,
-        id: `en-r15-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+        id: `en-r10-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
       });
     }
   }
@@ -222,15 +506,18 @@ function getQuizRankPoints(
   return getQuizPointsForRank(rankOneBased, itemOrDeckName);
 }
 
-// Quy ước mới: EXP = Điểm tích lũy (cứ mỗi 20 điểm EXP lên 1 cấp Rank: 0..19 = Lv.1, 20..39 = Lv.2, ...)
+// Hệ thống 17 Cấp độ IELTS (1 -> 17 tương ứng IEL 1.0 -> IEL 9.0): tính tự động từ tổng điểm EXP tích lũy
 function getStudentLevelFromExp(exp: number): number {
-  return Math.floor(Math.max(0, Math.floor(Number(exp) || 0)) / 20) + 1;
+  return computeStudentIeltsLevelFromExp(exp).level;
 }
 
 const STUDENT_EXP_LS_KEY = 'chua_student_exp_v1';
 const STUDENT_EXP_IDB_KEY = 'classroom_student_exp_v1';
+const STUDENT_TROPHY_LS_KEY = 'lop_hoc_12a1_student_trophies_v1';
+const STUDENT_TROPHY_IDB_KEY = 'classroom_student_trophies_v1';
+const DAILY_TROPHY_SCHEMA_LS_KEY = 'lop_hoc_12a1_daily_trophy_schema_v1';
 
-// Giải pháp 3: Chỉ lưu những người có EXP > 0 (loại bỏ hoàn toàn dữ liệu rác EXP = 0)
+// Giải pháp 3: Chỉ lưu những người có giá trị > 0 (loại bỏ hoàn toàn dữ liệu rác = 0)
 function serializeStudentExpMap(
   map: Map<string, number>
 ): Record<string, number> {
@@ -368,7 +655,9 @@ function buildDoorCrowdPool(
   _names: string[],
   avatars: string[],
   spread: number = 1,
-  queuedEntries: QueuedPilgrimRequest[] = []
+  queuedEntries: QueuedPilgrimRequest[] = [],
+  trophyMap?: Map<string, number>,
+  expMap?: Map<string, number>
 ): PilgrimData[] {
   const safeMax = Math.max(0, Math.min(20, Math.round(maxClusterCount)));
   // Đồng bộ số bạn đứng trong đám đông hàng chờ với danh sách hàng chờ thực tế, giới hạn bởi số lượng tối đa trong dev nhóm học sinh đứng chùm
@@ -382,6 +671,7 @@ function buildDoorCrowdPool(
   const safeAvatars = avatars.length > 0 ? avatars : DEFAULT_NPC_AVATARS;
   const nextPool: PilgrimData[] = [];
   const usedIds = new Set<number>();
+  const nowMs = Date.now();
 
   for (let i = 0; i < effectiveCount; i++) {
     const qItem = queuedEntries[i];
@@ -390,6 +680,8 @@ function buildDoorCrowdPool(
     const off = DOOR_CLUSTER_OFFSETS[i % DOOR_CLUSTER_OFFSETS.length];
     const px = Math.round(centerPos.x + off.x * safeSpread);
     const py = Math.round(centerPos.y + off.y * safeSpread);
+    const savedTrophies = trophyMap ? trophyMap.get(qLower) : undefined;
+    const savedExp = expMap ? expMap.get(qLower) : undefined;
 
     const existingByName = prevPool.find(
       (p) => p.username.trim().toLowerCase() === qLower && !usedIds.has(p.id)
@@ -397,6 +689,11 @@ function buildDoorCrowdPool(
 
     if (existingByName) {
       usedIds.add(existingByName.id);
+      const isBotMember = Boolean(qItem?.isBot);
+      const isBubbleExpired = Boolean(
+        existingByName.chatBubbleUntil && nowMs >= existingByName.chatBubbleUntil
+      );
+      const resolvedExp = savedExp ?? existingByName.exp ?? 0;
       nextPool.push({
         ...existingByName,
         username: qName,
@@ -404,8 +701,18 @@ function buildDoorCrowdPool(
           qItem?.gender ||
           existingByName.gender ||
           detectVietnameseGender(qName),
-        isBot: Boolean(qItem?.isBot),
+        isBot: isBotMember,
+        hasShield: isBotMember
+          ? false
+          : Boolean(qItem?.hasShield ?? existingByName.hasShield),
+        exp: resolvedExp,
+        level: getStudentLevelFromExp(resolvedExp),
+        goldTrophies: savedTrophies ?? existingByName.goldTrophies ?? 0,
         avatarUrl: qItem?.avatarUrl ?? existingByName.avatarUrl,
+        prayer: isBubbleExpired ? '' : existingByName.prayer,
+        hasComment: isBubbleExpired ? false : existingByName.hasComment,
+        chatBubbleUntil: isBubbleExpired ? 0 : existingByName.chatBubbleUntil,
+        chatBubbleKey: isBubbleExpired ? 0 : existingByName.chatBubbleKey,
         x: px,
         y: py,
         laneX: px,
@@ -418,13 +725,19 @@ function buildDoorCrowdPool(
         negId -= 1;
       }
       usedIds.add(negId);
+      const isBotMember = Boolean(qItem?.isBot);
+      const resolvedExp = savedExp ?? 0;
       nextPool.push({
         id: negId,
         username: qName,
-        prayer: qItem?.prayer || '',
+        prayer: '',
         gender: qItem?.gender || detectVietnameseGender(qName),
         isVip: false,
-        isBot: Boolean(qItem?.isBot),
+        isBot: isBotMember,
+        hasShield: isBotMember ? false : Boolean(qItem?.hasShield),
+        exp: resolvedExp,
+        level: getStudentLevelFromExp(resolvedExp),
+        goldTrophies: savedTrophies ?? 0,
         coins: qItem?.coins || 0,
         offeringType: 'incense',
         slotId: null,
@@ -446,6 +759,7 @@ function buildDoorCrowdPool(
         hairSeed: i + 1,
         hasComment: false,
         chatBubbleUntil: 0,
+        chatBubbleKey: 0,
       });
     }
   }
@@ -517,9 +831,39 @@ export function useClassroomEngine() {
             parsed.config.quizDecks,
             needsDeckSchemaReset
           );
+          const savedRoundEndText = parsed.config.lessonRoundEndTtsTemplate;
+          const isOldMilkTeaRoundEnd =
+            !savedRoundEndText ||
+            savedRoundEndText.includes('ly trà sữa mat cha lat te');
+          const savedRecordText = parsed.config.lessonRecordTtsTemplate;
+          const isOldScoreRecordText =
+            !savedRecordText ||
+            savedRecordText.includes('Kỷ lục hôm nay với [ĐiểmKỷLục] điểm');
+          const isSavedMaleMainVoice =
+            parsed.config.nodeVoice === 'google-vi-male-deep' ||
+            parsed.config.nodeVoice === 'vi-VN-NamMinhNeural';
+          const isSavedMaleHostVoice =
+            parsed.config.hostNodeVoice === 'google-vi-male-deep' ||
+            parsed.config.hostNodeVoice === 'vi-VN-NamMinhNeural';
           const mergedCfg: GameConfig = {
             ...DEFAULT_CONFIG,
             ...parsed.config,
+            studentLevelExpEnabled: parsed.config.ieltsRankBadgeSchemaV1
+              ? Boolean(parsed.config.studentLevelExpEnabled)
+              : true,
+            ieltsRankBadgeSchemaV1: true,
+            nodeVoice: isSavedMaleMainVoice
+              ? 'google-vi-gtx'
+              : parsed.config.nodeVoice || DEFAULT_CONFIG.nodeVoice,
+            ttsPitch: isSavedMaleMainVoice
+              ? 1.0
+              : parsed.config.ttsPitch ?? DEFAULT_CONFIG.ttsPitch,
+            hostNodeVoice: isSavedMaleHostVoice
+              ? 'google-vi-gtx'
+              : parsed.config.hostNodeVoice || DEFAULT_CONFIG.hostNodeVoice,
+            hostTtsPitch: isSavedMaleHostVoice
+              ? 1.0
+              : parsed.config.hostTtsPitch ?? DEFAULT_CONFIG.hostTtsPitch,
             quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
             quizDecks: mergedDecks,
             activeQuizDeckId:
@@ -531,9 +875,16 @@ export function useClassroomEngine() {
             lessonStartTtsText: isOldDefaultStartText
               ? DEFAULT_CONFIG.lessonStartTtsText
               : savedStartText,
-            lessonRoundEndTtsTemplate:
-              parsed.config.lessonRoundEndTtsTemplate ||
-              DEFAULT_CONFIG.lessonRoundEndTtsTemplate,
+            lessonRoundEndTtsTemplate: isOldMilkTeaRoundEnd
+              ? DEFAULT_CONFIG.lessonRoundEndTtsTemplate
+              : savedRoundEndText,
+            lessonRecordTtsTemplate: isOldScoreRecordText
+              ? DEFAULT_CONFIG.lessonRecordTtsTemplate
+              : savedRecordText,
+            lessonRecordTtsTemplates: isOldScoreRecordText
+              ? DEFAULT_CONFIG.lessonRecordTtsTemplates
+              : parsed.config.lessonRecordTtsTemplates ||
+                DEFAULT_CONFIG.lessonRecordTtsTemplates,
             spawnPoint: LEFT_DOOR_POS,
             exitPoint: LEFT_DOOR_POS,
             npcSpeechCategories: {
@@ -552,10 +903,19 @@ export function useClassroomEngine() {
               ...(parsed.config.giftModelScales || {}),
               maxDeskCats: 1,
             },
+            zombieProjectileScales: {
+              ...DEFAULT_ZOMBIE_PROJECTILE_SCALES,
+              ...(parsed.config.zombieProjectileScales || {}),
+            },
             grid: { ...DEFAULT_CONFIG.grid, ...(parsed.config.grid || {}) },
             hudLayout: {
               ...DEFAULT_CONFIG.hudLayout,
               ...(parsed.config.hudLayout || {}),
+              dailyRecordTitle:
+                !parsed.config.hudLayout?.dailyRecordTitle ||
+                parsed.config.hudLayout?.dailyRecordTitle === 'Kỷ lục hôm nay'
+                  ? 'Kỷ lục cúp vàng'
+                  : parsed.config.hudLayout.dailyRecordTitle,
               waitingQueueTitle:
                 !parsed.config.hudLayout?.waitingQueueTitle ||
                 parsed.config.hudLayout?.waitingQueueTitle === 'Hàng Chờ Vào Lớp'
@@ -571,14 +931,23 @@ export function useClassroomEngine() {
                 : DEFAULT_GUIDE_ITEMS,
             },
           };
-          const isOld9321Queue =
+          if (
+            mergedCfg.lessonStartTtsText &&
+            mergedCfg.lessonStartTtsText.includes(
+              'Có 15 câu hỏi với độ khó tăng dần'
+            )
+          ) {
+            mergedCfg.lessonStartTtsText = mergedCfg.lessonStartTtsText.replace(
+              'Có 15 câu hỏi với độ khó tăng dần',
+              'Có 10 câu hỏi với độ khó tăng dần'
+            );
+          }
+          const isLegacy15Queue =
             Array.isArray(mergedCfg.customQuizQuestions) &&
-            mergedCfg.customQuizQuestions.length === 15 &&
-            (mergedCfg.customQuizQuestions[8]?.quizLevel === 'easy' ||
-              mergedCfg.customQuizQuestions[14]?.quizLevel === 'omg');
+            mergedCfg.customQuizQuestions.length === 15;
           const hasValidNewQueue =
             !needsDeckSchemaReset &&
-            !isOld9321Queue &&
+            !isLegacy15Queue &&
             Array.isArray(mergedCfg.customQuizQuestions) &&
             mergedCfg.customQuizQuestions.length > 0 &&
             mergedCfg.customQuizQuestions.some((q) => Boolean(q?.quizLevel || q?.deckName));
@@ -710,25 +1079,27 @@ export function useClassroomEngine() {
     }
     return INITIAL_DONORS;
   });
+  const didResetLegacyDailyRecordsOnBootRef = useRef<boolean>(false);
   const [dailyRecords, setDailyRecords] = useState<DailyRecordEntry[]>(() => {
     try {
+      const migrated =
+        localStorage.getItem(DAILY_TROPHY_SCHEMA_LS_KEY) === '1';
+      if (!migrated) {
+        localStorage.setItem(DAILY_TROPHY_SCHEMA_LS_KEY, '1');
+        didResetLegacyDailyRecordsOnBootRef.current = true;
+        return [];
+      }
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.dailyRecords) && parsed.dailyRecords.length > 0) {
+        if (Array.isArray(parsed.dailyRecords)) {
           return parsed.dailyRecords.slice(0, 5);
         }
       }
     } catch {
       // Ignore
     }
-    return INITIAL_DONORS.slice(0, 5).map((d, idx) => ({
-      username: d.username,
-      points: d.coins,
-      avatarUrl: DEFAULT_NPC_AVATARS[idx % DEFAULT_NPC_AVATARS.length],
-      avatarColor: AVATAR_COLORS[idx % AVATAR_COLORS.length],
-      updatedAt: Date.now() - idx * 1000,
-    }));
+    return [];
   });
   const [floatingToasts, setFloatingToasts] = useState<FloatingToastItem[]>([]);
   const [customAssets, setCustomAssets] = useState<CustomAssetsConfig>(DEFAULT_SPRITESHEETS);
@@ -737,7 +1108,7 @@ export function useClassroomEngine() {
     const quizList = getActiveQuizList(config);
     const startText =
       config.lessonStartTtsText ||
-      'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
+      'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
     return {
       engine: config.hudLayout.classBoardEngine || 'english_quiz',
       isRunning: true,
@@ -878,6 +1249,24 @@ export function useClassroomEngine() {
   const [eventTtsQueue, setEventTtsQueue] = useState<EventTtsQueueSnapshot>(() =>
     soundEngine.getEventQueueSnapshot()
   );
+  const [paperPlanes, setPaperPlanes] = useState<PaperPlaneFX[]>([]);
+  const [paperPlaneHitBubbles, setPaperPlaneHitBubbles] = useState<
+    PaperPlaneHitBubbleFX[]
+  >([]);
+  const [roseHeartBursts, setRoseHeartBursts] = useState<RoseHeartBurstFX[]>(
+    []
+  );
+  const paperPlaneRoseTargetByThrowerRef = useRef<
+    Map<
+      string,
+      {
+        targetId: number;
+        targetUsername: string;
+        targetLowerName: string;
+        expiresAt: number;
+      }
+    >
+  >(new Map());
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -962,6 +1351,250 @@ export function useClassroomEngine() {
       y: (isAtDesk ? st.y : slotY) - 18,
     };
   }, []);
+
+  const spawnRoseHeartBurstAt = useCallback(
+    (x: number, y: number, broadcastSync = false) => {
+      const cfgNow = configRef.current;
+      if (cfgNow.vfxRoseHeartBurstEnabled === false) return;
+      const durMs = Math.max(
+        450,
+        Math.min(
+          3000,
+          Math.round(Number(cfgNow.vfxRoseHeartBurstDurationMs ?? 1100))
+        )
+      );
+      const burstId = `rhburst_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 7)}`;
+      const burstFx: RoseHeartBurstFX = {
+        id: burstId,
+        x,
+        y,
+        createdAt: Date.now(),
+        durationMs: durMs,
+        scale: Number(cfgNow.vfxRoseHeartBurstScale ?? 1.0),
+        count: Math.round(Number(cfgNow.vfxRoseHeartBurstCount ?? 14)),
+        spread: Number(cfgNow.vfxRoseHeartBurstSpread ?? 1.0),
+      };
+      setRoseHeartBursts((prev) => [...prev.slice(-23), burstFx]);
+      if (broadcastSync) {
+        syncService.sendCommand('TRIGGER_ROSE_HEART_BURST', { x, y });
+      }
+      setTimeout(() => {
+        setRoseHeartBursts((prev) =>
+          prev.filter((item) => item.id !== burstId)
+        );
+      }, durMs + 180);
+    },
+    []
+  );
+
+  const pendingUiDaTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
+
+  useEffect(() => {
+    const timersMap = pendingUiDaTimersRef.current;
+    return () => {
+      timersMap.forEach((timerId) => clearTimeout(timerId));
+      timersMap.clear();
+    };
+  }, []);
+
+  // Phóng máy bay giấy (hoặc bó hoa hồng trong 10s sau khi trúng máy bay giấy) từ học sinh đang ngồi trong lớp bay tới đầu học sinh mục tiêu
+  const launchPaperPlaneAtStudent = useCallback(
+    (
+      thrower: PilgrimData,
+      target: PilgrimData,
+      broadcastSync = false,
+      extraOpts?: {
+        projectileKind?: 'paper_plane' | 'rose_bouquet';
+        onHitCallback?: () => void;
+      }
+    ): void => {
+      const projKind = extraOpts?.projectileKind ?? 'paper_plane';
+
+      // Quy tắc nghiêm ngặt: Chỉ các bạn ĐANG NGỒI TẠI BÀN TRONG LỚP (state === 'pray_seated' & có slotId) mới được phép ném máy bay giấy
+      if (
+        projKind === 'paper_plane' &&
+        (!thrower.slotId || thrower.state !== 'pray_seated')
+      ) {
+        return;
+      }
+
+      const cfg = configRef.current;
+      const throwerPts = computeStudentHeadAndHandCoords(
+        thrower,
+        vipSlotsRef.current,
+        normalSlotsRef.current,
+        cfg
+      );
+      const targetPts = computeStudentHeadAndHandCoords(
+        target,
+        vipSlotsRef.current,
+        normalSlotsRef.current,
+        cfg
+      );
+
+      const startX =
+        throwerPts.handX + (targetPts.headX >= throwerPts.handX ? 8 : -8);
+      const startY = throwerPts.handY;
+      const targetX = targetPts.headX;
+      const targetY = targetPts.headY;
+
+      const dist = Math.max(24, Math.hypot(targetX - startX, targetY - startY));
+      const curvedArcDist = Math.max(110, dist * 1.18 + 36);
+      const safeSpeed = Math.max(
+        80,
+        Math.min(2500, Number(cfg.paperPlaneSpeed ?? 460))
+      );
+      const durationMs = Math.max(
+        260,
+        Math.min(4800, Math.round((curvedArcDist / safeSpeed) * 1000))
+      );
+      const safeScale = Math.max(
+        0.25,
+        Math.min(4, Number(cfg.paperPlaneScale ?? 1))
+      );
+      const now = Date.now();
+      const planeId = `${
+        projKind === 'rose_bouquet' ? 'frose' : 'pplane'
+      }_${now}_${thrower.id}_${target.id}_${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+
+      const planeFx: PaperPlaneFX = {
+        id: planeId,
+        startX,
+        startY,
+        targetX,
+        targetY,
+        createdAt: now,
+        durationMs,
+        scale: safeScale,
+        projectileKind: projKind,
+        throwerUsername: thrower.username,
+        targetUsername: target.username,
+      };
+
+      setPaperPlanes((prev) => [...prev.slice(-23), planeFx]);
+
+      if (broadcastSync) {
+        syncService.sendCommand('TRIGGER_PAPER_PLANE', {
+          throwerUsername: thrower.username,
+          targetUsername: target.username,
+          projectileKind: projKind,
+        });
+      }
+
+      const targetId = target.id;
+      const targetLowerName = target.username.trim().toLowerCase();
+      const throwerLowerName = thrower.username.trim().toLowerCase();
+
+      setTimeout(() => {
+        setPaperPlanes((prev) => prev.filter((item) => item.id !== planeId));
+
+        const liveTarget = pilgrimsRef.current.find(
+          (p) =>
+            (p.id === targetId ||
+              p.username.trim().toLowerCase() === targetLowerName) &&
+            Boolean(p.slotId) &&
+            p.state !== 'leave_side_to_aisle' &&
+            p.state !== 'leave_down_exit'
+        );
+        const liveHeadPts = liveTarget
+          ? computeStudentHeadAndHandCoords(
+              liveTarget,
+              vipSlotsRef.current,
+              normalSlotsRef.current,
+              configRef.current
+            )
+          : { headX: targetX, headY: targetY };
+
+        if (projKind === 'rose_bouquet') {
+          extraOpts?.onHitCallback?.();
+          spawnRoseHeartBurstAt(liveHeadPts.headX, liveHeadPts.headY, false);
+          return;
+        }
+
+        // Máy bay giấy trúng đầu mục tiêu:
+        // 1) Mở khóa cửa sổ 10 giây tiếp theo: nếu người ném tặng Hoa Hồng thì sẽ ném bó hoa hồng cho đúng bạn vừa bị ném trúng!
+        if (throwerLowerName) {
+          paperPlaneRoseTargetByThrowerRef.current.set(throwerLowerName, {
+            targetId: liveTarget ? liveTarget.id : targetId,
+            targetUsername: liveTarget ? liveTarget.username : target.username,
+            targetLowerName,
+            expiresAt: Date.now() + 10_000,
+          });
+        }
+
+        // 2) Hiện 1 bong bóng gai trống nhỏ ngay tại tọa độ đầu vừa trúng đạn
+        const hitId = `pphit_${Date.now()}_${targetId}_${Math.random()
+          .toString(36)
+          .slice(2, 6)}`;
+        const hitBubble: PaperPlaneHitBubbleFX = {
+          id: hitId,
+          x: liveHeadPts.headX,
+          y: liveHeadPts.headY,
+          createdAt: Date.now(),
+          scale: Math.max(0.65, Math.min(2.2, safeScale * 0.95)),
+        };
+        setPaperPlaneHitBubbles((prev) => [...prev.slice(-23), hitBubble]);
+
+        setTimeout(() => {
+          setPaperPlaneHitBubbles((prev) =>
+            prev.filter((b) => b.id !== hitId)
+          );
+        }, 720);
+
+        // 3) Sau đúng 1s kể từ lúc trúng đạn vào đầu, học sinh bị trúng tự động chat "ui da":
+        //    - Hủy timer "ui da" cũ chưa kịp nổ của cùng học sinh (nếu bị ném dồn liên tiếp < 1s)
+        //    - Khi hiển thị "ui da", xóa ngay lập tức tin nhắn cũ (cấp chatBubbleKey mới) và đặt lại thời gian mới từ Date.now() (tuyệt đối KHÔNG cộng dồn thời gian hiển thị)
+        const targetTimerKey =
+          targetLowerName || `id_${liveTarget ? liveTarget.id : targetId}`;
+        const prevPendingUiDa =
+          pendingUiDaTimersRef.current.get(targetTimerKey);
+        if (prevPendingUiDa) {
+          clearTimeout(prevPendingUiDa);
+        }
+
+        const uiDaTimer = setTimeout(() => {
+          pendingUiDaTimersRef.current.delete(targetTimerKey);
+          const hitStudentStillInClass = pilgrimsRef.current.find(
+            (p) =>
+              (p.id === targetId ||
+                p.username.trim().toLowerCase() === targetLowerName) &&
+              Boolean(p.slotId) &&
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit'
+          );
+          if (!hitStudentStillInClass) return;
+
+          const nowUiDa = Date.now();
+          const bubbleDurationMs =
+            (configRef.current.chatBubbleDurationSec || 12) * 1000;
+          const nextBubbleKey = issueChatBubbleKey();
+          const updatedPilgrims = pilgrimsRef.current.map((p) =>
+            p.id === hitStudentStillInClass.id
+              ? {
+                  ...p,
+                  prayer: 'ui da',
+                  hasComment: true,
+                  prayTimer: 0,
+                  chatBubbleKey: nextBubbleKey,
+                  chatBubbleUntil: nowUiDa + bubbleDurationMs,
+                }
+              : p
+          );
+          pilgrimsRef.current = updatedPilgrims;
+          setPilgrims(updatedPilgrims);
+        }, 1000);
+
+        pendingUiDaTimersRef.current.set(targetTimerKey, uiDaTimer);
+      }, durationMs);
+    },
+    [spawnRoseHeartBurstAt]
+  );
   const doorCrowdRef = useRef(doorCrowd);
   doorCrowdRef.current = doorCrowd;
   const doorCrowdCursorRef = useRef(0);
@@ -1156,7 +1789,6 @@ export function useClassroomEngine() {
       if (items.length === 0 || doorCrowdRef.current.length === 0) return;
       const now = Date.now();
       const cfg = configRef.current;
-      const bubbleUntil = now + (cfg.chatBubbleDurationSec || 12) * 1000;
       let pool = [...doorCrowdRef.current];
       const poolLen = pool.length;
 
@@ -1197,15 +1829,43 @@ export function useClassroomEngine() {
         doorCrowdCursorRef.current = (targetIdx + 1) % poolLen;
         const chosenDoorStudent = pool[targetIdx];
 
+        const itemExp = studentExpMapRef.current.get(item.lowerUser) || 0;
+        const itemTrophies =
+          studentTrophyMapRef.current.get(item.lowerUser) || 0;
+        const freshDoorBubbleUntil =
+          Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000;
+        const freshDoorBubbleKey = issueChatBubbleKey();
+
+        // Đảm bảo nếu cùng 1 người từng hiện bong bóng ở vị trí khác trong hàng chờ thì xóa ngay lập tức bong bóng cũ
+        for (let i = 0; i < poolLen; i++) {
+          if (
+            i !== targetIdx &&
+            pool[i].username.trim().toLowerCase() === item.lowerUser &&
+            pool[i].chatBubbleUntil
+          ) {
+            pool[i] = {
+              ...pool[i],
+              prayer: '',
+              hasComment: false,
+              chatBubbleUntil: 0,
+              chatBubbleKey: 0,
+            };
+          }
+        }
+
         pool[targetIdx] = {
           ...chosenDoorStudent,
           username: item.username,
           prayer: item.comment,
           gender: item.gender,
           avatarUrl: item.avatarUrl || chosenDoorStudent.avatarUrl,
+          exp: itemExp,
+          level: getStudentLevelFromExp(itemExp),
+          goldTrophies: itemTrophies,
           hasComment: true,
           stateTimer: 0,
-          chatBubbleUntil: bubbleUntil,
+          chatBubbleKey: freshDoorBubbleKey,
+          chatBubbleUntil: freshDoorBubbleUntil,
         };
 
         // Chỉ hiển thị bong bóng chat ngoài cửa cho Hàng Chờ, KHÔNG đọc TTS cho học sinh ngoài Hàng Chờ (chỉ đọc comment các bạn trong lớp)
@@ -1291,7 +1951,9 @@ export function useClassroomEngine() {
         npcNamesRef.current,
         npcAvatarsRef.current,
         spread,
-        queuedList
+        queuedList,
+        studentTrophyMapRef.current,
+        studentExpMapRef.current
       );
       doorCrowdRef.current = next;
       return next;
@@ -1518,19 +2180,21 @@ export function useClassroomEngine() {
   // 4. Lưu bền vững đa tầng: localStorage + IndexedDB + Server JSON + Chung file Backup JSON
   // ============================================================================
   const studentExpMapRef = useRef<Map<string, number>>(new Map());
+  const studentTrophyMapRef = useRef<Map<string, number>>(new Map());
   const studentExpDirtyRef = useRef<boolean>(false);
   const hasInitializedExpMapRef = useRef<boolean>(false);
 
   if (!hasInitializedExpMapRef.current) {
     hasInitializedExpMapRef.current = true;
     const initMap = new Map<string, number>();
-    const ingestRecord = (rec: unknown) => {
+    const initTrophyMap = new Map<string, number>();
+    const ingestRecord = (target: Map<string, number>, rec: unknown) => {
       if (!rec || typeof rec !== 'object') return;
       for (const [k, v] of Object.entries(rec as Record<string, unknown>)) {
         const cleanKey = (k || '').trim().toLowerCase();
-        const expVal = Math.floor(Number(v) || 0);
-        if (cleanKey && expVal > 0) {
-          initMap.set(cleanKey, Math.max(initMap.get(cleanKey) || 0, expVal));
+        const val = Math.floor(Number(v) || 0);
+        if (cleanKey && val > 0) {
+          target.set(cleanKey, Math.max(target.get(cleanKey) || 0, val));
         }
       }
     };
@@ -1538,7 +2202,8 @@ export function useClassroomEngine() {
       const savedStudio = localStorage.getItem(STORAGE_KEY);
       if (savedStudio) {
         const parsedStudio = JSON.parse(savedStudio);
-        ingestRecord(parsedStudio?.studentExpMap);
+        ingestRecord(initMap, parsedStudio?.studentExpMap);
+        ingestRecord(initTrophyMap, parsedStudio?.studentTrophyMap);
       }
     } catch {
       // Ignore
@@ -1546,12 +2211,21 @@ export function useClassroomEngine() {
     try {
       const savedExpOnly = localStorage.getItem(STUDENT_EXP_LS_KEY);
       if (savedExpOnly) {
-        ingestRecord(JSON.parse(savedExpOnly));
+        ingestRecord(initMap, JSON.parse(savedExpOnly));
+      }
+    } catch {
+      // Ignore
+    }
+    try {
+      const savedTrophyOnly = localStorage.getItem(STUDENT_TROPHY_LS_KEY);
+      if (savedTrophyOnly) {
+        ingestRecord(initTrophyMap, JSON.parse(savedTrophyOnly));
       }
     } catch {
       // Ignore
     }
     studentExpMapRef.current = initMap;
+    studentTrophyMapRef.current = initTrophyMap;
   }
 
   const getStudentExpById = useCallback((username: string): number => {
@@ -1560,16 +2234,28 @@ export function useClassroomEngine() {
     return studentExpMapRef.current.get(cleanKey) || 0;
   }, []);
 
+  const getStudentTrophiesById = useCallback((username: string): number => {
+    const cleanKey = (username || '').trim().toLowerCase();
+    if (!cleanKey) return 0;
+    return studentTrophyMapRef.current.get(cleanKey) || 0;
+  }, []);
+
   const applyExpMapToActiveStudents = useCallback(() => {
     const map = studentExpMapRef.current;
+    const trophyMap = studentTrophyMapRef.current;
     let changedPilgrims = false;
     const nextPilgrims = pilgrimsRef.current.map((p) => {
       const lower = (p.username || '').trim().toLowerCase();
       const expVal = map.get(lower) || 0;
       const lvlVal = getStudentLevelFromExp(expVal);
-      if ((p.exp || 0) !== expVal || (p.level || 1) !== lvlVal) {
+      const trophyVal = trophyMap.get(lower) || 0;
+      if (
+        (p.exp || 0) !== expVal ||
+        (p.level || 1) !== lvlVal ||
+        (p.goldTrophies ?? 0) !== trophyVal
+      ) {
         changedPilgrims = true;
-        return { ...p, exp: expVal, level: lvlVal };
+        return { ...p, exp: expVal, level: lvlVal, goldTrophies: trophyVal };
       }
       return p;
     });
@@ -1583,9 +2269,14 @@ export function useClassroomEngine() {
       const lower = (d.username || '').trim().toLowerCase();
       const expVal = map.get(lower) || 0;
       const lvlVal = getStudentLevelFromExp(expVal);
-      if ((d.exp || 0) !== expVal || (d.level || 1) !== lvlVal) {
+      const trophyVal = trophyMap.get(lower) || 0;
+      if (
+        (d.exp || 0) !== expVal ||
+        (d.level || 1) !== lvlVal ||
+        (d.goldTrophies ?? 0) !== trophyVal
+      ) {
         changedCrowd = true;
-        return { ...d, exp: expVal, level: lvlVal };
+        return { ...d, exp: expVal, level: lvlVal, goldTrophies: trophyVal };
       }
       return d;
     });
@@ -1599,13 +2290,21 @@ export function useClassroomEngine() {
     (replaceAll = false, broadcastSync = true) => {
       studentExpDirtyRef.current = false;
       const serialized = serializeStudentExpMap(studentExpMapRef.current);
+      const serializedTrophies = serializeStudentExpMap(
+        studentTrophyMapRef.current
+      );
 
       try {
         localStorage.setItem(STUDENT_EXP_LS_KEY, JSON.stringify(serialized));
+        localStorage.setItem(
+          STUDENT_TROPHY_LS_KEY,
+          JSON.stringify(serializedTrophies)
+        );
         const rawFull = localStorage.getItem(STORAGE_KEY);
         if (rawFull) {
           const parsedFull = JSON.parse(rawFull);
           parsedFull.studentExpMap = serialized;
+          parsedFull.studentTrophyMap = serializedTrophies;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsedFull));
         }
       } catch {
@@ -1613,11 +2312,16 @@ export function useClassroomEngine() {
       }
 
       void idbSet(STUDENT_EXP_IDB_KEY, serialized);
+      void idbSet(STUDENT_TROPHY_IDB_KEY, serializedTrophies);
 
       fetch('/api/student-exp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentExpMap: serialized, replaceAll }),
+        body: JSON.stringify({
+          studentExpMap: serialized,
+          studentTrophyMap: serializedTrophies,
+          replaceAll,
+        }),
       }).catch(() => {
         // Ignore network errors
       });
@@ -1625,6 +2329,7 @@ export function useClassroomEngine() {
       if (broadcastSync) {
         syncService.sendCommand('SYNC_STUDENT_EXP', {
           studentExpMap: serialized,
+          studentTrophyMap: serializedTrophies,
           replaceAll,
         });
       }
@@ -1632,7 +2337,7 @@ export function useClassroomEngine() {
     []
   );
 
-  // Giải pháp 2: Auto-save ngầm định kỳ mỗi 10s nếu có thay đổi EXP trên RAM
+  // Giải pháp 2: Auto-save ngầm định kỳ mỗi 10s nếu có thay đổi EXP / Cúp Vàng trên RAM
   useEffect(() => {
     const expTimer = setInterval(() => {
       if (studentExpDirtyRef.current) {
@@ -1642,19 +2347,21 @@ export function useClassroomEngine() {
     return () => clearInterval(expTimer);
   }, [flushStudentExpStorage]);
 
-  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists / Student EXP) from IndexedDB & Server
+  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists / Student EXP & Trophies) from IndexedDB & Server
   useEffect(() => {
-    const mergeExpObject = (rec: unknown): boolean => {
+    const mergeMapObject = (
+      targetMap: Map<string, number>,
+      rec: unknown
+    ): boolean => {
       if (!rec || typeof rec !== 'object') return false;
       let hasChange = false;
-      const map = studentExpMapRef.current;
       for (const [k, v] of Object.entries(rec as Record<string, unknown>)) {
         const cleanKey = (k || '').trim().toLowerCase();
-        const expVal = Math.floor(Number(v) || 0);
-        if (cleanKey && expVal > 0) {
-          const prev = map.get(cleanKey) || 0;
-          if (expVal > prev) {
-            map.set(cleanKey, expVal);
+        const val = Math.floor(Number(v) || 0);
+        if (cleanKey && val > 0) {
+          const prev = targetMap.get(cleanKey) || 0;
+          if (val > prev) {
+            targetMap.set(cleanKey, val);
             hasChange = true;
           }
         }
@@ -1663,15 +2370,29 @@ export function useClassroomEngine() {
     };
 
     idbGet<Record<string, number>>(STUDENT_EXP_IDB_KEY).then((savedExp) => {
-      if (mergeExpObject(savedExp)) {
+      if (mergeMapObject(studentExpMapRef.current, savedExp)) {
         applyExpMapToActiveStudents();
       }
     });
 
+    idbGet<Record<string, number>>(STUDENT_TROPHY_IDB_KEY).then(
+      (savedTrophies) => {
+        if (mergeMapObject(studentTrophyMapRef.current, savedTrophies)) {
+          applyExpMapToActiveStudents();
+        }
+      }
+    );
+
     fetch('/api/student-exp')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data?.studentExpMap && mergeExpObject(data.studentExpMap)) {
+        const changedExp =
+          data?.studentExpMap &&
+          mergeMapObject(studentExpMapRef.current, data.studentExpMap);
+        const changedTrophies =
+          data?.studentTrophyMap &&
+          mergeMapObject(studentTrophyMapRef.current, data.studentTrophyMap);
+        if (changedExp || changedTrophies) {
           applyExpMapToActiveStudents();
         }
       })
@@ -1720,9 +2441,16 @@ export function useClassroomEngine() {
       lotusDonors?: DonorEntry[];
       dailyRecords?: DailyRecordEntry[];
       studentExpMap?: Record<string, number>;
+      studentTrophyMap?: Record<string, number>;
     }>('classroom_full_studio_state_v1').then((savedFull) => {
       if (!savedFull) return;
-      if (savedFull.studentExpMap && mergeExpObject(savedFull.studentExpMap)) {
+      const changedSavedExp =
+        savedFull.studentExpMap &&
+        mergeMapObject(studentExpMapRef.current, savedFull.studentExpMap);
+      const changedSavedTrophies =
+        savedFull.studentTrophyMap &&
+        mergeMapObject(studentTrophyMapRef.current, savedFull.studentTrophyMap);
+      if (changedSavedExp || changedSavedTrophies) {
         applyExpMapToActiveStudents();
       }
       if (savedFull.config) {
@@ -1791,6 +2519,13 @@ export function useClassroomEngine() {
               ...(savedFull.config?.giftModelScales || {}),
               maxDeskCats: 1,
             },
+            zombieProjectileScales: {
+              ...DEFAULT_ZOMBIE_PROJECTILE_SCALES,
+              ...(prev.zombieProjectileScales || {}),
+              ...(hasSyncLocalConfig
+                ? {}
+                : savedFull.config?.zombieProjectileScales || {}),
+            },
             grid: {
               ...prev.grid,
               ...(hasSyncLocalConfig ? {} : savedFull.config?.grid || {}),
@@ -1798,21 +2533,62 @@ export function useClassroomEngine() {
             hudLayout: {
               ...prev.hudLayout,
               ...(hasSyncLocalConfig ? {} : savedFull.config?.hudLayout || {}),
+              dailyRecordTitle:
+                (!hasSyncLocalConfig &&
+                  savedFull.config?.hudLayout?.dailyRecordTitle &&
+                  savedFull.config.hudLayout.dailyRecordTitle !==
+                    'Kỷ lục hôm nay') ||
+                prev.hudLayout.dailyRecordTitle !== 'Kỷ lục hôm nay'
+                  ? prev.hudLayout.dailyRecordTitle || 'Kỷ lục cúp vàng'
+                  : 'Kỷ lục cúp vàng',
             },
           };
-          const isOld9321IdbQueue =
+          if (
+            !nextCfg.lessonRoundEndTtsTemplate ||
+            nextCfg.lessonRoundEndTtsTemplate.includes(
+              'ly trà sữa mat cha lat te'
+            )
+          ) {
+            nextCfg.lessonRoundEndTtsTemplate =
+              DEFAULT_CONFIG.lessonRoundEndTtsTemplate;
+          }
+          if (
+            !nextCfg.lessonRecordTtsTemplate ||
+            nextCfg.lessonRecordTtsTemplate.includes(
+              'Kỷ lục hôm nay với [ĐiểmKỷLục] điểm'
+            )
+          ) {
+            nextCfg.lessonRecordTtsTemplate =
+              DEFAULT_CONFIG.lessonRecordTtsTemplate;
+            nextCfg.lessonRecordTtsTemplates =
+              DEFAULT_CONFIG.lessonRecordTtsTemplates;
+          }
+          if (
+            nextCfg.lessonStartTtsText &&
+            nextCfg.lessonStartTtsText.includes(
+              'Có 15 câu hỏi với độ khó tăng dần'
+            )
+          ) {
+            nextCfg.lessonStartTtsText = nextCfg.lessonStartTtsText.replace(
+              'Có 15 câu hỏi với độ khó tăng dần',
+              'Có 10 câu hỏi với độ khó tăng dần'
+            );
+          }
+          const isLegacy15IdbQueue =
             Array.isArray(nextCfg.customQuizQuestions) &&
-            nextCfg.customQuizQuestions.length === 15 &&
-            (nextCfg.customQuizQuestions[8]?.quizLevel === 'easy' ||
-              nextCfg.customQuizQuestions[14]?.quizLevel === 'omg');
+            nextCfg.customQuizQuestions.length === 15;
           if (
             needsSchemaReset ||
-            isOld9321IdbQueue ||
+            isLegacy15IdbQueue ||
             !Array.isArray(nextCfg.customQuizQuestions) ||
             nextCfg.customQuizQuestions.length === 0
           ) {
             nextCfg.customQuizQuestions =
               build15MinuteTieredRoundQuestions(nextCfg);
+          }
+          if (!nextCfg.ieltsRankBadgeSchemaV1) {
+            nextCfg.studentLevelExpEnabled = true;
+            nextCfg.ieltsRankBadgeSchemaV1 = true;
           }
           return nextCfg;
         });
@@ -1854,7 +2630,10 @@ export function useClassroomEngine() {
       if (Array.isArray(savedFull.lotusDonors)) {
         setLotusDonors(savedFull.lotusDonors);
       }
-      if (Array.isArray(savedFull.dailyRecords)) {
+      if (
+        !didResetLegacyDailyRecordsOnBootRef.current &&
+        Array.isArray(savedFull.dailyRecords)
+      ) {
         const sliced = savedFull.dailyRecords.slice(0, 5);
         dailyRecordsRef.current = sliced;
         setDailyRecords(sliced);
@@ -1863,7 +2642,7 @@ export function useClassroomEngine() {
         }
       }
     });
-  }, []);
+  }, [applyExpMapToActiveStudents]);
 
   // Đồng bộ ngay tên và avatar của NPC đang ở cửa lớp (doorCrowd), trong lớp (pilgrims isBot) và trong hàng chờ (waitingPoolRef isBot) khi danh sách npcNames / npcAvatars thay đổi
   useEffect(() => {
@@ -1973,6 +2752,7 @@ export function useClassroomEngine() {
       lotusDonors,
       dailyRecords,
       studentExpMap: serializeStudentExpMap(studentExpMapRef.current),
+      studentTrophyMap: serializeStudentExpMap(studentTrophyMapRef.current),
     };
 
     // 1. Lưu đầy đủ 100% (kể cả MP3 Base64 & Avatar Base64 dung lượng lớn) vào IndexedDB
@@ -2031,6 +2811,7 @@ export function useClassroomEngine() {
     safetyActionMode,
     safetyCategories,
     lotusDonors,
+    dailyRecords,
   ]);
 
   const ttsStatusRef = useRef(ttsStatus);
@@ -2245,7 +3026,12 @@ export function useClassroomEngine() {
   );
 
   const triggerStudentScoreCardPopup = useCallback(
-    (lowerName: string, newTotalScore: number, delta: number) => {
+    (
+      lowerName: string,
+      newTotalScore: number,
+      delta: number,
+      didRankUp = false
+    ) => {
       if (!lowerName || delta === 0) return;
       const now = Date.now();
       const durationMs =
@@ -2261,12 +3047,26 @@ export function useClassroomEngine() {
           p.state !== 'leave_down_exit'
         ) {
           changedPilgrim = true;
+          const hadPendingRankUp = Boolean(
+            p.rankUpUntil &&
+              now < p.rankUpUntil &&
+              Boolean(p.rankUpStartAt && now < p.rankUpStartAt)
+          );
+          const shouldRankUpAfterCard = didRankUp || hadPendingRankUp;
+          const delayedStartAt = cardUntil + 2000;
           return {
             ...p,
             currentScoreDisplay: newTotalScore,
             scoreChangeDelta: delta,
             expChangeDelta: 0,
-            leveledUpInRound: false,
+            leveledUpInRound: shouldRankUpAfterCard,
+            rankUpStartAt: shouldRankUpAfterCard
+              ? delayedStartAt
+              : p.rankUpStartAt,
+            rankUpUntil: shouldRankUpAfterCard
+              ? delayedStartAt + 2000
+              : p.rankUpUntil,
+            rankUpKey: shouldRankUpAfterCard ? cardKey : p.rankUpKey,
             scoreCardUntil: cardUntil,
             scoreCardKey: cardKey,
           };
@@ -2283,12 +3083,26 @@ export function useClassroomEngine() {
         const nextRunners = specialFlowerRunnersRef.current.map((r) => {
           if (r.username.trim().toLowerCase() === lowerName) {
             changedRunner = true;
+            const hadPendingRankUp = Boolean(
+              r.rankUpUntil &&
+                now < r.rankUpUntil &&
+                Boolean(r.rankUpStartAt && now < r.rankUpStartAt)
+            );
+            const shouldRankUpAfterCard = didRankUp || hadPendingRankUp;
+            const delayedStartAt = cardUntil + 2000;
             return {
               ...r,
               currentScoreDisplay: newTotalScore,
               scoreChangeDelta: delta,
               expChangeDelta: 0,
-              leveledUpInRound: false,
+              leveledUpInRound: shouldRankUpAfterCard,
+              rankUpStartAt: shouldRankUpAfterCard
+                ? delayedStartAt
+                : r.rankUpStartAt,
+              rankUpUntil: shouldRankUpAfterCard
+                ? delayedStartAt + 2000
+                : r.rankUpUntil,
+              rankUpKey: shouldRankUpAfterCard ? cardKey : r.rankUpKey,
               scoreCardUntil: cardUntil,
               scoreCardKey: cardKey,
             };
@@ -2325,71 +3139,142 @@ export function useClassroomEngine() {
       lotusDonorsRef.current = nextList;
       setLotusDonors(nextList);
 
-      // Cập nhật bảng "Kỷ lục hôm nay" (lưu Top 5 bạn điểm cao nhất ngày + kiểm tra Top 1 thay đổi để kích hoạt Luồng Kỷ Lục)
-      const matchedPilgrim = pilgrimsRef.current.find(
-        (p) => p.username.trim().toLowerCase() === lower
-      );
-      const matchedQueued = waitingPoolRef.current.get(lower);
-      const matchedDoor = doorCrowdRef.current.find(
-        (d) => d.username.trim().toLowerCase() === lower
-      );
-      const prevRecords = dailyRecordsRef.current;
-      const existingRecIdx = prevRecords.findIndex(
-        (r) => r.username.trim().toLowerCase() === lower
-      );
-      const hashSeed = cleanName
-        .split('')
-        .reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-      const resolvedAvatarUrl =
-        matchedPilgrim?.avatarUrl ||
-        matchedQueued?.avatarUrl ||
-        matchedDoor?.avatarUrl ||
-        (existingRecIdx >= 0 ? prevRecords[existingRecIdx].avatarUrl : null) ||
-        DEFAULT_NPC_AVATARS[hashSeed % DEFAULT_NPC_AVATARS.length];
-      const resolvedAvatarColor =
-        matchedPilgrim?.avatarColor ||
-        matchedDoor?.avatarColor ||
-        (existingRecIdx >= 0 ? prevRecords[existingRecIdx].avatarColor : undefined) ||
-        AVATAR_COLORS[hashSeed % AVATAR_COLORS.length];
-
-      const prevBestPoints =
-        existingRecIdx >= 0 ? prevRecords[existingRecIdx].points : 0;
-      const bestPoints = Math.max(prevBestPoints, newTotal);
-      let nextRecords: DailyRecordEntry[];
-      if (existingRecIdx >= 0) {
-        nextRecords = prevRecords.map((r, i) =>
-          i === existingRecIdx
-            ? {
-                ...r,
-                username: cleanName,
-                points: bestPoints,
-                avatarUrl: resolvedAvatarUrl,
-                avatarColor: resolvedAvatarColor,
-                updatedAt: bestPoints > prevBestPoints ? Date.now() : r.updatedAt,
-              }
-            : r
+      if (!suppressPopup) {
+        // Quy ước mới: EXP = Điểm luôn -> cộng điểm trực tiếp (quà tặng/thưởng) cũng cộng đúng bấy nhiêu EXP
+        const prevExp = studentExpMapRef.current.get(lower) || 0;
+        const prevLvl = getStudentLevelFromExp(prevExp);
+        const nextExp = prevExp + points;
+        studentExpMapRef.current.set(lower, nextExp);
+        studentExpDirtyRef.current = true;
+        const nextLvl = getStudentLevelFromExp(nextExp);
+        const didRankUp = nextLvl > prevLvl;
+        pilgrimsRef.current = pilgrimsRef.current.map((p) =>
+          p.username.trim().toLowerCase() === lower
+            ? { ...p, exp: nextExp, level: nextLvl }
+            : p
         );
+        if (specialFlowerRunnersRef.current.length > 0) {
+          specialFlowerRunnersRef.current = specialFlowerRunnersRef.current.map(
+            (r) =>
+              r.username.trim().toLowerCase() === lower
+                ? { ...r, exp: nextExp, level: nextLvl }
+                : r
+          );
+        }
+        triggerStudentScoreCardPopup(lower, newTotal, points, didRankUp);
       } else {
-        nextRecords = [
-          ...prevRecords,
-          {
+        // Khi trả lời đúng câu hỏi trong lớp: chỉ cập nhật điểm tổng ẩn, đợi sang Luồng 5 mới hiện đồng loạt thẻ điểm + text cộng điểm
+        let changed = false;
+        const nextPilgrims = pilgrimsRef.current.map((p) => {
+          if (p.username.trim().toLowerCase() === lower) {
+            changed = true;
+            return { ...p, currentScoreDisplay: newTotal };
+          }
+          return p;
+        });
+        if (changed) {
+          pilgrimsRef.current = nextPilgrims;
+          setPilgrims(nextPilgrims);
+        }
+      }
+    },
+    [triggerStudentScoreCardPopup]
+  );
+
+  // Cộng Cúp Vàng cuối vòng Kiểm tra 15 phút (Top 1: +3, Top 2: +2, Top 3: +1) vào:
+  // 1) Tổng số cúp vàng học sinh sở hữu dài hạn (studentTrophyMapRef -> hiển thị ở thẻ nhỏ dưới thẻ tên)
+  // 2) Bảng "Kỷ lục cúp vàng" trong ngày (dailyRecords -> chỉ tính số cúp đạt được trong ngày, chỉ reset thủ công khi bấm nút Reset)
+  const awardStudentGoldTrophies = useCallback(
+    (
+      awards: Array<{
+        username: string;
+        trophies: number;
+        avatarUrl?: string | null;
+        avatarColor?: string;
+      }>
+    ) => {
+      const validAwards = awards.filter(
+        (a) => Boolean(a.username && a.username.trim()) && a.trophies > 0
+      );
+      if (validAwards.length === 0) return;
+
+      const prevRecords = dailyRecordsRef.current;
+      const prevTop1 = prevRecords[0];
+      let workingRecords = [...prevRecords];
+      const nowAward = Date.now();
+
+      validAwards.forEach((award, idx) => {
+        const cleanName = award.username.trim();
+        const lower = cleanName.toLowerCase();
+        const addCount = Math.max(1, Math.floor(award.trophies));
+
+        // 1. Cộng vào kho tổng cúp vàng sở hữu dài hạn của học sinh
+        const prevTotalTrophies = studentTrophyMapRef.current.get(lower) || 0;
+        studentTrophyMapRef.current.set(lower, prevTotalTrophies + addCount);
+        studentExpDirtyRef.current = true;
+
+        // 2. Cộng dồn vào số cúp vàng đạt được TRONG NGÀY trên bảng Kỷ lục cúp vàng
+        const matchedPilgrim = pilgrimsRef.current.find(
+          (p) => p.username.trim().toLowerCase() === lower
+        );
+        const matchedQueued = waitingPoolRef.current.get(lower);
+        const matchedDoor = doorCrowdRef.current.find(
+          (d) => d.username.trim().toLowerCase() === lower
+        );
+        const existingRecIdx = workingRecords.findIndex(
+          (r) => r.username.trim().toLowerCase() === lower
+        );
+        const hashSeed = cleanName
+          .split('')
+          .reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+        const resolvedAvatarUrl =
+          award.avatarUrl ||
+          matchedPilgrim?.avatarUrl ||
+          matchedQueued?.avatarUrl ||
+          matchedDoor?.avatarUrl ||
+          (existingRecIdx >= 0 ? workingRecords[existingRecIdx].avatarUrl : null) ||
+          DEFAULT_NPC_AVATARS[hashSeed % DEFAULT_NPC_AVATARS.length];
+        const resolvedAvatarColor =
+          award.avatarColor ||
+          matchedPilgrim?.avatarColor ||
+          matchedDoor?.avatarColor ||
+          (existingRecIdx >= 0
+            ? workingRecords[existingRecIdx].avatarColor
+            : undefined) ||
+          AVATAR_COLORS[hashSeed % AVATAR_COLORS.length];
+
+        if (existingRecIdx >= 0) {
+          const prevDaily = Math.max(0, workingRecords[existingRecIdx].points || 0);
+          workingRecords[existingRecIdx] = {
+            ...workingRecords[existingRecIdx],
             username: cleanName,
-            points: bestPoints,
+            points: prevDaily + addCount,
             avatarUrl: resolvedAvatarUrl,
             avatarColor: resolvedAvatarColor,
-            updatedAt: Date.now(),
-          },
-        ];
-      }
-      nextRecords.sort((a, b) => {
+            updatedAt: nowAward + idx,
+          };
+        } else {
+          workingRecords.push({
+            username: cleanName,
+            points: addCount,
+            avatarUrl: resolvedAvatarUrl,
+            avatarColor: resolvedAvatarColor,
+            updatedAt: nowAward + idx,
+          });
+        }
+      });
+
+      workingRecords.sort((a, b) => {
         if (b.points !== a.points) return b.points - a.points;
         return (a.updatedAt || 0) - (b.updatedAt || 0);
       });
-      const top5Records = nextRecords.slice(0, 5);
-      const prevTop1 = prevRecords[0];
+      const top5Records = workingRecords.slice(0, 5);
       const nextTop1 = top5Records[0];
       dailyRecordsRef.current = top5Records;
       setDailyRecords(top5Records);
+      syncService.sendCommand('UPDATE_DAILY_RECORDS', {
+        dailyRecords: top5Records,
+      });
 
       if (nextTop1 && nextTop1.points > 0) {
         const nextTop1Lower = nextTop1.username.trim().toLowerCase();
@@ -2402,7 +3287,6 @@ export function useClassroomEngine() {
             p.username.trim().toLowerCase() === nextTop1Lower
         );
 
-        // Nếu chưa từng có ai giữ Top 1 trước đó -> ghi nhận người đầu tiên làm mốc (không bật luồng kỷ lục khi chưa bị người khác chiếm)
         if (!lastPraisedRecordTop1Ref.current && !prevTop1Lower) {
           lastPraisedRecordTop1Ref.current = nextTop1Lower;
         } else if (
@@ -2411,7 +3295,6 @@ export function useClassroomEngine() {
           nextTop1Lower !== lastPraisedRecordTop1Ref.current &&
           isTop1InClass
         ) {
-          // Điều kiện load Luồng Kỷ Lục: Chỉ tính người chơi đang ngồi TRONG LỚP và Top 1 Kỷ Lục bị người khác chiếm!
           pendingRecordNoticeRef.current = {
             username: nextTop1.username,
             points: nextTop1.points,
@@ -2430,41 +3313,11 @@ export function useClassroomEngine() {
             points: nextTop1.points,
           };
         } else if (nextTop1Lower === lastPraisedRecordTop1Ref.current) {
-          // Nếu chủ nhân Top 1 cũ giành lại ngôi đầu trước khi luồng kỷ lục chạy -> hủy thông báo
           pendingRecordNoticeRef.current = null;
         }
       }
-
-      if (!suppressPopup) {
-        // Quy ước mới: EXP = Điểm luôn -> cộng điểm trực tiếp (quà tặng/thưởng) cũng cộng đúng bấy nhiêu EXP
-        const prevExp = studentExpMapRef.current.get(lower) || 0;
-        const nextExp = prevExp + points;
-        studentExpMapRef.current.set(lower, nextExp);
-        studentExpDirtyRef.current = true;
-        const nextLvl = getStudentLevelFromExp(nextExp);
-        pilgrimsRef.current = pilgrimsRef.current.map((p) =>
-          p.username.trim().toLowerCase() === lower
-            ? { ...p, exp: nextExp, level: nextLvl }
-            : p
-        );
-        triggerStudentScoreCardPopup(lower, newTotal, points);
-      } else {
-        // Khi trả lời đúng câu hỏi trong lớp: chỉ cập nhật điểm tổng ẩn, đợi sang Luồng 5 mới hiện đồng loạt thẻ điểm + text cộng điểm
-        let changed = false;
-        const nextPilgrims = pilgrimsRef.current.map((p) => {
-          if (p.username.trim().toLowerCase() === lower) {
-            changed = true;
-            return { ...p, currentScoreDisplay: newTotal };
-          }
-          return p;
-        });
-        if (changed) {
-          pilgrimsRef.current = nextPilgrims;
-          setPilgrims(nextPilgrims);
-        }
-      }
     },
-    [triggerStudentScoreCardPopup]
+    []
   );
 
   const deductLotusPointsFromDonor = useCallback(
@@ -2574,27 +3427,35 @@ export function useClassroomEngine() {
       );
 
       if (existing) {
-        setPilgrims((prev) =>
-          prev.map((p) =>
-            p.id === existing.id
-              ? {
-                  ...p,
-                  isVip: true,
-                  isBot: false,
-                  coins: p.coins + entry.coins,
-                  pendingGiftCoins: (p.pendingGiftCoins || 0) + entry.coins,
-                  offeringType,
-                  isCarryingGift: true,
-                  hasGoldenAura: entry.coins >= 30 || p.hasGoldenAura,
-                  prayer: entry.prayer || p.prayer,
-                  chatBubbleUntil: Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000,
-                  laneX: 270,
-                  state: 'walk_in_up',
-                  stateTimer: 0,
-                }
-              : p
-          )
+        const giftPrayerText =
+          entry.prayer ||
+          `Em xin tặng Cô ${entry.giftName || 'Hoa Điểm 10'} ạ! 🌺`;
+        const giftBubbleKey = issueChatBubbleKey();
+        const nextUpdated = pilgrimsRef.current.map((p) =>
+          p.id === existing.id
+            ? {
+                ...p,
+                isVip: true,
+                isBot: false,
+                coins: p.coins + entry.coins,
+                pendingGiftCoins: (p.pendingGiftCoins || 0) + entry.coins,
+                offeringType,
+                isCarryingGift: true,
+                hasGoldenAura: entry.coins >= 30 || p.hasGoldenAura,
+                prayer: giftPrayerText,
+                hasComment: true,
+                prayTimer: 0,
+                chatBubbleKey: giftBubbleKey,
+                chatBubbleUntil:
+                  Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000,
+                laneX: 270,
+                state: 'walk_in_up' as const,
+                stateTimer: 0,
+              }
+            : p
         );
+        pilgrimsRef.current = nextUpdated;
+        setPilgrims(nextUpdated);
         if (cfg.cameraPushOnGiftEnabled !== false) {
           setCameraFocus({
             pilgrimId: existing.id,
@@ -2653,11 +3514,13 @@ export function useClassroomEngine() {
 
       const giftUserExp = getStudentExpById(entry.username);
       const giftUserLevel = getStudentLevelFromExp(giftUserExp);
+      const giftUserTrophies = getStudentTrophiesById(entry.username);
       const newStudent: PilgrimData = {
         id,
         username: entry.username,
         exp: giftUserExp,
         level: giftUserLevel,
+        goldTrophies: giftUserTrophies,
         prayer:
           entry.prayer ||
           `Em xin tặng Cô ${entry.giftName || 'Hoa Điểm 10'} ạ! 🌺`,
@@ -2688,6 +3551,7 @@ export function useClassroomEngine() {
         hasComment: true,
         comboCount: entry.comboCount,
         giftName: entry.giftName,
+        chatBubbleKey: issueChatBubbleKey(),
         chatBubbleUntil: Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000,
       };
 
@@ -2766,8 +3630,11 @@ export function useClassroomEngine() {
         return;
       }
 
-      if (stepLabel.startsWith('Luồng Kết Thúc: Trà Sữa')) {
-        // Bỏ khóa camera vào từng cá nhân để thấy toàn cảnh Cô phát 3 ly trà sữa 200%, 150%, 100% cho 3 bạn trên bục giảng
+      if (
+        stepLabel.startsWith('Luồng Kết Thúc: Trà Sữa') ||
+        stepLabel.startsWith('Luồng Kết Thúc: Cúp Vàng')
+      ) {
+        // Bỏ khóa camera vào từng cá nhân để thấy toàn cảnh Cô trao 3 Cúp Vàng 200%, 150%, 100% cho 3 bạn trên bục giảng
         setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
         triggerRoundEndMilkTeaRef.current();
         return;
@@ -2907,6 +3774,44 @@ export function useClassroomEngine() {
     entries.forEach((entry) => activateGiftPilgrimRef.current(entry));
   }, []);
 
+  // Kiểm tra xem bình luận hiện tại có trùng với đáp án đúng trong thời gian đang hỏi bài hay không
+  const isCommentMatchingActiveQuizAnswer = useCallback(
+    (rawComment: string): boolean => {
+      const cfg = configRef.current;
+      if (cfg.hudLayout.showClassBoardBox === false) return false;
+      const bState = classBoardStateRef.current;
+      const activeEngine =
+        bState.engine || cfg.hudLayout.classBoardEngine || 'english_quiz';
+      if (activeEngine !== 'english_quiz' && activeEngine !== 'result_board') {
+        return false;
+      }
+      if (bState.phase !== 'asking') return false;
+
+      const quizList = getActiveQuizList(cfg);
+      const quizItem =
+        bState.currentQuestion ||
+        quizList[bState.questionIndex % quizList.length] ||
+        quizList[0];
+      if (!quizItem) return false;
+
+      const cleanText = (rawComment || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleanText) return false;
+
+      const targetWord = quizItem.en.toLowerCase().trim();
+      const words = cleanText.split(' ');
+      return (
+        words.includes(targetWord) ||
+        cleanText === targetWord ||
+        (targetWord === 'fridge' && words.includes('refrigerator'))
+      );
+    },
+    [getActiveQuizList]
+  );
+
   // Kiểm tra câu trả lời Tiết Tiếng Anh trên Bảng Lớp khi có học sinh bình luận
   const checkEnglishQuizAnswer = useCallback(
     (
@@ -2947,6 +3852,8 @@ export function useClassroomEngine() {
         (targetWord === 'fridge' && words.includes('refrigerator'));
 
       if (!isMatch) return false;
+
+      const hideAnswerBubble = cfg.filterCorrectAnswerBubble !== false;
 
       const lowerUser = username.trim().toLowerCase();
       if (
@@ -3023,7 +3930,7 @@ export function useClassroomEngine() {
           const newEntry: QueuedPilgrimRequest = {
             id: `wq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             username: username.trim(),
-            prayer: rawComment,
+            prayer: hideAnswerBubble ? '' : rawComment,
             gender: resolveUserGender(username),
             isVip: false,
             coins: 0,
@@ -3109,13 +4016,15 @@ export function useClassroomEngine() {
 
             const admittedExp = getStudentExpById(cleanName);
             const admittedLevel = getStudentLevelFromExp(admittedExp);
+            const admittedTrophies = getStudentTrophiesById(cleanName);
             const admittedStudent: PilgrimData = {
               id,
               username: cleanName,
               currentScoreDisplay: existingDonorScore,
               exp: admittedExp,
               level: admittedLevel,
-              prayer: rawComment,
+              goldTrophies: admittedTrophies,
+              prayer: hideAnswerBubble ? '' : rawComment,
               gender: isBot
                 ? resolveBalancedNpcGender(cleanName, 'class', newEntry.gender)
                 : resolveUserGender(cleanName, newEntry.gender),
@@ -3143,10 +4052,15 @@ export function useClassroomEngine() {
                   ? npcAvatarsRef.current[id % npcAvatarsRef.current.length]
                   : null),
               hairSeed: id,
-              hasComment: Boolean(rawComment.trim()),
-              chatBubbleUntil: rawComment.trim()
-                ? Date.now() + (cfgNow.chatBubbleDurationSec || 12) * 1000
-                : 0,
+              hasComment: Boolean(!hideAnswerBubble && rawComment.trim()),
+              chatBubbleKey:
+                !hideAnswerBubble && rawComment.trim()
+                  ? issueChatBubbleKey()
+                  : 0,
+              chatBubbleUntil:
+                !hideAnswerBubble && rawComment.trim()
+                  ? Date.now() + (cfgNow.chatBubbleDurationSec || 12) * 1000
+                  : 0,
               correctStreak: 0,
               answeredCurrentQuestion: true,
               quizResultStatus: null,
@@ -3173,7 +4087,9 @@ export function useClassroomEngine() {
             npcNamesRef.current,
             npcAvatarsRef.current,
             configRef.current.doorCrowdSpread ?? 1,
-            Array.from(pool.values())
+            Array.from(pool.values()),
+            studentTrophyMapRef.current,
+            studentExpMapRef.current
           );
           doorCrowdRef.current = nextCrowd;
           setDoorCrowd(nextCrowd);
@@ -3375,7 +4291,9 @@ export function useClassroomEngine() {
           npcNamesRef.current,
           npcAvatarsRef.current,
           configRef.current.doorCrowdSpread ?? 1,
-          Array.from(pool.values())
+          Array.from(pool.values()),
+          studentTrophyMapRef.current,
+          studentExpMapRef.current
         );
         doorCrowdRef.current = nextCrowd;
         setDoorCrowd(nextCrowd);
@@ -3557,6 +4475,8 @@ export function useClassroomEngine() {
                 floatingScoreKey: now,
                 prayer: 'Em nuôi mèo nè cô',
                 hasComment: true,
+                prayTimer: 0,
+                chatBubbleKey: issueChatBubbleKey(),
                 chatBubbleUntil: now + 5500,
               }
             : p
@@ -3642,6 +4562,8 @@ export function useClassroomEngine() {
                 floatingScoreKey: now,
                 prayer: 'Nhăm nhăm.',
                 hasComment: true,
+                prayTimer: 0,
+                chatBubbleKey: issueChatBubbleKey(),
                 chatBubbleUntil: now + 5500,
               }
             : p
@@ -3676,6 +4598,8 @@ export function useClassroomEngine() {
                 floatingScoreKey: now,
                 prayer: 'Ring! Ring!',
                 hasComment: true,
+                prayTimer: 0,
+                chatBubbleKey: issueChatBubbleKey(),
                 chatBubbleUntil: now + 6000,
               }
             : p
@@ -3731,6 +4655,8 @@ export function useClassroomEngine() {
               floatingScoreKey: now,
               prayer: 'ột ột 😈😈😈',
               hasComment: true,
+              prayTimer: 0,
+              chatBubbleKey: issueChatBubbleKey(),
               chatBubbleUntil: now + 6500,
             };
           }
@@ -4130,9 +5056,22 @@ export function useClassroomEngine() {
         : Math.max(0, Math.round(opts.delayMs || 0));
       const launchAt = now + delayMs;
 
+      const HEART_PROJECTILE_VARIANTS: ZombieHeartProjectileVariant[] = [
+        'pencil_case',
+        'blue_ruler',
+        'casio',
+      ];
+      const heartVariant: ZombieHeartProjectileVariant | undefined =
+        opts.kind === 'pencil_case'
+          ? HEART_PROJECTILE_VARIANTS[
+              Math.floor(Math.random() * HEART_PROJECTILE_VARIANTS.length)
+            ]
+          : undefined;
+
       const projItem: ZombieProjectileFX = {
         id: `zproj_${launchAt}_${Math.random().toString(36).slice(2, 7)}`,
         kind: opts.kind,
+        heartVariant,
         giftId: opts.giftId,
         startX: opts.startX,
         startY: opts.startY,
@@ -4703,7 +5642,11 @@ export function useClassroomEngine() {
       }
 
       const rawGiftCoins = Math.max(1, Number(opts.coins ?? giftMeta.coins));
-      const grantsShield = rawGiftCoins >= 5 || giftMeta.coins >= 5;
+      // NPC giả lập tấn công Zombie (hoặc NPC auto-gift) tuyệt đối không nhận hiệu ứng Khiên
+      const grantsShield =
+        (rawGiftCoins >= 5 || giftMeta.coins >= 5) &&
+        !opts.isBot &&
+        !(isZombieEventRunningNow && isAttackerBot);
 
       const isFlowerGift =
         giftMeta.id === 'rose' || giftMeta.id === 'icecream';
@@ -4716,7 +5659,7 @@ export function useClassroomEngine() {
           addLotusPointsToDonor(safeName, bonusPts);
         }
 
-        // Nếu tặng quà từ 5 coin trở lên -> Nhận ngay Khiên bảo vệ (không cộng dồn)
+        // Nếu tặng quà từ 5 coin trở lên (và không phải NPC giả lập tấn công Zombie) -> Nhận ngay Khiên bảo vệ (không cộng dồn)
         if (grantsShield && !existingInClass.hasShield) {
           const withShield = pilgrimsRef.current.map((p) =>
             p.id === existingInClass.id ? { ...p, hasShield: true } : p
@@ -4763,6 +5706,55 @@ export function useClassroomEngine() {
 
         if (isZombieEventRunningNow && isAttackerBot) {
           return;
+        }
+
+        // Nếu trong vòng 10 giây kể từ lúc ném máy bay giấy trúng bạn, bạn ném gửi quà Hoa Hồng ->
+        // Ném thẳng Bó Hoa Hồng (cùng model hoa tặng Cô, đường đạn & tốc độ như máy bay giấy) sang cho bạn vừa bị ném đó!
+        if (giftMeta.id === 'rose') {
+          const roseTargetLock =
+            paperPlaneRoseTargetByThrowerRef.current.get(lowerUser);
+          if (roseTargetLock && now <= roseTargetLock.expiresAt) {
+            const friendTarget = pilgrimsRef.current.find(
+              (p) =>
+                (p.id === roseTargetLock.targetId ||
+                  p.username.trim().toLowerCase() ===
+                    roseTargetLock.targetLowerName) &&
+                Boolean(p.slotId) &&
+                p.state !== 'leave_side_to_aisle' &&
+                p.state !== 'leave_down_exit' &&
+                p.id !== existingInClass.id
+            );
+            if (friendTarget) {
+              soundEngine.playGiftEventSound('rose', cfg, !isAttackerBot);
+              if (effectiveCombo > 1) {
+                const updatedWithCombo = pilgrimsRef.current.map((p) =>
+                  p.id === existingInClass.id
+                    ? {
+                        ...p,
+                        comboCount: effectiveCombo,
+                        comboUntil: now + 9000,
+                        comboPopKey: now,
+                      }
+                    : p
+                );
+                pilgrimsRef.current = updatedWithCombo;
+                setPilgrims(updatedWithCombo);
+              }
+              launchPaperPlaneAtStudent(existingInClass, friendTarget, false, {
+                projectileKind: 'rose_bouquet',
+                onHitCallback: () => {
+                  if (!isAttackerBot && bonusPts > 0) {
+                    addLotusPointsToDonor(safeName, bonusPts);
+                  }
+                },
+              });
+              pushToast(
+                `🌹 ${safeName} gửi bó hoa hồng bay tới ${friendTarget.username}! ❤️`,
+                true
+              );
+              return;
+            }
+          }
         }
 
         const existingUserQueue =
@@ -4906,7 +5898,9 @@ export function useClassroomEngine() {
           npcNamesRef.current,
           npcAvatarsRef.current,
           cfg.doorCrowdSpread ?? 1,
-          Array.from(pool.values())
+          Array.from(pool.values()),
+          studentTrophyMapRef.current,
+          studentExpMapRef.current
         );
       }
 
@@ -4939,16 +5933,32 @@ export function useClassroomEngine() {
       let boundCrowdMember: PilgrimData | null = null;
       if (chosenCrowdIdx >= 0 && currentCrowd[chosenCrowdIdx]) {
         const targetMember = currentCrowd[chosenCrowdIdx];
+        const isSameCrowdUser =
+          targetMember.username.trim().toLowerCase() === lowerUser;
+        const boundExp = getStudentExpById(safeName);
         boundCrowdMember = {
           ...targetMember,
           username: safeName,
           gender: resolvedGender,
           avatarUrl: resolvedAvatar || targetMember.avatarUrl,
-          isVip: !isAttackerBot ? true : targetMember.isVip,
+          isVip: !isAttackerBot ? true : isSameCrowdUser ? targetMember.isVip : false,
           isBot: isAttackerBot,
-          isGoldenPriority: !isAttackerBot ? true : targetMember.isGoldenPriority,
+          isGoldenPriority: !isAttackerBot
+            ? true
+            : isSameCrowdUser
+            ? targetMember.isGoldenPriority
+            : false,
+          exp: boundExp,
+          level: getStudentLevelFromExp(boundExp),
+          goldTrophies: getStudentTrophiesById(safeName),
           hasShield:
-            grantsShield && !isAttackerBot ? true : targetMember.hasShield,
+            grantsShield && !isAttackerBot
+              ? true
+              : isAttackerBot
+              ? false
+              : isSameCrowdUser
+              ? targetMember.hasShield
+              : false,
           giftActionHighlightUntil: now + 6000,
         };
         currentCrowd[chosenCrowdIdx] = boundCrowdMember;
@@ -5335,12 +6345,31 @@ export function useClassroomEngine() {
       }
       const existing = existingInClassNow;
 
+      const hideCorrectAnswerBubble =
+        cfg.filterCorrectAnswerBubble !== false &&
+        (answeredQuizRight || isCommentMatchingActiveQuizAnswer(safeComment));
+
       if (existing) {
         if (safeComment.trim()) {
+          // Nếu đang bật lọc câu trả lời và bình luận trùng đáp án đúng trong thời gian hỏi bài:
+          // chấm điểm bình thường ở trên nhưng KHÔNG hiện bong bóng chat và KHÔNG đọc TTS lộ đáp án!
+          if (hideCorrectAnswerBubble) {
+            if (genderCmd && genderCmd !== existing.gender) {
+              const nextPilgrimsGenderOnly = pilgrimsRef.current.map((p) =>
+                p.id === existing.id ? { ...p, gender: genderCmd } : p
+              );
+              pilgrimsRef.current = nextPilgrimsGenderOnly;
+              setPilgrims(nextPilgrimsGenderOnly);
+            }
+            return false;
+          }
+
           const cleanSpeechComment = sanitizeAndLimitSpeechText(
             safeComment,
             cfg.maxTtsWords || 25
           );
+          const nowCommentMs = Date.now();
+          const commentBubbleKey = issueChatBubbleKey();
           const nextPilgrims = pilgrimsRef.current.map((p) =>
             p.id === existing.id
               ? {
@@ -5349,13 +6378,45 @@ export function useClassroomEngine() {
                   prayer: safeComment,
                   hasComment: true,
                   prayTimer: 0,
+                  chatBubbleKey: commentBubbleKey,
                   chatBubbleUntil:
-                    Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000,
+                    nowCommentMs + (cfg.chatBubbleDurationSec || 12) * 1000,
                 }
               : p
           );
           pilgrimsRef.current = nextPilgrims;
           setPilgrims(nextPilgrims);
+
+          // Chỉ các bạn ĐANG NGỒI TRONG LỚP (state === 'pray_seated' và có slotId) gõ lệnh @tên mới được phép ném máy bay giấy!
+          if (
+            safeComment.includes('@') &&
+            Boolean(existing.slotId) &&
+            existing.state === 'pray_seated'
+          ) {
+            const activeClassStudents = nextPilgrims.filter(
+              (p) =>
+                Boolean(p.slotId) &&
+                p.state !== 'leave_side_to_aisle' &&
+                p.state !== 'leave_down_exit'
+            );
+            const updatedThrower = activeClassStudents.find(
+              (p) => p.id === existing.id && p.state === 'pray_seated'
+            );
+            if (updatedThrower) {
+              const taggedTarget = resolvePaperPlaneTargetInClass({
+                commentText: safeComment,
+                thrower: updatedThrower,
+                allStudentsInClass: activeClassStudents,
+                vipSlots: vipSlotsRef.current,
+                normalSlots: normalSlotsRef.current,
+                lotusDonors: lotusDonorsRef.current,
+                nameTagMaxChars: cfg.nameTagMaxChars ?? 16,
+              });
+              if (taggedTarget) {
+                launchPaperPlaneAtStudent(updatedThrower, taggedTarget, false);
+              }
+            }
+          }
 
           const shouldSpeakPrayer =
             cfg.ttsEnabled &&
@@ -5378,6 +6439,7 @@ export function useClassroomEngine() {
             );
             soundEngine.enqueueTTS(speech, !opts.isBot, cfg, {
               pilgrimId: existing.id,
+              chatBubbleKey: commentBubbleKey,
               username: safeName,
               reason: 'comment',
               isBot: existing.isBot,
@@ -5396,6 +6458,13 @@ export function useClassroomEngine() {
       ) {
         const queuedEntry = waitingPoolRef.current.get(lowerUser);
         if (!queuedEntry) {
+          return false;
+        }
+
+        if (hideCorrectAnswerBubble) {
+          if (genderCmd) {
+            queuedEntry.gender = resolveUserGender(safeName, genderCmd);
+          }
           return false;
         }
 
@@ -5537,13 +6606,15 @@ export function useClassroomEngine() {
 
       const existingExp = getStudentExpById(safeName);
       const existingLevel = getStudentLevelFromExp(existingExp);
+      const existingTrophies = getStudentTrophiesById(safeName);
       const newStudent: PilgrimData = {
         id,
         username: safeName,
         currentScoreDisplay: Math.max(queuedPts, existingDonorScore),
         exp: existingExp,
         level: existingLevel,
-        prayer: safeComment,
+        goldTrophies: existingTrophies,
+        prayer: hideCorrectAnswerBubble ? '' : safeComment,
         gender: opts.isBot
           ? resolveBalancedNpcGender(safeName, 'class', genderCmd || opts.gender)
           : resolveUserGender(safeName, genderCmd || opts.gender),
@@ -5575,10 +6646,20 @@ export function useClassroomEngine() {
             : null),
         hairSeed: id,
         hasComment: Boolean(
-          safeComment.trim() && !isJoinClassCommand(safeComment)
+          !hideCorrectAnswerBubble &&
+            safeComment.trim() &&
+            !isJoinClassCommand(safeComment)
         ),
+        chatBubbleKey:
+          !hideCorrectAnswerBubble &&
+          safeComment.trim() &&
+          !isJoinClassCommand(safeComment)
+            ? issueChatBubbleKey()
+            : 0,
         chatBubbleUntil:
-          safeComment.trim() && !isJoinClassCommand(safeComment)
+          !hideCorrectAnswerBubble &&
+          safeComment.trim() &&
+          !isJoinClassCommand(safeComment)
             ? Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000
             : 0,
         isSimulatedTest: opts.isSimulatedTest,
@@ -5586,7 +6667,8 @@ export function useClassroomEngine() {
           (opts as { isGoldenPriority?: boolean }).isGoldenPriority
         ),
         hasShield: Boolean(
-          (opts as { hasShield?: boolean }).hasShield || opts.coins >= 5
+          !opts.isBot &&
+            ((opts as { hasShield?: boolean }).hasShield || opts.coins >= 5)
         ),
         correctStreak: 0,
         answeredCurrentQuestion: false,
@@ -5638,6 +6720,8 @@ export function useClassroomEngine() {
       customWords,
       enqueueStudentToWaitingQueue,
       executeGiftPilgrimEntry,
+      isCommentMatchingActiveQuizAnswer,
+      launchPaperPlaneAtStudent,
       pushToast,
       safetyActionMode,
       safetyCategories,
@@ -5961,6 +7045,8 @@ export function useClassroomEngine() {
           const hasExpiredTimedUi =
             Boolean(p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil) ||
             Boolean(p.scoreCardUntil && nowEpoch >= p.scoreCardUntil) ||
+            Boolean(p.rankUpStartAt && nowEpoch >= p.rankUpStartAt) ||
+            Boolean(p.rankUpUntil && nowEpoch >= p.rankUpUntil) ||
             Boolean(p.quizResultUntil && nowEpoch >= p.quizResultUntil) ||
             Boolean(p.floatingScoreUntil && nowEpoch >= p.floatingScoreUntil) ||
             Boolean(p.comboUntil && nowEpoch >= p.comboUntil) ||
@@ -6493,6 +7579,14 @@ export function useClassroomEngine() {
             isCarryingGift,
             pendingGiftCoins,
             hasSatOnce: p.hasSatOnce || state === 'pray_seated',
+            prayer:
+              p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
+                ? ''
+                : p.prayer,
+            hasComment:
+              p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
+                ? false
+                : p.hasComment,
             chatBubbleUntil:
               p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
                 ? 0
@@ -6509,6 +7603,15 @@ export function useClassroomEngine() {
               p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
                 ? false
                 : p.leveledUpInRound,
+            rankUpStartAt:
+              (p.rankUpStartAt && nowEpoch >= p.rankUpStartAt) ||
+              (p.rankUpUntil && nowEpoch >= p.rankUpUntil)
+                ? 0
+                : p.rankUpStartAt,
+            rankUpUntil:
+              p.rankUpUntil && nowEpoch >= p.rankUpUntil
+                ? 0
+                : p.rankUpUntil,
             quizResultUntil:
               p.quizResultUntil && nowEpoch >= p.quizResultUntil
                 ? 0
@@ -6538,6 +7641,29 @@ export function useClassroomEngine() {
         pilgrimsRef.current = nextList;
         if (hasActivePilgrimVisualUpdate) {
           setPilgrims(nextList);
+        }
+      }
+
+      // 2.25. Tự động tắt bong bóng chat đã hết hạn cho các học sinh đứng trong Hàng Chờ cửa lớp (doorCrowd)
+      const nowCrowdEpoch = Date.now();
+      if (doorCrowdRef.current.length > 0) {
+        const hasExpiredDoorBubble = doorCrowdRef.current.some((d) =>
+          Boolean(d.chatBubbleUntil && nowCrowdEpoch >= d.chatBubbleUntil)
+        );
+        if (hasExpiredDoorBubble) {
+          const cleanedDoorCrowd = doorCrowdRef.current.map((d) =>
+            d.chatBubbleUntil && nowCrowdEpoch >= d.chatBubbleUntil
+              ? {
+                  ...d,
+                  prayer: '',
+                  chatBubbleUntil: 0,
+                  chatBubbleKey: 0,
+                  hasComment: false,
+                }
+              : d
+          );
+          doorCrowdRef.current = cleanedDoorCrowd;
+          setDoorCrowd(cleanedDoorCrowd);
         }
       }
 
@@ -6780,6 +7906,27 @@ export function useClassroomEngine() {
               animTime,
               facingLeft,
               isCarryingGift,
+              chatBubbleUntil:
+                r.chatBubbleUntil && nowCrowdEpoch >= r.chatBubbleUntil
+                  ? 0
+                  : r.chatBubbleUntil,
+              scoreCardUntil:
+                r.scoreCardUntil && nowCrowdEpoch >= r.scoreCardUntil
+                  ? 0
+                  : r.scoreCardUntil,
+              rankUpStartAt:
+                (r.rankUpStartAt && nowCrowdEpoch >= r.rankUpStartAt) ||
+                (r.rankUpUntil && nowCrowdEpoch >= r.rankUpUntil)
+                  ? 0
+                  : r.rankUpStartAt,
+              rankUpUntil:
+                r.rankUpUntil && nowCrowdEpoch >= r.rankUpUntil
+                  ? 0
+                  : r.rankUpUntil,
+              floatingScoreUntil:
+                r.floatingScoreUntil && nowCrowdEpoch >= r.floatingScoreUntil
+                  ? 0
+                  : r.floatingScoreUntil,
             });
           }
 
@@ -7281,6 +8428,7 @@ export function useClassroomEngine() {
             punishmentSpotIndex: undefined,
             podiumRank: undefined,
             winnerMilkTeaScale: undefined,
+            winnerTrophyScale: undefined,
             state: 'return_from_punishment_to_seat' as const,
             stateTimer: 0,
           };
@@ -7347,6 +8495,7 @@ export function useClassroomEngine() {
           punishmentSpotIndex: undefined,
           podiumRank: undefined,
           winnerMilkTeaScale: undefined,
+          winnerTrophyScale: undefined,
           quizResultStatus: null,
           quizResultUntil: 0,
           quizEarnedPoints: 0,
@@ -7405,6 +8554,7 @@ export function useClassroomEngine() {
           punishmentSpotIndex: undefined,
           podiumRank: undefined,
           winnerMilkTeaScale: undefined,
+          winnerTrophyScale: undefined,
           quizResultStatus: null,
           quizResultUntil: 0,
           quizEarnedPoints: 0,
@@ -7435,6 +8585,7 @@ export function useClassroomEngine() {
         punishmentSpotIndex: undefined,
         podiumRank: undefined,
         winnerMilkTeaScale: undefined,
+        winnerTrophyScale: undefined,
         quizResultStatus: null,
         quizResultUntil: 0,
         quizEarnedPoints: 0,
@@ -7606,16 +8757,14 @@ export function useClassroomEngine() {
     recomputeWaitingQueueLazy();
   }, [recomputeWaitingQueueLazy, spawnOrPromotePilgrim]);
 
-  // Thêm thẳng số lượng NPC mới (±1, 2, 3 tự nhiên) vào Hàng Chờ Vào Lớp mỗi khi xong 1 câu hỏi
+  // Thêm chính xác số lượng NPC mới vào Hàng Chờ Vào Lớp mỗi khi xong 1 câu hỏi (không cộng trừ ngẫu nhiên)
   const enqueueBatchNpcsAfterQuestion = useCallback(() => {
     const cfg = configRef.current;
     if (!cfg.autoCrowd) return;
     const baseCount = Math.max(0, Math.round(cfg.botTargetCrowd ?? 8));
     if (baseCount <= 0) return;
 
-    const deltas = [-3, -2, -1, 0, 1, 2, 3];
-    const randomDelta = deltas[Math.floor(Math.random() * deltas.length)];
-    const actualToAdd = Math.max(1, baseCount + randomDelta);
+    const actualToAdd = baseCount;
 
     const names =
       npcNamesRef.current.length > 0 ? npcNamesRef.current : SAMPLE_NAMES;
@@ -8364,12 +9513,15 @@ export function useClassroomEngine() {
         const lowerName = p.username.trim().toLowerCase();
         const curSavedExp = studentExpMapRef.current.get(lowerName) ?? p.exp ?? 0;
         const curSavedLevel = getStudentLevelFromExp(curSavedExp);
+        const curSavedTrophies =
+          studentTrophyMapRef.current.get(lowerName) ?? p.goldTrophies ?? 0;
 
         if (!isSeatedInClass) {
           return {
             ...p,
             exp: curSavedExp,
             level: curSavedLevel,
+            goldTrophies: curSavedTrophies,
           };
         }
 
@@ -8395,6 +9547,9 @@ export function useClassroomEngine() {
           const totalScoreNow = donorItem
             ? donorItem.coins
             : (p.currentScoreDisplay || 0) + finalEarned;
+          const didRankUpInQuiz = nextLevel > prevLevel;
+          const cardEndAt = nowFlow4 + scoreCardDurMs;
+          const delayedRankUpStartAt = cardEndAt + 2000;
           return {
             ...p,
             correctStreak: (p.correctStreak || 0) + 1,
@@ -8407,9 +9562,13 @@ export function useClassroomEngine() {
             scoreChangeDelta: finalEarned,
             exp: nextExp,
             level: nextLevel,
+            goldTrophies: curSavedTrophies,
             expChangeDelta: 0,
-            leveledUpInRound: nextLevel > prevLevel,
-            scoreCardUntil: nowFlow4 + scoreCardDurMs,
+            leveledUpInRound: didRankUpInQuiz,
+            rankUpStartAt: didRankUpInQuiz ? delayedRankUpStartAt : 0,
+            rankUpUntil: didRankUpInQuiz ? delayedRankUpStartAt + 2000 : 0,
+            rankUpKey: didRankUpInQuiz ? nowFlow4 + p.id : p.rankUpKey,
+            scoreCardUntil: cardEndAt,
             scoreCardKey: nowFlow4 + p.id,
           };
         }
@@ -8420,6 +9579,7 @@ export function useClassroomEngine() {
             ...p,
             exp: curSavedExp,
             level: curSavedLevel,
+            goldTrophies: curSavedTrophies,
             expChangeDelta: 0,
             leveledUpInRound: false,
             hasShield: false,
@@ -8441,6 +9601,7 @@ export function useClassroomEngine() {
           ...p,
           exp: curSavedExp,
           level: curSavedLevel,
+          goldTrophies: curSavedTrophies,
           expChangeDelta: 0,
           leveledUpInRound: false,
           correctStreak: 0,
@@ -8461,15 +9622,17 @@ export function useClassroomEngine() {
       pilgrimsRef.current = markedPilgrims;
       setPilgrims(markedPilgrims);
 
-      // Đồng bộ EXP/Level mới nhất cho các bạn đứng ở đám đông cửa lớp (doorCrowd)
+      // Đồng bộ EXP/Level & Cúp Vàng mới nhất cho các bạn đứng ở đám đông cửa lớp (doorCrowd)
       if (doorCrowdRef.current.length > 0) {
         const nextCrowd = doorCrowdRef.current.map((d) => {
           const lower = d.username.trim().toLowerCase();
           const expVal = studentExpMapRef.current.get(lower) || 0;
+          const trophyVal = studentTrophyMapRef.current.get(lower) || 0;
           return {
             ...d,
             exp: expVal,
             level: getStudentLevelFromExp(expVal),
+            goldTrophies: trophyVal,
           };
         });
         doorCrowdRef.current = nextCrowd;
@@ -8530,7 +9693,7 @@ export function useClassroomEngine() {
   // - Luồng 4 (answer_flash): Đọc câu trả lời + Bảng đáp án xanh lá nhấp nháy [Nói xong chuyển luồng 5]
   // - Luồng 5 (result_summary): Cập nhật chỗ ngồi ngay khi bắt đầu luồng 5 + Bảng kết quả 2 cột + Đọc kết quả [Nói xong chuyển luồng 6]
   // - Luồng 6 (ranking_board): Bảng xếp hạng trong lớp (6 top đầu 3s, sau đó mỗi 2s load tiếp 6 top tiếp theo) + Đọc xếp hạng [Nói xong kết thúc câu hỏi -> về Luồng 1]
-  // Hàm phát 3 ly trà sữa Matcha Latte full topping với kích thước 200% (Top 1), 150% (Top 2), 100% (Top 3) cho 3 bạn chiến thắng trên bục giảng
+  // Hàm trao 3 Cúp Vàng với kích thước 200% (Top 1: +3 cúp), 150% (Top 2: +2 cúp), 100% (Top 3: +1 cúp) kèm Floating Text số cúp + icon cúp cho 3 bạn chiến thắng trên bục giảng
   triggerRoundEndMilkTeaRef.current = () => {
     if (roundEndMilkTeaTriggeredRef.current) return;
     roundEndMilkTeaTriggeredRef.current = true;
@@ -8550,13 +9713,18 @@ export function useClassroomEngine() {
       2: 1.5, // 150% cho Top 2
       3: 1.0, // 100% cho Top 3
     };
+    const trophiesByRank: Record<1 | 2 | 3, number> = {
+      1: 3, // Top 1 +3 Cúp Vàng
+      2: 2, // Top 2 +2 Cúp Vàng
+      3: 1, // Top 3 +1 Cúp Vàng
+    };
     const spotIdxByRank: Record<1 | 2 | 3, number> = {
       1: 2, // Đứng vị trí P3 (giữa)
       2: 0, // Đứng vị trí P1 (trái)
       3: 4, // Đứng vị trí P5 (phải)
     };
 
-    const teasToSpawn: FlyingMilkTeaFX[] = ([1, 2, 3] as const).map(
+    const trophiesToSpawn: FlyingMilkTeaFX[] = ([1, 2, 3] as const).map(
       (rankNum, idx) => {
         const w = winners.find((item) => item.rank === rankNum);
         const livePilgrim = w?.pilgrimId
@@ -8572,7 +9740,7 @@ export function useClassroomEngine() {
         const targetX = livePilgrim ? livePilgrim.x : fallbackX;
         const targetY = (livePilgrim ? livePilgrim.y : linePos.y) - 24;
         return {
-          id: `round_end_tea_${nowTea}_${rankNum}_${idx}`,
+          id: `round_end_trophy_${nowTea}_${rankNum}_${idx}`,
           startX,
           startY,
           targetX,
@@ -8580,33 +9748,95 @@ export function useClassroomEngine() {
           createdAt: nowTea + idx * 90,
           durationMs: 1250,
           scale: scaleByRank[rankNum],
+          variant: 'gold_trophy',
         };
       }
     );
 
     soundEngine.playGiftEventSound('rose', cfg, true);
-    setFlyingMilkTeas((prev) => [...prev.slice(-12), ...teasToSpawn]);
+    setFlyingMilkTeas((prev) => [...prev.slice(-12), ...trophiesToSpawn]);
 
-    // Sau khi ly trà sữa bay tới tay (~1.1s), gắn ly trà sữa 200% / 150% / 100% lên tay 3 bạn chiến thắng trên bục giảng
+    // Sau khi Cúp Vàng bay tới tay (~1.05s):
+    // 1) Cộng Cúp Vàng vào tổng cúp sở hữu học sinh + bảng Kỷ lục cúp vàng trong ngày
+    // 2) Gắn Cúp Vàng 200% / 150% / 100% lên tay & hiện Floating Text +3 / +2 / +1 kèm icon Cúp Vàng!
     window.setTimeout(() => {
+      const isPureLiveTabNow =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('view') === 'live' ||
+          new URLSearchParams(window.location.search).get('mode') === 'live' ||
+          new URLSearchParams(window.location.search).get('obs') === '1');
+      const peersNow = peerCountsRef.current;
+      const isPassiveTab =
+        !isPureLiveTabNow &&
+        (peersNow.obsPeers > 0 ||
+          (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
+
       const winnerRankByLower = new Map<string, 1 | 2 | 3>();
+      const awardsToCommit: Array<{
+        username: string;
+        trophies: number;
+        avatarUrl?: string | null;
+        avatarColor?: string;
+      }> = [];
+
       roundEndWinnersRef.current.forEach((w) => {
-        if (w.username) {
-          winnerRankByLower.set(w.username.trim().toLowerCase(), w.rank);
+        if (w.username && w.username.trim()) {
+          const r = w.rank;
+          winnerRankByLower.set(w.username.trim().toLowerCase(), r);
+          const matchedP = pilgrimsRef.current.find(
+            (p) =>
+              p.username.trim().toLowerCase() === w.username.trim().toLowerCase()
+          );
+          awardsToCommit.push({
+            username: w.username.trim(),
+            trophies: trophiesByRank[r],
+            avatarUrl: matchedP?.avatarUrl,
+            avatarColor: matchedP?.avatarColor,
+          });
         }
       });
+
+      if (!isPassiveTab && awardsToCommit.length > 0) {
+        awardStudentGoldTrophies(awardsToCommit);
+        flushStudentExpStorage(false, true);
+      }
+
+      const nowLand = Date.now();
       const updated = pilgrimsRef.current.map((p) => {
-        const r =
-          p.podiumRank ||
-          winnerRankByLower.get(p.username.trim().toLowerCase());
-        if (!r) return p;
+        const lower = p.username.trim().toLowerCase();
+        const r = p.podiumRank || winnerRankByLower.get(lower);
+        const latestTotalTrophies =
+          studentTrophyMapRef.current.get(lower) ?? p.goldTrophies ?? 0;
+        if (!r) {
+          return (p.goldTrophies ?? 0) !== latestTotalTrophies
+            ? { ...p, goldTrophies: latestTotalTrophies }
+            : p;
+        }
         return {
           ...p,
-          winnerMilkTeaScale: scaleByRank[r],
+          winnerMilkTeaScale: undefined,
+          winnerTrophyScale: scaleByRank[r],
+          goldTrophies: latestTotalTrophies,
+          floatingTrophyCount: trophiesByRank[r],
+          floatingTrophyUntil: nowLand + 3400,
+          floatingTrophyKey: nowLand + r,
         };
       });
       pilgrimsRef.current = updated;
       setPilgrims(updated);
+
+      if (doorCrowdRef.current.length > 0) {
+        const updatedCrowd = doorCrowdRef.current.map((d) => {
+          const lower = d.username.trim().toLowerCase();
+          const latestTrophies =
+            studentTrophyMapRef.current.get(lower) ?? d.goldTrophies ?? 0;
+          return (d.goldTrophies ?? 0) !== latestTrophies
+            ? { ...d, goldTrophies: latestTrophies }
+            : d;
+        });
+        doorCrowdRef.current = updatedCrowd;
+        setDoorCrowd(updatedCrowd);
+      }
     }, 1050);
   };
 
@@ -9334,6 +10564,7 @@ export function useClassroomEngine() {
               stateTimer: 0,
               podiumRank: rank,
               winnerMilkTeaScale: undefined,
+              winnerTrophyScale: undefined,
               isPunishedInCurrentRound: false,
               punishmentMultiplier: undefined,
               punishmentSpotIndex: spotIdx,
@@ -9345,7 +10576,7 @@ export function useClassroomEngine() {
 
           const rawRoundEndTpl =
             (cfg.lessonRoundEndTtsTemplate || '').trim() ||
-            'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Tặng 3 bạn 3 ly trà sữa mat cha lat te phun tóp ping, mấy cưng ở dưới vỗ tay nào !';
+            'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Trao tặng cúp vàng danh giá cho 3 bạn xuất sắc nhất, mấy cưng ở dưới vỗ tay nào !';
 
           const replaceRoundEndPlaceholders = (str: string) =>
             str
@@ -9369,11 +10600,13 @@ export function useClassroomEngine() {
           const flowTokenRoundEnd = `flow_round_end_${Date.now()}_${prev.roundSeq || 1}`;
 
           // Tách câu đọc thành các vế đồng bộ sự kiện:
-          // Vế 1 (Mời lên bục) -> Vế 2 (Đọc tên Top 1: Khóa cam Top 1) -> Vế 3 (Đọc tên Top 2: Khóa cam Top 2) -> Vế 4 (Đọc tên Top 3: Khóa cam Top 3) -> Vế 5 (Tặng trà sữa 100%/150%/200% & Vỗ tay)
+          // Vế 1 (Mời lên bục) -> Vế 2 (Đọc tên Top 1: Khóa cam Top 1) -> Vế 3 (Đọc tên Top 2: Khóa cam Top 2) -> Vế 4 (Đọc tên Top 3: Khóa cam Top 3) -> Vế 5 (Trao Cúp Vàng 200%/150%/100% & Vỗ tay)
           const idxTop1 = rawRoundEndTpl.search(/Chúc mừng|\[top1\]|\[Top1\]/i);
           const idxTop2 = rawRoundEndTpl.search(/bạn\s*\[top2\]|\[top2\]|\[Top2\]/i);
           const idxTop3 = rawRoundEndTpl.search(/bạn\s*\[top3\]|\[top3\]|\[Top3\]/i);
-          const idxMilkTea = rawRoundEndTpl.search(/Tặng|trà sữa/i);
+          const idxMilkTea = rawRoundEndTpl.search(
+            /Trao tặng|Tặng|cúp vàng|trà sữa/i
+          );
 
           let roundEndTtsItems: Array<{
             text: string;
@@ -9437,7 +10670,7 @@ export function useClassroomEngine() {
                 text: pTea,
                 lang: 'vi',
                 lessonFlowToken: flowTokenRoundEnd,
-                lessonStepLabel: 'Luồng Kết Thúc: Trà Sữa & Vỗ Tay',
+                lessonStepLabel: 'Luồng Kết Thúc: Cúp Vàng & Vỗ Tay',
               });
             }
           } else {
@@ -9698,6 +10931,7 @@ export function useClassroomEngine() {
             quizEarnedPoints: 0,
             podiumRank: undefined,
             winnerMilkTeaScale: undefined,
+            winnerTrophyScale: undefined,
             isPunishedInCurrentRound: false,
             punishmentMultiplier: undefined,
             punishmentSpotPos: undefined,
@@ -9732,14 +10966,14 @@ export function useClassroomEngine() {
 
         const startSpeechNewRound =
           cfg.lessonStartTtsText ||
-          'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
+          'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
         const flowTokenStartNew = `flow_start_${Date.now()}_${nextRoundSeq}`;
         const startTtsItemsNew = [
           {
             text: startSpeechNewRound,
             lang: 'vi' as const,
             lessonFlowToken: flowTokenStartNew,
-            lessonStepLabel: 'Luồng 0: Bắt đầu vòng kiểm tra 15 câu mới',
+            lessonStepLabel: 'Luồng 0: Bắt đầu vòng kiểm tra 10 câu mới',
           },
         ];
 
@@ -9852,11 +11086,14 @@ export function useClassroomEngine() {
             recTemplates.length > 0
               ? recTemplates[Math.floor(Math.random() * recTemplates.length)]
               : cfg.lessonRecordTtsTemplate ||
-                'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục hôm nay với [ĐiểmKỷLục] điểm!';
+                'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng!';
 
           const recordSpeech = chosenRecTpl
             .replace(/\[Top1KỷLục\]|\[Tên\]|\[Top1\]/gi, pendingRec.username)
-            .replace(/\[ĐiểmKỷLục\]|\[Điểm\]/gi, String(pendingRec.points))
+            .replace(
+              /\[ĐiểmKỷLục\]|\[SốCúpKỷLục\]|\[Cúp\]|\[Điểm\]/gi,
+              String(pendingRec.points)
+            )
             .replace(
               /\[KỷLụcCũ\]/gi,
               pendingRec.previousTop1Username || 'bảng vàng'
@@ -10455,7 +11692,7 @@ export function useClassroomEngine() {
           return;
         }
 
-        // Bắt đầu Luồng 4: Thầy Tùng nói (giọng nam) + chatbox + khóa camera vào Thầy Tùng
+        // Bắt đầu Luồng 4: Cô Thảo nói (giọng nữ chính mượt mà) + chatbox + khóa camera vào Cô Thảo
         const supervisorLine = (
           cfg.zombieFlow4SupervisorDialog ||
           'Các em hãy thả tim liên tục để đẩy lùi zombie !'
@@ -10467,7 +11704,7 @@ export function useClassroomEngine() {
         const bubbleUntil4 = Date.now() + Math.max(6500, minDur4Ms + 2500);
         setMonks((prevM) => {
           const nextM = prevM.map((m) =>
-            m.role === 'senior_novice'
+            m.role === 'abbot'
               ? {
                   ...m,
                   chatText: supervisorLine,
@@ -10481,7 +11718,7 @@ export function useClassroomEngine() {
 
         setCameraFocus({
           pilgrimId: null,
-          focusRole: 'senior_novice',
+          focusRole: 'abbot',
           customZoom: cfg.cameraZoomScale || 2.4,
           reason: 'special_gift',
           startedAt: Date.now(),
@@ -10495,9 +11732,9 @@ export function useClassroomEngine() {
             {
               text: supervisorLine,
               lang: 'vi',
-              speakerRole: 'senior_novice', // Giọng Nam
+              speakerRole: 'abbot',
               lessonFlowToken: flowToken4,
-              lessonStepLabel: 'Sự kiện Zombie - Luồng 4: Thầy giáo kêu gọi',
+              lessonStepLabel: 'Sự kiện Zombie - Luồng 4: Cô giáo kêu gọi',
             },
           ],
           cfg
@@ -11009,6 +12246,8 @@ export function useClassroomEngine() {
                 ...p,
                 prayer: `❤️ Thả ${bubbleLikes} tim!`,
                 hasComment: true,
+                prayTimer: 0,
+                chatBubbleKey: issueChatBubbleKey(),
                 chatBubbleUntil: nowMs + 1100,
               }
             : p
@@ -11023,6 +12262,7 @@ export function useClassroomEngine() {
           ...crowdCopy[cIdx],
           prayer: `❤️ Thả ${pickedQueueShots[0].damage} tim!`,
           hasComment: true,
+          chatBubbleKey: issueChatBubbleKey(),
           chatBubbleUntil: nowMs + 1100,
         };
         doorCrowdRef.current = crowdCopy;
@@ -11168,7 +12408,7 @@ export function useClassroomEngine() {
     config.zombieBgmVolume,
   ]);
 
-  // Thầy giáo (Giám thị Thầy Tùng - senior_novice) nói câu khích lệ học sinh chiến đấu khi Sự Kiện Zombie đang ở pha Chiến Đấu (z_flow_5_combat)
+  // Cô Thảo (abbot) nói câu khích lệ học sinh chiến đấu khi Sự Kiện Zombie đang ở pha Chiến Đấu (z_flow_5_combat)
   useEffect(() => {
     if (
       !zombieEventState.isActive ||
@@ -11200,7 +12440,7 @@ export function useClassroomEngine() {
 
       setMonks((prevMonks) =>
         prevMonks.map((m) =>
-          m.role === 'senior_novice'
+          m.role === 'abbot'
             ? {
                 ...m,
                 monkBubbleText: `🔥 ${formatted}`,
@@ -11211,7 +12451,7 @@ export function useClassroomEngine() {
       );
 
       soundEngine.enqueueTTS(formatted, true, cfg, {
-        speakerRole: 'senior_novice',
+        speakerRole: 'abbot',
         reason: 'comment',
       });
     };
@@ -11367,6 +12607,8 @@ export function useClassroomEngine() {
                   ...p,
                   prayer: `❤️ Thả ${count} tim!`,
                   hasComment: true,
+                  prayTimer: 0,
+                  chatBubbleKey: issueChatBubbleKey(),
                   chatBubbleUntil: nowMs + 2600,
                 }
               : p
@@ -11386,6 +12628,7 @@ export function useClassroomEngine() {
             username: cleanUser,
             prayer: `❤️ Thả ${count} tim!`,
             hasComment: true,
+            chatBubbleKey: issueChatBubbleKey(),
             chatBubbleUntil: nowMs + 2800,
           };
           doorCrowdRef.current = crowdCopy;
@@ -11710,6 +12953,44 @@ export function useClassroomEngine() {
             bypassWaitingQueue: Boolean(p.bypassWaitingQueue),
           });
           break;
+        case 'TRIGGER_PAPER_PLANE': {
+          const tFrom = String(p.throwerUsername || '').trim().toLowerCase();
+          const tTo = String(p.targetUsername || '').trim().toLowerCase();
+          const pKind: 'paper_plane' | 'rose_bouquet' =
+            p.projectileKind === 'rose_bouquet' ? 'rose_bouquet' : 'paper_plane';
+          if (tFrom && tTo) {
+            const inClassNow = pilgrimsRef.current.filter(
+              (st) =>
+                Boolean(st.slotId) &&
+                st.state !== 'leave_side_to_aisle' &&
+                st.state !== 'leave_down_exit'
+            );
+            const throwerSt = inClassNow.find(
+              (st) =>
+                st.username.trim().toLowerCase() === tFrom &&
+                (pKind === 'rose_bouquet' || st.state === 'pray_seated')
+            );
+            const targetSt = inClassNow.find(
+              (st) =>
+                st.username.trim().toLowerCase() === tTo &&
+                st.id !== throwerSt?.id
+            );
+            if (throwerSt && targetSt) {
+              launchPaperPlaneAtStudent(throwerSt, targetSt, false, {
+                projectileKind: pKind,
+              });
+            }
+          }
+          break;
+        }
+        case 'TRIGGER_ROSE_HEART_BURST': {
+          const bx = Number(p.x);
+          const by = Number(p.y);
+          if (Number.isFinite(bx) && Number.isFinite(by)) {
+            spawnRoseHeartBurstAt(bx, by, false);
+          }
+          break;
+        }
         case 'LEAVE_ALL':
           setPilgrims((prev) =>
             prev.map((st) => ({
@@ -11904,7 +13185,11 @@ export function useClassroomEngine() {
           break;
         case 'UPDATE_CUSTOM_ASSETS':
           if (p.assets) {
-            setCustomAssets((prev) => ({ ...prev, ...p.assets }));
+            setCustomAssets((prev) => {
+              const next = { ...prev, ...p.assets };
+              void idbSet('classroom_custom_assets_v1', next);
+              return next;
+            });
           }
           break;
         case 'SYNC_LIVE_TTS_SNAPSHOT': {
@@ -12049,6 +13334,7 @@ export function useClassroomEngine() {
                   quizEarnedPoints: 0,
                   podiumRank: undefined,
                   winnerMilkTeaScale: undefined,
+                  winnerTrophyScale: undefined,
                   isPunishedInCurrentRound: false,
                   punishmentMultiplier: undefined,
                   punishmentSpotPos: undefined,
@@ -12145,6 +13431,7 @@ export function useClassroomEngine() {
                     stateTimer: 0,
                     podiumRank: rank,
                     winnerMilkTeaScale: undefined,
+                    winnerTrophyScale: undefined,
                     isPunishedInCurrentRound: false,
                     punishmentMultiplier: undefined,
                     punishmentSpotIndex: spotIdx,
@@ -12252,25 +13539,51 @@ export function useClassroomEngine() {
             saveCustomWordsToStorage(p.customWords);
           }
           break;
-        case 'SYNC_STUDENT_EXP':
+        case 'SYNC_STUDENT_EXP': {
+          let changedAny = false;
           if (p.studentExpMap && typeof p.studentExpMap === 'object') {
             if (p.replaceAll) {
               studentExpMapRef.current.clear();
+              changedAny = true;
             }
             for (const [k, v] of Object.entries(p.studentExpMap)) {
               const cleanKey = String(k || '').trim().toLowerCase();
               const expVal = Math.floor(Number(v) || 0);
               if (cleanKey && expVal > 0) {
                 const prev = studentExpMapRef.current.get(cleanKey) || 0;
-                studentExpMapRef.current.set(
-                  cleanKey,
-                  p.replaceAll ? expVal : Math.max(prev, expVal)
-                );
+                const nextVal = p.replaceAll ? expVal : Math.max(prev, expVal);
+                if (nextVal !== prev) {
+                  studentExpMapRef.current.set(cleanKey, nextVal);
+                  changedAny = true;
+                }
               }
             }
+          }
+          if (p.studentTrophyMap && typeof p.studentTrophyMap === 'object') {
+            if (p.replaceAll) {
+              studentTrophyMapRef.current.clear();
+              changedAny = true;
+            }
+            for (const [k, v] of Object.entries(p.studentTrophyMap)) {
+              const cleanKey = String(k || '').trim().toLowerCase();
+              const trophyVal = Math.floor(Number(v) || 0);
+              if (cleanKey && trophyVal > 0) {
+                const prev = studentTrophyMapRef.current.get(cleanKey) || 0;
+                const nextVal = p.replaceAll
+                  ? trophyVal
+                  : Math.max(prev, trophyVal);
+                if (nextVal !== prev) {
+                  studentTrophyMapRef.current.set(cleanKey, nextVal);
+                  changedAny = true;
+                }
+              }
+            }
+          }
+          if (changedAny) {
             applyExpMapToActiveStudents();
           }
           break;
+        }
         case 'TRIGGER_CLASSROOM_GIFT':
           handleTriggerClassroomGift({
             username: p.username,
@@ -12759,6 +14072,7 @@ export function useClassroomEngine() {
             wasOnPodium && p.slotX !== undefined ? p.slotX < 270 : p.facingLeft,
           podiumRank: undefined,
           winnerMilkTeaScale: undefined,
+          winnerTrophyScale: undefined,
           answeredCurrentQuestion: false,
           quizAnswerRight: false,
           quizResultStatus: null,
@@ -12772,7 +14086,7 @@ export function useClassroomEngine() {
 
     const startSpeech =
       cfg.lessonStartTtsText ||
-      'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
+      'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
     const flowToken0 = `flow_start_${Date.now()}`;
     const startTtsItems = [
       {
@@ -12950,6 +14264,7 @@ export function useClassroomEngine() {
         ...p,
         podiumRank: undefined,
         winnerMilkTeaScale: undefined,
+        winnerTrophyScale: undefined,
         answeredCurrentQuestion: false,
         quizAnswerRight: false,
         quizResultStatus: null,
@@ -14194,6 +15509,7 @@ export function useClassroomEngine() {
       customWords,
       dailyRecords: dailyRecordsRef.current,
       studentExpMap: serializeStudentExpMap(studentExpMapRef.current),
+      studentTrophyMap: serializeStudentExpMap(studentTrophyMapRef.current),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: 'application/json',
@@ -14269,6 +15585,12 @@ export function useClassroomEngine() {
           setCustomWords(parsed.customWords);
           saveCustomWordsToStorage(parsed.customWords);
         }
+        if (Array.isArray(parsed.dailyRecords)) {
+          const slicedRecords = parsed.dailyRecords.slice(0, 5);
+          dailyRecordsRef.current = slicedRecords;
+          setDailyRecords(slicedRecords);
+        }
+        let updatedExpOrTrophies = false;
         if (
           parsed.studentExpMap &&
           typeof parsed.studentExpMap === 'object'
@@ -14282,12 +15604,30 @@ export function useClassroomEngine() {
             }
           }
           studentExpMapRef.current = nextExpMap;
+          updatedExpOrTrophies = true;
+        }
+        if (
+          parsed.studentTrophyMap &&
+          typeof parsed.studentTrophyMap === 'object'
+        ) {
+          const nextTrophyMap = new Map<string, number>();
+          for (const [k, v] of Object.entries(parsed.studentTrophyMap)) {
+            const cleanKey = String(k || '').trim().toLowerCase();
+            const trophyVal = Math.floor(Number(v) || 0);
+            if (cleanKey && trophyVal > 0) {
+              nextTrophyMap.set(cleanKey, trophyVal);
+            }
+          }
+          studentTrophyMapRef.current = nextTrophyMap;
+          updatedExpOrTrophies = true;
+        }
+        if (updatedExpOrTrophies) {
           applyExpMapToActiveStudents();
           flushStudentExpStorage(true, true);
         }
         return {
           ok: true,
-          message: `Đã nạp cấu hình lớp học & dữ liệu EXP (${studentExpMapRef.current.size} học sinh) thành công!`,
+          message: `Đã nạp cấu hình lớp học, EXP (${studentExpMapRef.current.size} học sinh) & Cúp Vàng (${studentTrophyMapRef.current.size} học sinh) thành công!`,
         };
       } catch {
         return { ok: false, message: 'Lỗi: Chuỗi JSON không hợp lệ!' };
@@ -14307,7 +15647,7 @@ export function useClassroomEngine() {
     lastPraisedRecordTop1Ref.current = '';
     pendingRecordNoticeRef.current = null;
     syncService.sendCommand('CLEAR_DAILY_RECORDS', {});
-    pushToast('🔄 Đã reset bảng Kỷ lục hôm nay về 0!', false);
+    pushToast('🔄 Đã reset bảng Kỷ lục cúp vàng trong ngày về 0!', false);
   }, [pushToast]);
 
   const handleClearEventTtsQueue = useCallback(() => {
@@ -14570,6 +15910,14 @@ export function useClassroomEngine() {
         avatarUrl,
         isSimulatedTest: true,
         allowDoorCrowdBubbleForBot: true,
+      });
+      syncService.sendCommand('SPAWN_PILGRIM', {
+        username: cleanUser,
+        prayer: cleanComment,
+        isVip: false,
+        coins: 0,
+        isBot: true,
+        avatarUrl,
       });
     },
     [spawnOrPromotePilgrim]
@@ -14932,6 +16280,86 @@ export function useClassroomEngine() {
     handleStopZombieEvent,
     handleKillZombieImmediately,
     handleTestZombieAttack,
+    paperPlanes,
+    paperPlaneHitBubbles,
+    roseHeartBursts,
+    handleTestPaperPlaneThrow: () => {
+      const inClassList = pilgrimsRef.current.filter(
+        (p) =>
+          Boolean(p.slotId) &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      );
+      const seatedList = inClassList.filter((p) => p.state === 'pray_seated');
+      if (seatedList.length < 1 || inClassList.length < 2) {
+        pushToast(
+          '⚠️ Cần có ít nhất 2 học sinh trong lớp (người ném phải đang ngồi tại bàn) để test ném máy bay giấy!',
+          false
+        );
+        return;
+      }
+      const thrower = seatedList[Math.floor(Math.random() * seatedList.length)];
+      const others = inClassList.filter((p) => p.id !== thrower.id);
+      const target = others[Math.floor(Math.random() * others.length)];
+      launchPaperPlaneAtStudent(thrower, target, true);
+      pushToast(
+        `✈️ ${thrower.username} ném máy bay giấy tới ${target.username}! (Tặng Hoa Hồng trong 10s sau khi trúng sẽ gửi bó hoa cho bạn)`,
+        false
+      );
+    },
+    handleTestRoseBouquetThrow: () => {
+      const inClassList = pilgrimsRef.current.filter(
+        (p) =>
+          Boolean(p.slotId) &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      );
+      const seatedList = inClassList.filter((p) => p.state === 'pray_seated');
+      if (seatedList.length < 1 || inClassList.length < 2) {
+        const fallbackX = 270;
+        const fallbackY = 640;
+        spawnRoseHeartBurstAt(fallbackX, fallbackY, true);
+        pushToast(
+          '❤️ Đã test hiệu ứng nổ tim đỏ giữa lớp! (Thêm 2 học sinh ngồi bàn để test đường bay bó hoa)',
+          false
+        );
+        return;
+      }
+      const thrower = seatedList[Math.floor(Math.random() * seatedList.length)];
+      const others = inClassList.filter((p) => p.id !== thrower.id);
+      const target = others[Math.floor(Math.random() * others.length)];
+      soundEngine.playGiftEventSound('rose', configRef.current, true);
+      launchPaperPlaneAtStudent(thrower, target, true, {
+        projectileKind: 'rose_bouquet',
+      });
+      pushToast(
+        `🌹 ${thrower.username} ném bó hoa hồng cho ${target.username}! ❤️`,
+        false
+      );
+    },
+    handleTestRoseHeartBurst: () => {
+      const seatedList = pilgrimsRef.current.filter(
+        (p) => Boolean(p.slotId) && p.state === 'pray_seated'
+      );
+      if (seatedList.length > 0) {
+        const target =
+          seatedList[Math.floor(Math.random() * seatedList.length)];
+        const headPts = computeStudentHeadAndHandCoords(
+          target,
+          vipSlotsRef.current,
+          normalSlotsRef.current,
+          configRef.current
+        );
+        spawnRoseHeartBurstAt(headPts.headX, headPts.headY, true);
+        pushToast(
+          `❤️ Test nổ tim đỏ tại vị trí bạn ${target.username}!`,
+          false
+        );
+      } else {
+        spawnRoseHeartBurstAt(270, 640, true);
+        pushToast('❤️ Test nổ tim đỏ trên sân khấu!', false);
+      }
+    },
     vipSlots,
     normalSlots,
     pilgrims,

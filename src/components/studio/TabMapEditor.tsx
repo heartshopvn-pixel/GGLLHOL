@@ -59,6 +59,7 @@ interface TabMapEditorProps {
   onClearLotusDonors?: () => void;
   dailyRecords?: DailyRecordEntry[];
   onResetDailyRecords?: () => void;
+  onTestPaperPlaneThrow?: () => void;
 }
 
 export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
@@ -78,6 +79,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
   onClearLotusDonors,
   dailyRecords = [],
   onResetDailyRecords,
+  onTestPaperPlaneThrow,
 }) => {
   const [selectedDevDeskIds, setSelectedDevDeskIds] = useState<string[]>([]);
 
@@ -392,7 +394,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 opKey: 'dailyRecordOpacity',
                 defaultFont: 9.5,
                 defaultOp: config.hudLayout.hudOpacity ?? 0.9,
-                label: 'Bảng Kỷ Lục Hôm Nay (Top 1-5)',
+                label: 'Bảng Kỷ Lục Cúp Vàng (Top 1-5)',
               },
               {
                 visKey: 'showNoticeBoardBox',
@@ -441,6 +443,14 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 defaultFont: 10,
                 defaultOp: config.hudLayout.hudOpacity ?? 0.9,
                 label: 'Bảng Note 1 (Đây là trò chơi 2D.)',
+              },
+              {
+                visKey: 'showMarqueeBox',
+                fontKey: 'marqueeFontSize',
+                opKey: 'marqueeOpacity',
+                defaultFont: 12,
+                defaultOp: 0.88,
+                label: 'Bảng Chạy Chữ 1 Dòng Ngang (Thông Báo Dài)',
               },
               {
                 visKey: 'showTempleSign',
@@ -504,7 +514,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                       <input
                         type="range"
                         min={7}
-                        max={24}
+                        max={visKey === 'showMarqueeBox' ? 32 : 24}
                         step={1}
                         value={currentSize}
                         onChange={(e) =>
@@ -518,7 +528,10 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                         type="button"
                         onClick={() =>
                           onUpdateHudLayout({
-                            [fontKey]: Math.min(24, currentSize + 1),
+                            [fontKey]: Math.min(
+                              visKey === 'showMarqueeBox' ? 32 : 24,
+                              currentSize + 1
+                            ),
                           })
                         }
                         className="w-5 h-5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 flex items-center justify-center text-amber-300 cursor-pointer"
@@ -778,6 +791,75 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                   </div>
                 )}
 
+                {visKey === 'showMarqueeBox' && (
+                  <div className="space-y-1.5 pt-1.5 border-t border-stone-800/70">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-cyan-300 font-semibold">
+                        Tốc độ chạy chữ (px/s):
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              marqueeSpeed: Math.max(
+                                10,
+                                (config.hudLayout.marqueeSpeed ?? 65) - 5
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="range"
+                          min={10}
+                          max={300}
+                          step={5}
+                          value={config.hudLayout.marqueeSpeed ?? 65}
+                          onChange={(e) =>
+                            onUpdateHudLayout({
+                              marqueeSpeed: parseInt(e.target.value, 10) || 65,
+                            })
+                          }
+                          className="w-24 accent-cyan-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateHudLayout({
+                              marqueeSpeed: Math.min(
+                                300,
+                                (config.hudLayout.marqueeSpeed ?? 65) + 5
+                              ),
+                            })
+                          }
+                          className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs font-bold text-stone-200 flex items-center justify-center cursor-pointer"
+                        >
+                          +
+                        </button>
+                        <span className="w-12 text-right text-[10.5px] font-mono font-bold text-cyan-300 tabular-nums">
+                          {config.hudLayout.marqueeSpeed ?? 65}px/s
+                        </span>
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={2}
+                      value={
+                        config.hudLayout.marqueeContent ??
+                        '📢 Chào mừng các bạn học sinh vào lớp 12A1!'
+                      }
+                      onChange={(e) =>
+                        onUpdateHudLayout({ marqueeContent: e.target.value })
+                      }
+                      placeholder="Nhập thông báo dài chạy ngang liên tục..."
+                      className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-800 text-[11px] text-amber-200 font-semibold focus:outline-none focus:border-cyan-400 resize-y"
+                    />
+                  </div>
+                )}
+
                 {visKey === 'showPilgrimCountBox' && (
                   <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-800/70">
                     <span className="text-[10px] text-amber-300 font-semibold">
@@ -884,16 +966,16 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           </div>
           <div className="col-span-2 flex items-end gap-2">
             <div className="flex-1">
-              <label className="text-[10.5px] text-orange-300 font-semibold block mb-1">
-                Tiêu đề Bảng Kỷ lục hôm nay ({dailyRecords.length}/5 kỷ lục):
+              <label className="text-[10.5px] text-yellow-300 font-semibold block mb-1">
+                Tiêu đề Bảng Kỷ lục cúp vàng ({dailyRecords.length}/5 kỷ lục trong ngày):
               </label>
               <input
                 type="text"
-                value={config.hudLayout.dailyRecordTitle ?? 'Kỷ lục hôm nay'}
+                value={config.hudLayout.dailyRecordTitle ?? 'Kỷ lục cúp vàng'}
                 onChange={(e) =>
                   onUpdateHudLayout({ dailyRecordTitle: e.target.value })
                 }
-                className="w-full px-2 py-1 rounded-lg bg-stone-950 border border-stone-800 text-xs text-orange-200 font-semibold focus:outline-none focus:border-orange-500"
+                className="w-full px-2 py-1 rounded-lg bg-stone-950 border border-stone-800 text-xs text-yellow-200 font-semibold focus:outline-none focus:border-yellow-400"
               />
             </div>
             {onResetDailyRecords && (
@@ -901,10 +983,10 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 type="button"
                 onClick={onResetDailyRecords}
                 className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10.5px] font-extrabold flex items-center gap-1 cursor-pointer shrink-0 transition shadow"
-                title="Reset bảng Kỷ lục hôm nay về 0"
+                title="Reset bảng Kỷ lục cúp vàng về 0"
               >
                 <RotateCcw className="w-3 h-3" />
-                <span>Reset Kỷ Lục</span>
+                <span>Reset Cúp Ngày</span>
               </button>
             )}
           </div>
@@ -1481,6 +1563,156 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           />
         </div>
 
+        {/* Cấu hình Máy Bay Giấy ném bạn trong lớp (@tên): Size, Tốc Độ Bay & Nút Test */}
+        <div className="p-2.5 rounded-lg bg-stone-950/90 border border-sky-500/45 space-y-2.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-extrabold text-sky-200 flex items-center gap-1.5">
+              <span>✈️ Máy Bay Giấy Ném Bạn (@tên)</span>
+            </span>
+            <div className="flex items-center gap-1.5">
+              {onTestPaperPlaneThrow && (
+                <button
+                  type="button"
+                  onClick={onTestPaperPlaneThrow}
+                  className="px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/60 text-[9.5px] font-bold text-sky-200 cursor-pointer shrink-0 transition"
+                >
+                  ✈️ Test Ném
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    paperPlaneScale: 1.0,
+                    paperPlaneSpeed: 460,
+                  })
+                }
+                className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9.5px] font-semibold text-stone-300 cursor-pointer shrink-0"
+              >
+                Mặc định
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {/* Kích thước Máy Bay Giấy */}
+            <div className="p-2 rounded-lg bg-stone-900/80 border border-stone-800 space-y-1">
+              <div className="flex items-center justify-between text-[10.5px] text-stone-300">
+                <span>Kích thước (Size)</span>
+                <span className="font-mono font-bold text-sky-300 tabular-nums">
+                  {Math.round((config.paperPlaneScale ?? 1) * 100)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      paperPlaneScale: Math.max(
+                        0.4,
+                        Number(((config.paperPlaneScale ?? 1) - 0.1).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  -
+                </button>
+                <input
+                  type="range"
+                  min={0.4}
+                  max={3.0}
+                  step={0.05}
+                  value={config.paperPlaneScale ?? 1}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      paperPlaneScale: Math.max(
+                        0.4,
+                        Math.min(3.0, parseFloat(e.target.value) || 1)
+                      ),
+                    })
+                  }
+                  className="w-full accent-sky-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      paperPlaneScale: Math.min(
+                        3.0,
+                        Number(((config.paperPlaneScale ?? 1) + 0.1).toFixed(2))
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {/* Tốc độ bay Máy Bay Giấy */}
+            <div className="p-2 rounded-lg bg-stone-900/80 border border-stone-800 space-y-1">
+              <div className="flex items-center justify-between text-[10.5px] text-stone-300">
+                <span>Tốc độ bay</span>
+                <span className="font-mono font-bold text-amber-300 tabular-nums">
+                  {Math.round(config.paperPlaneSpeed ?? 460)} px/s
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      paperPlaneSpeed: Math.max(
+                        120,
+                        Math.round((config.paperPlaneSpeed ?? 460) - 40)
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  -
+                </button>
+                <input
+                  type="range"
+                  min={120}
+                  max={1400}
+                  step={20}
+                  value={config.paperPlaneSpeed ?? 460}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      paperPlaneSpeed: Math.max(
+                        120,
+                        Math.min(1400, parseInt(e.target.value, 10) || 460)
+                      ),
+                    })
+                  }
+                  className="w-full accent-amber-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({
+                      paperPlaneSpeed: Math.min(
+                        1400,
+                        Math.round((config.paperPlaneSpeed ?? 460) + 40)
+                      ),
+                    })
+                  }
+                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-[9.5px] text-stone-400 leading-snug">
+            Học sinh đang ngồi trong lớp chat <span className="text-sky-300 font-semibold">@tên</span> (chỉ cần gõ từ đầu/tên chính không dấu), hoặc <span className="text-sky-300 font-semibold">@bạn</span> (cùng bàn), <span className="text-sky-300 font-semibold">@top1..3</span>, <span className="text-sky-300 font-semibold">@random</span> để ném máy bay giấy trúng đầu + nổ bong bóng gai trống & tự chat &quot;ui da&quot; sau 1s.
+          </p>
+        </div>
+
         {/* Thẻ mới: Chỉnh kích thước & vị trí trên bàn của các Model (Bó hoa, Con mèo, Bịch bánh, Con heo) */}
         {(() => {
           const gm = config.giftModelScales || DEFAULT_GIFT_MODEL_SCALES;
@@ -1653,7 +1885,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 </div>
               </div>
 
-              {/* Điều chỉnh vị trí ngang (X) & dọc (Y) trên bàn cho Con Mèo và Bịch Bánh */}
+              {/* Điều chỉnh vị trí ngang (X) & dọc (Y) trên bàn cho Con Mèo, Bịch Bánh và Con Heo */}
               <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-stone-800/80 text-[10px]">
                 {/* Vị trí Con Mèo trên bàn */}
                 <div className="p-2 rounded bg-amber-950/20 border border-amber-500/35 space-y-1.5">
@@ -1780,6 +2012,72 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                       }
                       className="w-full accent-emerald-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
                     />
+                  </div>
+                </div>
+
+                {/* Vị trí Con Heo trên bàn */}
+                <div className="col-span-2 p-2 rounded bg-pink-950/25 border border-pink-500/40 space-y-1.5">
+                  <div className="flex items-center justify-between font-bold text-pink-200">
+                    <span>🐷 Vị trí Con Heo trên bàn (Đối xứng 2 chỗ ngồi)</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patchGm({ deskPigOffsetX: 0, deskPigOffsetY: 0 })
+                      }
+                      className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[8.5px] font-mono text-stone-300 cursor-pointer"
+                    >
+                      0, 0
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <div className="flex justify-between text-stone-300 mb-0.5">
+                        <span>Ngang (X):</span>
+                        <span className="font-mono font-bold text-pink-300">
+                          {(gm.deskPigOffsetX ?? 0) > 0
+                            ? `+${gm.deskPigOffsetX}`
+                            : gm.deskPigOffsetX ?? 0}
+                          px
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-60}
+                        max={60}
+                        step={1}
+                        value={gm.deskPigOffsetX ?? 0}
+                        onChange={(e) =>
+                          patchGm({
+                            deskPigOffsetX: parseInt(e.target.value, 10) || 0,
+                          })
+                        }
+                        className="w-full accent-pink-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-stone-300 mb-0.5">
+                        <span>Dọc (Y):</span>
+                        <span className="font-mono font-bold text-pink-300">
+                          {(gm.deskPigOffsetY ?? 0) > 0
+                            ? `+${gm.deskPigOffsetY}`
+                            : gm.deskPigOffsetY ?? 0}
+                          px
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-60}
+                        max={60}
+                        step={1}
+                        value={gm.deskPigOffsetY ?? 0}
+                        onChange={(e) =>
+                          patchGm({
+                            deskPigOffsetY: parseInt(e.target.value, 10) || 0,
+                          })
+                        }
+                        className="w-full accent-pink-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2117,6 +2415,74 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             />
           </div>
 
+          {/* Điều chỉnh chiều cao Thẻ Tên (không đổi kích thước Avatar & cỡ chữ tên, không có lề trong) */}
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800/80 text-[10.5px]">
+            <div className="flex flex-col">
+              <span className="text-stone-200 font-semibold">
+                Chiều cao thẻ tên:
+              </span>
+              <span className="text-[9px] text-stone-400">
+                Giữ nguyên cỡ Avatar &amp; Font tên (không lề trong)
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    nameTagHeight: Math.max(
+                      12,
+                      (config.nameTagHeight ?? 20) - 1
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={12}
+                max={36}
+                step={1}
+                value={config.nameTagHeight ?? 20}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    nameTagHeight: Math.max(
+                      12,
+                      Math.min(36, parseInt(e.target.value, 10) || 20)
+                    ),
+                  })
+                }
+                className="w-20 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    nameTagHeight: Math.min(
+                      36,
+                      (config.nameTagHeight ?? 20) + 1
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 flex items-center justify-center text-amber-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ nameTagHeight: 20 })}
+                className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[9px] font-mono text-stone-300 cursor-pointer"
+              >
+                20px
+              </button>
+              <span className="w-10 text-right font-mono font-bold text-amber-300 tabular-nums">
+                {config.nameTagHeight ?? 20}px
+              </span>
+            </div>
+          </div>
+
           {/* Giới hạn ký tự hiển thị tối đa trong Thẻ tên */}
           <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800/80 text-[10.5px]">
             <span className="text-stone-300">Giới hạn ký tự tối đa:</span>
@@ -2234,6 +2600,79 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             </div>
           </div>
 
+          {/* Cỡ chữ ký tự dùng chung cho Thẻ Rank (IEL) & Thẻ Cúp Vàng (luân phiên Rank 10s • Cúp 4s) */}
+          <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-800/80 text-[10.5px]">
+            <div className="flex flex-col">
+              <span className="font-bold text-yellow-200">
+                🏅 Cỡ chữ Thẻ Rank &amp; Cúp:
+              </span>
+              <span className="text-[9px] text-stone-400">
+                Thẻ Rank = Thẻ Cúp (Rank 10s • Cúp 4s)
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    rankTrophyBadgeFontSize: Math.max(
+                      5,
+                      Math.round(((config.rankTrophyBadgeFontSize ?? 8) - 0.5) * 10) /
+                        10
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+                title="Giảm cỡ chữ Thẻ Rank & Cúp (-0.5px)"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={5}
+                max={18}
+                step={0.5}
+                value={config.rankTrophyBadgeFontSize ?? 8}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    rankTrophyBadgeFontSize: Math.max(
+                      5,
+                      Math.min(18, parseFloat(e.target.value) || 8)
+                    ),
+                  })
+                }
+                className="w-20 accent-yellow-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    rankTrophyBadgeFontSize: Math.min(
+                      18,
+                      Math.round(((config.rankTrophyBadgeFontSize ?? 8) + 0.5) * 10) /
+                        10
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-yellow-500/20 hover:bg-yellow-500/35 border border-yellow-400/40 flex items-center justify-center text-yellow-300 cursor-pointer"
+                title="Tăng cỡ chữ Thẻ Rank & Cúp (+0.5px)"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ rankTrophyBadgeFontSize: 8 })}
+                className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[9px] font-mono text-stone-300 cursor-pointer"
+                title="Đặt về mặc định (8px)"
+              >
+                8px
+              </button>
+              <span className="w-10 text-right font-mono font-bold text-yellow-300 tabular-nums">
+                {config.rankTrophyBadgeFontSize ?? 8}px
+              </span>
+            </div>
+          </div>
+
           {/* Điều chỉnh vị trí dọc của Vương Miện Top 1 trên đầu học sinh (Lên / Xuống) */}
           <div className="flex items-center justify-between gap-2 pt-2 border-t border-amber-500/25 text-[10.5px]">
             <span className="font-bold text-yellow-300">
@@ -2297,97 +2736,6 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                   : config.top1CrownOffsetY ?? 0}
                 px
               </span>
-            </div>
-          </div>
-
-          {/* THẺ COMBO TRẢ LỜI ĐÚNG LIÊN TIẾP (ĐẶT SÁT BÊN DEV THẺ TÊN): CHỈNH FONT + SIZE */}
-          <div className="pt-2 border-t border-amber-500/25 space-y-1.5">
-            <div className="flex items-center justify-between gap-2 text-[10.5px]">
-              <span className="font-bold text-orange-300">
-                🔥 Thẻ Combo trả lời đúng liên tiếp (x2, x3...)
-              </span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-orange-300 font-mono font-bold">
-                  Size: {Math.round((config.streakTagScale ?? 1) * 100)}%
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateConfig({
-                      streakTagFontFamily:
-                        '"Be Vietnam Pro", system-ui, sans-serif',
-                      streakTagScale: 1.0,
-                    })
-                  }
-                  className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[9px] font-semibold text-stone-300 cursor-pointer"
-                >
-                  Mặc định
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 items-center">
-              <select
-                value={
-                  config.streakTagFontFamily ||
-                  config.nameTagFontFamily ||
-                  '"Be Vietnam Pro", system-ui, sans-serif'
-                }
-                onChange={(e) =>
-                  onUpdateConfig({ streakTagFontFamily: e.target.value })
-                }
-                className="px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] text-stone-200 focus:outline-none"
-              >
-                {FONT_FAMILY_OPTIONS.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateConfig({
-                      streakTagScale: Math.max(
-                        0.5,
-                        Number(((config.streakTagScale ?? 1) - 0.05).toFixed(2))
-                      ),
-                    })
-                  }
-                  className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer shrink-0"
-                >
-                  <Minus className="w-3 h-3" />
-                </button>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={2.2}
-                  step={0.05}
-                  value={config.streakTagScale ?? 1}
-                  onChange={(e) =>
-                    onUpdateConfig({
-                      streakTagScale: parseFloat(e.target.value) || 1,
-                    })
-                  }
-                  className="w-full accent-orange-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateConfig({
-                      streakTagScale: Math.min(
-                        2.2,
-                        Number(((config.streakTagScale ?? 1) + 0.05).toFixed(2))
-                      ),
-                    })
-                  }
-                  className="w-5 h-5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500/40 flex items-center justify-center text-orange-300 cursor-pointer shrink-0"
-                >
-                  <Plus className="w-3 h-3" />
-                </button>
-              </div>
             </div>
           </div>
 

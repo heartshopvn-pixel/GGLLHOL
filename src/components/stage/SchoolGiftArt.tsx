@@ -48,6 +48,95 @@ export const Flower10BadgeIcon: React.FC<{ className?: string }> = ({
 );
 
 /**
+ * Icon Cúp Vàng Vô Địch 2 quai ánh kim dùng cho Lễ Tuyên Dương Top 1-2-3, Floating Text, Thẻ Cúp dưới Thẻ Tên & Bảng Kỷ Lục Cúp Vàng
+ */
+export const GoldTrophyIcon: React.FC<{ className?: string }> = ({
+  className = 'w-4 h-4',
+}) => (
+  <svg
+    viewBox="0 0 40 44"
+    className={`inline-block shrink-0 ${className}`}
+    fill="none"
+  >
+    {/* Hai quai cúp vàng uốn cong 2 bên */}
+    <path
+      d="M10 10H5.5C3.8 10 2.5 11.4 2.8 13.1C3.5 17.8 6.8 21.2 11.5 21.8"
+      stroke="#FACC15"
+      strokeWidth="3.2"
+      strokeLinecap="round"
+    />
+    <path
+      d="M30 10H34.5C36.2 10 37.5 11.4 37.2 13.1C36.5 17.8 33.2 21.2 28.5 21.8"
+      stroke="#EAB308"
+      strokeWidth="3.2"
+      strokeLinecap="round"
+    />
+    {/* Đế cúp 2 tầng vững chãi */}
+    <rect
+      x="11"
+      y="36"
+      width="18"
+      height="5"
+      rx="2"
+      fill="#B45309"
+      stroke="#451A03"
+      strokeWidth="1.5"
+    />
+    <rect
+      x="14"
+      y="32"
+      width="12"
+      height="4.5"
+      rx="1.5"
+      fill="#F59E0B"
+      stroke="#78350F"
+      strokeWidth="1.3"
+    />
+    {/* Chân trụ cúp */}
+    <path
+      d="M17.5 26H22.5L23.5 32.5H16.5L17.5 26Z"
+      fill="#FACC15"
+      stroke="#78350F"
+      strokeWidth="1.3"
+    />
+    {/* Bầu cúp vàng ánh kim */}
+    <path
+      d="M9.5 6.5H30.5L28.8 17.5C28 22.8 24.4 26.5 20 26.5C15.6 26.5 12 22.8 11.2 17.5L9.5 6.5Z"
+      fill="#FDE047"
+      stroke="#78350F"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+    {/* Miệng cúp sáng bóng */}
+    <rect
+      x="8.5"
+      y="4.5"
+      width="23"
+      height="3.5"
+      rx="1.75"
+      fill="#FEF9C3"
+      stroke="#78350F"
+      strokeWidth="1.3"
+    />
+    {/* Vệt phản quang dọc thân cúp */}
+    <path
+      d="M13.5 9.5L14.6 17.5C15 19.8 16.2 21.5 17.8 22.4"
+      stroke="#FEFCE8"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+    />
+    {/* Ngôi sao vô địch chính giữa */}
+    <polygon
+      points="20,10.5 21.6,13.9 25.3,14.4 22.6,17 23.3,20.6 20,18.9 16.7,20.6 17.4,17 14.7,14.4 18.4,13.9"
+      fill="#FFFBEB"
+      stroke="#B45309"
+      strokeWidth="0.9"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/**
  * 1. Model Bó Hoa Hồng (Dùng khi học sinh cầm hoa tặng Cô / Thầy & Hoa bay)
  */
 export const RoseBouquetModel: React.FC<{

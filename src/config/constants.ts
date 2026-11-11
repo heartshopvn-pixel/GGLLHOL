@@ -14,6 +14,7 @@ import {
   OfferingGiftType,
   RectBounds,
   TempleMonkData,
+  ZombieProjectileScalesConfig,
 } from '../types/game';
 import { BUILT_IN_TIERED_QUIZ_DECKS } from './vocabDecks';
 
@@ -62,10 +63,21 @@ export const DEFAULT_SPRITESHEETS: CustomAssetsConfig = {
   fallingMoneyUrl: null,
   zombieSpriteUrl: null,
   projPencilCaseUrl: null,
+  projBlueRulerUrl: null,
+  projCasioUrl: null,
   projBookUrl: null,
   projChairUrl: null,
   projDeskMateUrl: null,
   milkTeaCupUrl: null,
+};
+
+export const DEFAULT_ZOMBIE_PROJECTILE_SCALES: ZombieProjectileScalesConfig = {
+  pencilCase: 1.0,
+  blueRuler: 1.0,
+  casio: 1.0,
+  book: 1.0,
+  chair: 1.0,
+  deskMate: 1.0,
 };
 
 export const DEFAULT_GIFT_MODEL_SCALES: GiftModelScalesConfig = {
@@ -79,6 +91,8 @@ export const DEFAULT_GIFT_MODEL_SCALES: GiftModelScalesConfig = {
   deskCatOffsetY: 0,
   snackBagOffsetX: 0,
   snackBagOffsetY: 0,
+  deskPigOffsetX: 0,
+  deskPigOffsetY: 0,
   maxDeskCats: 1,
 };
 
@@ -888,7 +902,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   ],
 
   lessonStartTtsText:
-    'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 15 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
+    'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.',
   lessonPrepareTtsText: 'Chuẩn bị',
   lessonPrepareTtsTexts: [
     'Chuẩn bị',
@@ -960,14 +974,14 @@ export const DEFAULT_CONFIG: GameConfig = {
     ],
   },
   lessonRoundEndTtsTemplate:
-    'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Tặng 3 bạn 3 ly trà sữa mat cha lat te phun tóp ping, mấy cưng ở dưới vỗ tay nào !',
+    'Bài kiểm tra kết thúc, cô mời các bạn chiến thắng bước lên bục giảng. Chúc mừng bạn [top1] đạt top 1 với [Điểm top 1] điểm, bạn [top2] đạt top 2 với [Điểm top 2] điểm, bạn [top3] đạt top 3 với [Điểm top 3] điểm. Trao tặng 3 bạn những chiếc cúp vàng danh giá, mấy cưng ở dưới vỗ tay nào !',
   lessonRecordFlowEnabled: true,
   lessonRecordTtsTemplate:
-    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu Kỷ lục hôm nay với [ĐiểmKỷLục] điểm! Cả lớp cho một tràng pháo tay thật lớn nào!',
+    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng! Cả lớp cho một tràng pháo tay thật lớn nào!',
   lessonRecordTtsTemplates: [
-    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu Kỷ lục hôm nay với [ĐiểmKỷLục] điểm! Cả lớp cho một tràng pháo tay thật lớn nào!',
-    'Kỷ lục mới đã được xác lập! Bạn [Top1KỷLục] vừa chiếm lĩnh vị trí Top 1 Kỷ lục hôm nay với [ĐiểmKỷLục] điểm, quá giỏi luôn!',
-    'Tuyệt vời quá! Ngôi vương Kỷ lục hôm nay chính thức gọi tên bạn [Top1KỷLục] với số điểm kỷ lục [ĐiểmKỷLục] điểm!',
+    'Chúc mừng bạn [Top1KỷLục] đã xuất sắc vươn lên dẫn đầu bảng Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng! Cả lớp cho một tràng pháo tay thật lớn nào!',
+    'Kỷ lục mới đã được xác lập! Bạn [Top1KỷLục] vừa chiếm lĩnh vị trí Top 1 Kỷ lục cúp vàng hôm nay với [ĐiểmKỷLục] cúp vàng, quá giỏi luôn!',
+    'Tuyệt vời quá! Ngôi vương Kỷ lục cúp vàng hôm nay chính thức gọi tên bạn [Top1KỷLục] với thành tích [ĐiểmKỷLục] cúp vàng!',
   ],
   lessonPunishmentSingleTtsTemplate:
     'Mời bạn [Tên] mới quậy trong lớp lên đây đứng 1 lượt!',
@@ -990,12 +1004,14 @@ export const DEFAULT_CONFIG: GameConfig = {
   teacherBubbleScale: 1.0,
   supervisorBubbleScale: 1.0,
 
+  filterCorrectAnswerBubble: true,
+
   // Live Text-to-Audio (Giọng đọc riêng ưu tiên của Chủ Phòng / Giáo Viên)
   hostTtsEngine: 'google_stream',
-  hostNodeVoice: 'google-vi-male-deep',
+  hostNodeVoice: 'google-vi-gtx',
   hostSystemVoiceURI: '',
-  hostTtsRate: 0.96,
-  hostTtsPitch: 0.82,
+  hostTtsRate: 1.02,
+  hostTtsPitch: 1.0,
   hostTtsVolume: 1.0,
   hostTtsReverb: 0,
   hostTtsInterrupt: true,
@@ -1063,6 +1079,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   studentDeskGap: 24,
   studentSeatmateGap: 36,
   characterScale: 1.0,
+  paperPlaneScale: 1.0,
+  paperPlaneSpeed: 460,
   femaleTeacherScale: 1.0,
   maleTeacherScale: 1.0,
   walkWobbleIntensity: 1.0,
@@ -1073,8 +1091,10 @@ export const DEFAULT_CONFIG: GameConfig = {
   dustParticleSize: 1.0,
   nameTagFontFamily: '"Be Vietnam Pro", system-ui, sans-serif',
   nameTagScale: 1.0,
+  nameTagHeight: 20,
   nameTagMaxChars: 16,
   nameTagOffsetY: 0,
+  rankTrophyBadgeFontSize: 8,
   top1CrownOffsetY: 0,
   streakTagFontFamily: '"Be Vietnam Pro", system-ui, sans-serif',
   streakTagScale: 1.0,
@@ -1083,11 +1103,19 @@ export const DEFAULT_CONFIG: GameConfig = {
   scoreTagDurationSec: 4,
   scoreChangeFontSize: 14,
   scoreChangeStrokeWidth: 2.5,
-  studentLevelExpEnabled: false,
+  studentLevelExpEnabled: true,
+  ieltsRankBadgeSchemaV1: true,
   vfxFlower10Enabled: true,
   vfxFlower10Scale: 1.0,
   vfxFlower10OffsetX: 0,
   vfxFlower10OffsetY: 0,
+  vfxRoseHeartBurstEnabled: true,
+  vfxRoseHeartBurstScale: 1.0,
+  vfxRoseHeartBurstCount: 14,
+  vfxRoseHeartBurstSpread: 1.0,
+  vfxRoseHeartBurstDurationMs: 1100,
+  vfxRoseHeartBurstOffsetX: 0,
+  vfxRoseHeartBurstOffsetY: 0,
   chatBubbleFontFamily: '"Be Vietnam Pro", system-ui, sans-serif',
   chatBubbleScale: 1.0,
   chatBubbleDurationSec: 12,
@@ -1121,6 +1149,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   zombieGift5ProjectileDurationSec: 1.15,
   zombieGift10ProjectileDurationSec: 1.4,
   zombieGift10PlusProjectileDurationSec: 1.7,
+  zombieProjectileScales: { ...DEFAULT_ZOMBIE_PROJECTILE_SCALES },
   zombieGrowlMp3Url: null,
   zombieGrowlMp3Title: 'Mặc định (Tiếng Zombie gầm gừ)',
   zombieBgmEnabled: true,
@@ -1131,7 +1160,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   zombieTeacherEncourageIntervalSec: 9,
   zombieTeacherEncourageTemplates: [
     'Cố lên các em ơi, thả tim và tặng quà đẩy lùi zombie nào!',
-    'Đừng để zombie tiến lại gần cô giáo, bắn mạnh tay lên cả lớp ơi!',
+    'Đừng để zombie tiến lại gần cô nhé, bắn mạnh tay lên cả lớp ơi!',
     'Lớp 12A1 đoàn kết lại nào, sắp hạ gục được zombie rồi!',
     'Nhanh tay thả tim ném hộp bút liên tục bảo vệ lớp học nào các em!',
     'Tuyệt vời lắm các em, giữ vững nhịp độ tấn công dồn dập vào!',
@@ -1175,8 +1204,9 @@ export const DEFAULT_CONFIG: GameConfig = {
     toastBox: { x: 10, y: 342, width: 166, height: 76 },
     noticeBoardBox: { x: 184, y: 6, width: 172, height: 50 },
     note1Box: { x: 10, y: 60, width: 166, height: 30 },
+    marqueeBox: { x: 10, y: 924, width: 520, height: 28 },
     lotusLeaderboardTitle: 'Bảng Hoa Điểm 10',
-    dailyRecordTitle: 'Kỷ lục hôm nay',
+    dailyRecordTitle: 'Kỷ lục cúp vàng',
     guideTitle: 'Nội Quy & Quà Tặng',
     grandEventTitle: 'Kích hoạt sự kiện',
     pilgrimCountTitle: 'Sĩ số lớp',
@@ -1190,6 +1220,13 @@ export const DEFAULT_CONFIG: GameConfig = {
     note1FontSize: 10,
     note1Opacity: 0.9,
     showNote1Box: true,
+    showMarqueeBox: true,
+    marqueeContent:
+      '📢 Chào mừng các bạn học sinh vào lớp 12A1! Gõ "vào lớp" hoặc trả lời đúng câu hỏi để ngồi vào bàn học • Ngồi trong lớp gõ @tên để ném máy bay giấy và tặng Hoa Hồng trong 10s để gửi bó hoa cho bạn nhé! ❤️',
+    marqueeFontSize: 12,
+    marqueeSpeed: 65,
+    marqueeOpacity: 0.88,
+    marqueeTextColor: '#fde047',
     guideCycle: {
       enabled: false,
       hiddenSec: 5,
@@ -2040,3 +2077,87 @@ wss.on('connection', ws => {
 });
 
 connectTikTok();`;
+
+/**
+ * Hệ thống 17 Cấp độ IELTS (Cấp 1 -> Cấp 17, tương ứng IEL 1.0 -> IEL 9.0, bước nhảy 0.5).
+ * Mốc tổng điểm tích lũy (EXP) để đạt từng cấp:
+ * Lv1: 0 | Lv2: 20 | Lv3: 60 | Lv4: 130 | Lv5: 250 | Lv6: 430 | Lv7: 700 | Lv8: 1080 |
+ * Lv9: 1600 | Lv10: 2300 | Lv11: 3000 | Lv12: 4000 | Lv13: 5150 | Lv14: 6350 | Lv15: 7350 | Lv16: 8500 | Lv17: 10000
+ */
+export const STUDENT_LEVEL_CUMULATIVE_EXP: readonly number[] = [
+  0,
+  20,
+  60,
+  130,
+  250,
+  430,
+  700,
+  1080,
+  1600,
+  2300,
+  3000,
+  4000,
+  5150,
+  6350,
+  7350,
+  8500,
+  10000,
+];
+
+export interface ComputedStudentIeltsLevelInfo {
+  level: number; // 1..17
+  ieltsBand: string; // '1.0' .. '9.0'
+  ieltsLabel: string; // 'IEL 1.0' .. 'IEL 9.0'
+  expPercent: number; // 0..99 khi đang lên cấp tiếp theo, 100 khi đạt cấp tối đa 17 (IEL 9.0)
+  totalExp: number;
+  currentLevelStartExp: number;
+  nextLevelTargetExp: number | null;
+}
+
+export function computeStudentIeltsLevelFromExp(
+  rawExp: number | undefined | null
+): ComputedStudentIeltsLevelInfo {
+  const totalExp = Math.max(0, Math.floor(Number(rawExp) || 0));
+  let lvlIdx = 0;
+  for (let i = STUDENT_LEVEL_CUMULATIVE_EXP.length - 1; i >= 0; i--) {
+    if (totalExp >= STUDENT_LEVEL_CUMULATIVE_EXP[i]) {
+      lvlIdx = i;
+      break;
+    }
+  }
+  const level = lvlIdx + 1;
+  const ieltsBand = (1.0 + lvlIdx * 0.5).toFixed(1);
+  const ieltsLabel = `IEL ${ieltsBand}`;
+  const currentLevelStartExp = STUDENT_LEVEL_CUMULATIVE_EXP[lvlIdx];
+
+  if (lvlIdx >= STUDENT_LEVEL_CUMULATIVE_EXP.length - 1) {
+    return {
+      level,
+      ieltsBand,
+      ieltsLabel,
+      expPercent: 100,
+      totalExp,
+      currentLevelStartExp,
+      nextLevelTargetExp: null,
+    };
+  }
+
+  const nextLevelTargetExp = STUDENT_LEVEL_CUMULATIVE_EXP[lvlIdx + 1];
+  const span = Math.max(1, nextLevelTargetExp - currentLevelStartExp);
+  const gainedInLevel = Math.max(0, totalExp - currentLevelStartExp);
+  const expPercent = Math.min(
+    99,
+    Math.max(0, Math.floor((gainedInLevel / span) * 100))
+  );
+
+  return {
+    level,
+    ieltsBand,
+    ieltsLabel,
+    expPercent,
+    totalExp,
+    currentLevelStartExp,
+    nextLevelTargetExp,
+  };
+}
+
