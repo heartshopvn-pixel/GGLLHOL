@@ -2259,52 +2259,36 @@ export function useClassroomEngine() {
         for (const [, item] of pool.entries()) {
           item.points = 0;
           item.answeredCorrectInRound = false;
+          item.hasCommentedInRound = false;
           item.isGoldenPriority = false;
           item.lastElapsedSec = 999;
           item.idleRounds = 0;
         }
       } else if (opts?.finalizeQuizRound) {
-        for (const [, item] of pool.entries()) {
+        for (const [key, item] of pool.entries()) {
           if (item.isGoldenPriority) {
             item.answeredCorrectInRound = false;
+            item.hasCommentedInRound = false;
             item.idleRounds = 0;
             continue;
           }
-          if (item.answeredCorrectInRound) {
-            item.answeredCorrectInRound = false;
+          const didCommentInRound = Boolean(
+            item.hasCommentedInRound || item.answeredCorrectInRound
+          );
+          item.answeredCorrectInRound = false;
+          item.hasCommentedInRound = false;
+
+          if (didCommentInRound) {
             item.idleRounds = 0;
           } else {
-            // Luật mới: Trả lời sai không reset điểm, giữ nguyên số điểm để vẫn vô lại lớp được nếu top cao
-            item.answeredCorrectInRound = false;
+            // Không phát sinh comment ở lượt này -> tăng đếm số lượt im lặng liên tiếp.
+            // Đủ 3 lượt liên tiếp không phát sinh comment -> xóa khỏi hàng chờ và reset điểm vòng về 0 (giữ nguyên EXP tổng & Cúp Vàng tích lũy).
             item.lastElapsedSec = 999;
             item.idleRounds = (item.idleRounds || 0) + 1;
-          }
-        }
-
-        // Tự động dọn bớt NPC ảo 0 điểm đã chờ quá lâu nếu hàng chờ đông (> 60), tuyệt đối giữ lại người thật (!item.isBot) và người Hóa Vàng
-        if (pool.size > 60) {
-          for (const [key, item] of pool.entries()) {
-            if (
-              item.isBot &&
-              !item.isGoldenPriority &&
-              (item.points || 0) === 0 &&
-              (item.idleRounds || 0) >= 2
-            ) {
+            if (item.idleRounds >= 3) {
+              item.points = 0;
               pool.delete(key);
-              if (pool.size <= 45) break;
-            }
-          }
-        }
-        // Dự phòng nếu hàng chờ vượt quá 250 người thật im lặng >= 8 câu liên tiếp (0 điểm, không xóa người Hóa Vàng)
-        if (pool.size > 250) {
-          for (const [key, item] of pool.entries()) {
-            if (
-              !item.isGoldenPriority &&
-              (item.points || 0) === 0 &&
-              (item.idleRounds || 0) >= 8
-            ) {
-              pool.delete(key);
-              if (pool.size <= 200) break;
+              resetZeroUsers.add(key);
             }
           }
         }
@@ -3395,6 +3379,13 @@ export function useClassroomEngine() {
     [triggerStudentScoreCardPopup]
   );
 
+  const roundEndTargetRoundSeqRef = useRef<number>(0);
+  const awardedTrophyRoundSetRef = useRef<Set<number>>(new Set());
+  const lastTrophyAwardBatchSigRef = useRef<{ sig: string; at: number }>({
+    sig: '',
+    at: 0,
+  });
+
   // Cộng Cúp Vàng cuối vòng Kiểm tra 15 phút (Top 1: +3, Top 2: +2, Top 3: +1) vào:
   // 1) Tổng số cúp vàng học sinh sở hữu dài hạn (studentTrophyMapRef -> hiển thị ở thẻ nhỏ dưới thẻ tên)
   // 2) Bảng "Kỷ lục cúp vàng" trong ngày (dailyRecords -> chỉ tính số cúp đạt được trong ngày, chỉ reset thủ công khi bấm nút Reset)
@@ -3405,17 +3396,72 @@ export function useClassroomEngine() {
         trophies: number;
         avatarUrl?: string | null;
         avatarColor?: string;
-      }>
+      }>,
+      awardRoundSeq?: number
     ) => {
-      const validAwards = awards.filter(
-        (a) => Boolean(a.username && a.username.trim()) && a.trophies > 0
-      );
+      if (
+        typeof awardRoundSeq === 'number' &&
+        awardRoundSeq > 0 &&
+        awardedTrophyRoundSetRef.current.has(awardRoundSeq)
+      ) {
+        return;
+      }
+
+      // Khử trùng lặp học sinh trong cùng 1 đợt trao giải (giữ mức cúp cao nhất nếu trùng tên)
+      const dedupedAwardsMap = new Map<
+        string,
+        {
+          username: string;
+          trophies: number;
+          avatarUrl?: string | null;
+          avatarColor?: string;
+        }
+      >();
+      awards.forEach((a) => {
+        const clean = (a.username || '').trim();
+        const tCount = Math.floor(Number(a.trophies) || 0);
+        if (!clean || tCount <= 0) return;
+        const lowerKey = clean.toLowerCase();
+        const prevItem = dedupedAwardsMap.get(lowerKey);
+        if (!prevItem || tCount > prevItem.trophies) {
+          dedupedAwardsMap.set(lowerKey, {
+            username: clean,
+            trophies: tCount,
+            avatarUrl: a.avatarUrl || prevItem?.avatarUrl,
+            avatarColor: a.avatarColor || prevItem?.avatarColor,
+          });
+        }
+      });
+
+      const validAwards = Array.from(dedupedAwardsMap.values());
       if (validAwards.length === 0) return;
+
+      const nowAward = Date.now();
+      const batchSig = `${awardRoundSeq || 0}|${validAwards
+        .map((a) => `${a.username.toLowerCase()}:${a.trophies}`)
+        .sort()
+        .join(',')}`;
+      if (
+        lastTrophyAwardBatchSigRef.current.sig === batchSig &&
+        nowAward - lastTrophyAwardBatchSigRef.current.at < 15000
+      ) {
+        return;
+      }
+      lastTrophyAwardBatchSigRef.current = { sig: batchSig, at: nowAward };
+
+      if (typeof awardRoundSeq === 'number' && awardRoundSeq > 0) {
+        awardedTrophyRoundSetRef.current.add(awardRoundSeq);
+        if (awardedTrophyRoundSetRef.current.size > 60) {
+          const oldest = awardedTrophyRoundSetRef.current.values().next().value;
+          if (oldest !== undefined) {
+            awardedTrophyRoundSetRef.current.delete(oldest);
+          }
+        }
+      }
 
       const prevRecords = dailyRecordsRef.current;
       const prevTop1 = prevRecords[0];
       let workingRecords = [...prevRecords];
-      const nowAward = Date.now();
 
       validAwards.forEach((award, idx) => {
         const cleanName = award.username.trim();
@@ -3488,6 +3534,7 @@ export function useClassroomEngine() {
       setDailyRecords(top5Records);
       syncService.sendCommand('UPDATE_DAILY_RECORDS', {
         dailyRecords: top5Records,
+        awardedRoundSeq: awardRoundSeq,
       });
 
       if (nextTop1 && nextTop1.points > 0) {
@@ -4132,6 +4179,7 @@ export function useClassroomEngine() {
       if (!isSeated) {
         if (existingInWaitingQueue) {
           existingInWaitingQueue.answeredCorrectInRound = true;
+          existingInWaitingQueue.hasCommentedInRound = true;
           existingInWaitingQueue.lastElapsedSec = elapsedSec;
           existingInWaitingQueue.idleRounds = 0;
           if (avatarUrl && !existingInWaitingQueue.avatarUrl) {
@@ -4153,6 +4201,7 @@ export function useClassroomEngine() {
             points: 0,
             rank: nextRank,
             answeredCorrectInRound: true,
+            hasCommentedInRound: true,
             lastElapsedSec: elapsedSec,
             idleRounds: 0,
           };
@@ -4466,6 +4515,10 @@ export function useClassroomEngine() {
         existing.prayer = req.prayer || existing.prayer;
         existing.isVip = false;
         existing.avatarUrl = req.avatarUrl || existing.avatarUrl;
+        if (!req.isBot && req.prayer && req.prayer.trim()) {
+          existing.hasCommentedInRound = true;
+          existing.idleRounds = 0;
+        }
         return;
       }
 
@@ -4481,6 +4534,7 @@ export function useClassroomEngine() {
         points: req.points || 0,
         rank: nextRank,
         answeredCorrectInRound: false,
+        hasCommentedInRound: Boolean(!req.isBot && req.prayer && req.prayer.trim()),
         lastElapsedSec: 999,
         idleRounds: 0,
       };
@@ -6069,6 +6123,8 @@ export function useClassroomEngine() {
         }
         existingInQueue.coins = (existingInQueue.coins || 0) + giftMeta.coins;
         existingInQueue.avatarUrl = resolvedAvatar;
+        existingInQueue.hasCommentedInRound = true;
+        existingInQueue.idleRounds = 0;
         if (grantsShield && !isAttackerBot) {
           existingInQueue.hasShield = true;
         }
@@ -6090,6 +6146,7 @@ export function useClassroomEngine() {
               : bonusPts,
           rank: 1,
           answeredCorrectInRound: !isAttackerBot,
+          hasCommentedInRound: true,
           lastElapsedSec: 0.1,
           idleRounds: 0,
           isGoldenPriority: !isAttackerBot,
@@ -6508,7 +6565,12 @@ export function useClassroomEngine() {
         );
       }
 
-      const isAlreadyInQueue = waitingPoolRef.current.has(lowerUser);
+      const queuedNowForActivity = waitingPoolRef.current.get(lowerUser);
+      if (queuedNowForActivity && !isAdmittingFromQueue && safeComment.trim()) {
+        queuedNowForActivity.hasCommentedInRound = true;
+        queuedNowForActivity.idleRounds = 0;
+      }
+      const isAlreadyInQueue = Boolean(queuedNowForActivity);
 
       // Nếu là bình luận thường (coins <= 0, không phải forceAdmitFromQueue):
       // Bắt buộc phải có trong Lớp, hoặc có trong Hàng Chờ, hoặc gõ "vào lớp", hoặc vừa trả lời đúng câu hỏi!
@@ -6820,6 +6882,14 @@ export function useClassroomEngine() {
       const existingExp = getStudentExpById(safeName);
       const existingLevel = getStudentLevelFromExp(existingExp);
       const existingTrophies = getStudentTrophiesById(safeName);
+      const initialEntryComment =
+        isAdmittingFromQueue || hideCorrectAnswerBubble ? '' : safeComment;
+      const shouldShowInitialEntryBubble = Boolean(
+        !isAdmittingFromQueue &&
+          !hideCorrectAnswerBubble &&
+          initialEntryComment.trim() &&
+          !isJoinClassCommand(initialEntryComment)
+      );
       const newStudent: PilgrimData = {
         id,
         username: safeName,
@@ -6827,7 +6897,7 @@ export function useClassroomEngine() {
         exp: existingExp,
         level: existingLevel,
         goldTrophies: existingTrophies,
-        prayer: hideCorrectAnswerBubble ? '' : safeComment,
+        prayer: initialEntryComment,
         gender: opts.isBot
           ? resolveBalancedNpcGender(safeName, 'class', genderCmd || opts.gender)
           : resolveUserGender(safeName, genderCmd || opts.gender),
@@ -6858,23 +6928,11 @@ export function useClassroomEngine() {
             ? npcAvatarsRef.current[id % npcAvatarsRef.current.length]
             : null),
         hairSeed: id,
-        hasComment: Boolean(
-          !hideCorrectAnswerBubble &&
-            safeComment.trim() &&
-            !isJoinClassCommand(safeComment)
-        ),
-        chatBubbleKey:
-          !hideCorrectAnswerBubble &&
-          safeComment.trim() &&
-          !isJoinClassCommand(safeComment)
-            ? issueChatBubbleKey()
-            : 0,
-        chatBubbleUntil:
-          !hideCorrectAnswerBubble &&
-          safeComment.trim() &&
-          !isJoinClassCommand(safeComment)
-            ? Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000
-            : 0,
+        hasComment: shouldShowInitialEntryBubble,
+        chatBubbleKey: shouldShowInitialEntryBubble ? issueChatBubbleKey() : 0,
+        chatBubbleUntil: shouldShowInitialEntryBubble
+          ? Date.now() + (cfg.chatBubbleDurationSec || 12) * 1000
+          : 0,
         isSimulatedTest: opts.isSimulatedTest,
         isGoldenPriority: Boolean(
           (opts as { isGoldenPriority?: boolean }).isGoldenPriority
@@ -9112,7 +9170,7 @@ export function useClassroomEngine() {
             existingInPool?.id ||
             `wq_evict_${nowReturn}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
           username: ev.username,
-          prayer: 'học ké',
+          prayer: '',
           gender: ev.gender,
           isVip: ev.isVip,
           coins: 0,
@@ -9122,6 +9180,7 @@ export function useClassroomEngine() {
           points: keptPts,
           rank: waitingPoolRef.current.size + 1,
           answeredCorrectInRound: false,
+          hasCommentedInRound: false,
           lastElapsedSec: 999,
           idleRounds: 0,
         });
@@ -9186,7 +9245,7 @@ export function useClassroomEngine() {
           .toString(36)
           .slice(2, 6)}`,
         username: chosenName,
-        prayer: 'vào lớp',
+        prayer: '',
         gender: resolveBalancedNpcGender(chosenName, 'queue'),
         isVip: false,
         coins: 0,
@@ -9196,6 +9255,7 @@ export function useClassroomEngine() {
         points: 0,
         rank: pool.size + 1,
         answeredCorrectInRound: false,
+        hasCommentedInRound: false,
         lastElapsedSec: 999,
         idleRounds: 0,
       });
@@ -9837,6 +9897,7 @@ export function useClassroomEngine() {
         if (qEntry) {
           qEntry.points = (qEntry.points || 0) + pts;
           qEntry.answeredCorrectInRound = true;
+          qEntry.hasCommentedInRound = true;
           qEntry.idleRounds = 0;
         }
         const prevExp = studentExpMapRef.current.get(lower) || 0;
@@ -9857,10 +9918,19 @@ export function useClassroomEngine() {
         }
       }
 
-      // 2. Lazy Calculation 1 lần cho Hàng Chờ
+      // 2. Lazy Calculation 1 lần cho Hàng Chờ (dọn các bạn trong hàng chờ không comment 3 lượt liên tiếp & reset điểm vòng của họ về 0, giữ nguyên điểm tổng EXP & Cúp Vàng)
       const resetUsers = recomputeWaitingQueueLazy({
         finalizeQuizRound: true,
       });
+      if (resetUsers.size > 0) {
+        const filteredRoundDonors = lotusDonorsRef.current.filter(
+          (d) => !resetUsers.has(d.username.trim().toLowerCase())
+        );
+        if (filteredRoundDonors.length !== lotusDonorsRef.current.length) {
+          lotusDonorsRef.current = filteredRoundDonors;
+          setLotusDonors(filteredRoundDonors);
+        }
+      }
 
       // 3. Cộng điểm & EXP (= Điểm) câu trả lời đúng cho học sinh đang ngồi trong lớp (classWinners) ngay khi vào Luồng 4
       const classWinnerMap = new Map<string, number>();
@@ -10176,8 +10246,16 @@ export function useClassroomEngine() {
         }
       });
 
-      if (!isPassiveTab && awardsToCommit.length > 0) {
-        awardStudentGoldTrophies(awardsToCommit);
+      const targetRoundSeq =
+        roundEndTargetRoundSeqRef.current ||
+        classBoardStateRef.current.roundSeq ||
+        1;
+      if (
+        !isPassiveTab &&
+        awardsToCommit.length > 0 &&
+        !awardedTrophyRoundSetRef.current.has(targetRoundSeq)
+      ) {
+        awardStudentGoldTrophies(awardsToCommit, targetRoundSeq);
         flushStudentExpStorage(false, true);
       }
 
@@ -10260,6 +10338,9 @@ export function useClassroomEngine() {
 
       const cfg = configRef.current;
 
+      // Bù trễ phản hồi server 2s: Sau khi đồng hồ hiển thị đếm về 0s, vẫn giữ luồng 'asking' thêm 2000ms (2s) để nhận câu trả lời thực tế
+      const ASKING_POST_ZERO_GRACE_MS = 2000;
+
       let shouldAdvance = false;
       if (prev.phase === 'lesson_start') {
         shouldAdvance =
@@ -10268,12 +10349,19 @@ export function useClassroomEngine() {
       } else if (prev.phase === 'preparing') {
         shouldAdvance = nextLeft <= 0;
       } else if (prev.phase === 'asking') {
+        const realAskExpired =
+          prev.phaseEndAt && prev.phaseEndAt > 0
+            ? nowWallMs >= prev.phaseEndAt + ASKING_POST_ZERO_GRACE_MS
+            : nextLeft <= 0 &&
+              nextElapsed >=
+                (prev.totalDurationMs || 0) + ASKING_POST_ZERO_GRACE_MS;
         const waitingForIdleChatFinish =
           Boolean(prev.idleChatTriggered) &&
           Boolean(prev.activeFlowToken) &&
           !prev.ttsFinishedForPhase &&
-          nextElapsed < prev.totalDurationMs + 9000;
-        shouldAdvance = nextLeft <= 0 && !waitingForIdleChatFinish;
+          nextElapsed <
+            prev.totalDurationMs + ASKING_POST_ZERO_GRACE_MS + 9000;
+        shouldAdvance = realAskExpired && !waitingForIdleChatFinish;
       } else if (prev.phase === 'answer_flash') {
         const postTtsWaitMs4 =
           Math.max(0, Number(cfg.lessonFlow4PostTtsDelaySec ?? 1)) * 1000;
@@ -10306,11 +10394,13 @@ export function useClassroomEngine() {
           nextLeft <= 0;
       }
 
+      const followerExtraGraceMs =
+        prev.phase === 'asking' ? ASKING_POST_ZERO_GRACE_MS + 2500 : 2500;
       const followerGraceExpired =
         isPassiveFollowerTab &&
         shouldAdvance &&
         nextLeft <= 0 &&
-        nextElapsed >= (prev.totalDurationMs || 3000) + 2500;
+        nextElapsed >= (prev.totalDurationMs || 3000) + followerExtraGraceMs;
 
       if (!shouldAdvance || (isPassiveFollowerTab && !followerGraceExpired)) {
         const nextStepNum =
@@ -10821,14 +10911,17 @@ export function useClassroomEngine() {
           }
         });
 
-        // Tập hợp và xếp hạng toàn bộ học sinh đang ở trong lớp
-        const activeClassStudents: Array<{
-          pilgrimId: number;
-          username: string;
-          points: number;
-          avatarUrl?: string | null;
-          avatarColor?: string;
-        }> = [];
+        // Tập hợp và xếp hạng toàn bộ học sinh đang ở trong lớp (khử trùng lặp theo username để 1 học sinh không bao giờ chiếm 2 hạng bục giảng)
+        const dedupedClassMap = new Map<
+          string,
+          {
+            pilgrimId: number;
+            username: string;
+            points: number;
+            avatarUrl?: string | null;
+            avatarColor?: string;
+          }
+        >();
         for (const p of pilgrimsRef.current) {
           if (
             p.state === 'leave_side_to_aisle' ||
@@ -10842,37 +10935,64 @@ export function useClassroomEngine() {
             donorPtsMap.get(key) ?? 0,
             p.currentScoreDisplay ?? 0
           );
-          activeClassStudents.push({
-            pilgrimId: p.id,
-            username: p.username,
-            points: pts,
-            avatarUrl: p.avatarUrl,
-            avatarColor: p.avatarColor,
-          });
+          const prevSt = dedupedClassMap.get(key);
+          if (!prevSt || pts > prevSt.points) {
+            dedupedClassMap.set(key, {
+              pilgrimId: p.id,
+              username: p.username,
+              points: pts,
+              avatarUrl: p.avatarUrl,
+              avatarColor: p.avatarColor,
+            });
+          }
         }
-        activeClassStudents.sort((a, b) => b.points - a.points);
+        const activeClassStudents = Array.from(dedupedClassMap.values()).sort(
+          (a, b) => b.points - a.points
+        );
 
         const currentRoundQuestionNum = (prev.roundQuestionIndex ?? 0) + 1;
         const isFinalQuestionOfRound =
           currentRoundQuestionNum >= QUESTIONS_PER_ROUND;
 
-        // NẾU ĐÂY LÀ CÂU CUỐI CÙNG (CÂU 15): CHÈN "LUỒNG KẾT THÚC" (round_end) THAY CHO LUỒNG 6
+        // NẾU ĐÂY LÀ CÂU CUỐI CÙNG: CHÈN "LUỒNG KẾT THÚC" (round_end) THAY CHO LUỒNG 6
         if (isFinalQuestionOfRound) {
-          const top1Entry = activeClassStudents[0] || {
-            pilgrimId: 0,
-            username: prev.classWinners?.[0]?.username || 'Học Sinh Top 1',
-            points: prev.classWinners?.[0]?.points || 10,
+          const pickedLowerSet = new Set<string>();
+          const pickUniquePodiumEntry = (
+            rankNum: 1 | 2 | 3,
+            fallbackPts: number
+          ) => {
+            for (const cand of activeClassStudents) {
+              const lower = cand.username.trim().toLowerCase();
+              if (lower && !pickedLowerSet.has(lower)) {
+                pickedLowerSet.add(lower);
+                return cand;
+              }
+            }
+            for (const cw of prev.classWinners || []) {
+              const lower = (cw.username || '').trim().toLowerCase();
+              if (lower && !pickedLowerSet.has(lower)) {
+                pickedLowerSet.add(lower);
+                return {
+                  pilgrimId: cw.pilgrimId || 0,
+                  username: cw.username,
+                  points: cw.points || fallbackPts,
+                  avatarUrl: cw.avatarUrl,
+                  avatarColor: cw.avatarColor,
+                };
+              }
+            }
+            const placeholderName = `Học Sinh Top ${rankNum}`;
+            pickedLowerSet.add(placeholderName.toLowerCase());
+            return {
+              pilgrimId: 0,
+              username: placeholderName,
+              points: fallbackPts,
+            };
           };
-          const top2Entry = activeClassStudents[1] || {
-            pilgrimId: 0,
-            username: prev.classWinners?.[1]?.username || 'Học Sinh Top 2',
-            points: prev.classWinners?.[1]?.points || 8,
-          };
-          const top3Entry = activeClassStudents[2] || {
-            pilgrimId: 0,
-            username: prev.classWinners?.[2]?.username || 'Học Sinh Top 3',
-            points: prev.classWinners?.[2]?.points || 7,
-          };
+
+          const top1Entry = pickUniquePodiumEntry(1, 10);
+          const top2Entry = pickUniquePodiumEntry(2, 8);
+          const top3Entry = pickUniquePodiumEntry(3, 7);
 
           const podiumWinnersList: Array<{
             rank: 1 | 2 | 3;
@@ -10909,6 +11029,7 @@ export function useClassroomEngine() {
           ];
 
           roundEndWinnersRef.current = podiumWinnersList;
+          roundEndTargetRoundSeqRef.current = prev.roundSeq || 1;
           roundEndMilkTeaTriggeredRef.current = false;
 
           // Cho 3 bạn chiến thắng bước lên bục giảng theo đúng 5 vị trí phạt (lấy vị trí P1, P3, P5: Top 2 đứng P1, Top 1 đứng P3, Top 3 đứng P5)
@@ -13554,6 +13675,12 @@ export function useClassroomEngine() {
           setLotusDonors([]);
           break;
         case 'UPDATE_DAILY_RECORDS':
+          if (
+            typeof p.awardedRoundSeq === 'number' &&
+            p.awardedRoundSeq > 0
+          ) {
+            awardedTrophyRoundSetRef.current.add(p.awardedRoundSeq);
+          }
           if (Array.isArray(p.dailyRecords)) {
             const sliced = p.dailyRecords.slice(0, 5);
             dailyRecordsRef.current = sliced;
@@ -13684,6 +13811,7 @@ export function useClassroomEngine() {
                 const qEntry = waitingPoolRef.current.get(lower);
                 if (qEntry) {
                   qEntry.answeredCorrectInRound = true;
+                  qEntry.hasCommentedInRound = true;
                   qEntry.idleRounds = 0;
                 }
               });
@@ -13766,7 +13894,12 @@ export function useClassroomEngine() {
                 incoming.podiumWinners.length > 0
               ) {
                 roundEndWinnersRef.current = incoming.podiumWinners;
-                roundEndMilkTeaTriggeredRef.current = false;
+                roundEndTargetRoundSeqRef.current = incoming.roundSeq || 1;
+                if (
+                  !awardedTrophyRoundSetRef.current.has(incoming.roundSeq || 1)
+                ) {
+                  roundEndMilkTeaTriggeredRef.current = false;
+                }
                 const lineCenter = configRef.current.punishmentLinePos || {
                   x: 270,
                   y: 458,

@@ -1105,6 +1105,7 @@ export interface QueuedPilgrimRequest {
   points?: number;
   rank?: number;
   answeredCorrectInRound?: boolean;
+  hasCommentedInRound?: boolean;
   lastElapsedSec?: number;
   idleRounds?: number;
   isGoldenPriority?: boolean;
