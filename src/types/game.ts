@@ -586,6 +586,11 @@ export interface GameConfig {
   answerRevealMp3Url?: string | null;
   answerRevealMp3Title?: string;
 
+  // Âm thanh tiếng vỗ tay chúc mừng cuối vòng kiểm tra (Luồng Kết Thúc)
+  applauseMp3Url?: string | null;
+  applauseMp3Title?: string;
+  applauseVolume?: number;
+
   // Âm thanh khi bắt đầu thực hiện tặng quà (7 món quà sự kiện)
   giftSoundEnabled?: boolean;
   giftSoundVolume?: number;

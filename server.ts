@@ -626,6 +626,71 @@ async function startServer() {
   const inFlightGoogleTts = new Map<string, Promise<Buffer>>();
   const MAX_TTS_CACHE_ITEMS = 240;
 
+  function splitServerViTtsChunks(rawText: string, maxChars = 150): string[] {
+    const clean = String(rawText || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+    if (clean.length <= maxChars) return [clean];
+    const parts: string[] = [];
+    const words = clean.split(' ');
+    let cur = '';
+    for (const w of words) {
+      const next = cur ? `${cur} ${w}` : w;
+      if (next.length <= maxChars) {
+        cur = next;
+      } else {
+        if (cur) parts.push(cur);
+        cur = w.slice(0, maxChars);
+      }
+    }
+    if (cur) parts.push(cur);
+    return parts;
+  }
+
+  async function fetchSingleGoogleWarmViSegment(segment: string): Promise<Buffer> {
+    const encoded = encodeURIComponent(segment);
+    const mirrors = [
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=${encoded}`,
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
+      `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
+    ];
+    let lastErr: unknown = new Error('Google TTS unavailable');
+    for (const url of mirrors) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2800);
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            Referer: 'https://translate.google.com/',
+          },
+        });
+        clearTimeout(timeout);
+        if (!response.ok) {
+          lastErr = new Error(`HTTP ${response.status}`);
+          continue;
+        }
+        const ct = (response.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html') || ct.includes('application/json')) {
+          lastErr = new Error(`Unexpected content-type ${ct}`);
+          continue;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const buf = Buffer.from(arrayBuffer);
+        if (buf.length < 128) {
+          lastErr = new Error('Empty Google TTS buffer');
+          continue;
+        }
+        return buf;
+      } catch (err) {
+        clearTimeout(timeout);
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  }
+
   async function fetchGoogleWarmViBuffer(text: string): Promise<{
     buf: Buffer;
     source: 'ram-cache' | 'google-gtx';
@@ -645,38 +710,21 @@ async function startServer() {
     }
 
     const task = (async () => {
-      const encoded = encodeURIComponent(text);
-      const gtxUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=${encoded}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3200);
-      try {
-        const response = await fetch(gtxUrl, {
-          signal: controller.signal,
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            Referer: 'https://translate.google.com/',
-          },
-        });
-        clearTimeout(timeout);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const buf = Buffer.from(arrayBuffer);
-        if (buf.length < 128) {
-          throw new Error('Empty Google TTS buffer');
-        }
-        if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
-          const oldestKey = ttsBufferCache.keys().next().value;
-          if (oldestKey) ttsBufferCache.delete(oldestKey);
-        }
-        ttsBufferCache.set(cacheKey, buf);
-        return buf;
-      } catch (err) {
-        clearTimeout(timeout);
-        throw err;
+      const segments = splitServerViTtsChunks(text, 150);
+      if (segments.length === 0) {
+        throw new Error('Empty TTS text');
       }
+      const buffers: Buffer[] = [];
+      for (const seg of segments) {
+        buffers.push(await fetchSingleGoogleWarmViSegment(seg));
+      }
+      const combined = buffers.length === 1 ? buffers[0] : Buffer.concat(buffers);
+      if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
+        const oldestKey = ttsBufferCache.keys().next().value;
+        if (oldestKey) ttsBufferCache.delete(oldestKey);
+      }
+      ttsBufferCache.set(cacheKey, combined);
+      return combined;
     })();
 
     inFlightGoogleTts.set(cacheKey, task);
@@ -692,7 +740,7 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Private-Network', 'true');
     try {
-      const text = String(req.query.text || '').trim().slice(0, 195);
+      const text = String(req.query.text || '').trim().slice(0, 360);
       if (!text) {
         res.status(400).end();
         return;

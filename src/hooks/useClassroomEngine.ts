@@ -1130,6 +1130,7 @@ export function useClassroomEngine() {
               ? Boolean(parsed.config.studentLevelExpEnabled)
               : true,
             ieltsRankBadgeSchemaV1: true,
+            ttsEnabled: parsed.config.ttsEnabled !== false,
             nodeTtsEndpoint: '/api/tts',
             ttsEngine: normalizedTtsEngine,
             nodeVoice: 'google-vi-warm',
@@ -3003,6 +3004,10 @@ export function useClassroomEngine() {
                       prev.answerRevealMp3Url ||
                       savedFull?.config?.answerRevealMp3Url ||
                       null,
+                    applauseMp3Url:
+                      prev.applauseMp3Url ||
+                      savedFull?.config?.applauseMp3Url ||
+                      null,
                     zombieGrowlMp3Url:
                       prev.zombieGrowlMp3Url ||
                       savedFull?.config?.zombieGrowlMp3Url ||
@@ -3341,6 +3346,11 @@ export function useClassroomEngine() {
             strippedConfig.answerRevealMp3Url.length > 10000
               ? null
               : strippedConfig.answerRevealMp3Url,
+          applauseMp3Url:
+            strippedConfig.applauseMp3Url &&
+            strippedConfig.applauseMp3Url.length > 10000
+              ? null
+              : strippedConfig.applauseMp3Url,
           zombieGrowlMp3Url:
             strippedConfig.zombieGrowlMp3Url &&
             strippedConfig.zombieGrowlMp3Url.length > 10000
@@ -4339,10 +4349,12 @@ export function useClassroomEngine() {
           setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
           triggerRoundEndMilkTeaRef.current();
 
-          // Cô đọc xong câu "mấy cưng ở dưới vỗ tay nào !" -> Phát âm thanh vỗ tay chúc mừng (3.4s), âm thanh vỗ tay kết thúc mới kết thúc vòng và sang game mới!
+          // Cô đọc xong câu "mấy cưng ở dưới vỗ tay nào !" -> Phát âm thanh vỗ tay chúc mừng (mặc định 3.4s hoặc đúng thời lượng file upload), tiếng vỗ tay kết thúc mới kết thúc vòng và sang game mới!
           const applauseDurMs = soundEngine.playApplauseSfx(
             configRef.current.ttsVolume || 1,
-            3400
+            3400,
+            configRef.current.applauseMp3Url,
+            configRef.current.applauseVolume
           );
           const extendBoard: ClassBoardRuntimeState = {
             ...classBoardStateRef.current,
@@ -12039,7 +12051,12 @@ export function useClassroomEngine() {
               setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
               triggerRoundEndMilkTeaRef.current();
               if (!enqueuedRoundEnd) {
-                soundEngine.playApplauseSfx(cfg.ttsVolume || 1, 3400);
+                soundEngine.playApplauseSfx(
+                  cfg.ttsVolume || 1,
+                  3400,
+                  cfg.applauseMp3Url,
+                  cfg.applauseVolume
+                );
               }
             }, 7000);
           }
@@ -17461,12 +17478,21 @@ export function useClassroomEngine() {
   }, [flushPendingGiftPilgrims]);
 
   const handleTestTTS = useCallback(() => {
+    const testText =
+      'Chào mừng các em học sinh đến với lớp 12A1, chúc cả lớp học tập tốt và đạt nhiều Hoa Điểm 10';
     soundEngine.enqueueTTS(
-      'Chào mừng các em học sinh đến với lớp 12A1, chúc cả lớp học tập tốt và đạt nhiều Hoa Điểm 10',
+      testText,
       true,
-      configRef.current,
+      { ...configRef.current, ttsEnabled: true },
       { reason: 'manual' }
     );
+    if (peerCountsRef.current.obsPeers > 0) {
+      syncService.sendCommand('HOST_LIVE_TTS', {
+        text: testText,
+        interrupt: false,
+        speakerRole: 'abbot',
+      });
+    }
   }, []);
 
   const handleSpeakHostLiveText = useCallback(

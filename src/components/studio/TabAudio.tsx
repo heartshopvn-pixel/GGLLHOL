@@ -1435,6 +1435,117 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
         </div>
 
+        {/* Âm thanh Tiếng Vỗ Tay Chúc Mừng (Luồng Kết Thúc vòng kiểm tra) */}
+        <div className="p-2 rounded-lg bg-stone-950/90 border border-amber-500/45 space-y-1.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="text-xs font-bold text-amber-200">
+                👏 Tiếng Vỗ Tay Chúc Mừng (Cuối Vòng)
+              </span>
+              <span className="text-[10px] text-emerald-300 truncate max-w-[130px]">
+                ({config.applauseMp3Title || 'Mặc định'})
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  soundEngine.playApplauseSfx(
+                    config.ttsVolume || 1,
+                    3400,
+                    config.applauseMp3Url,
+                    config.applauseVolume ?? 1,
+                    true
+                  )
+                }
+                className="px-2 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 border border-amber-400/50 text-[10px] font-bold text-amber-200 cursor-pointer"
+              >
+                Thử
+              </button>
+              <button
+                type="button"
+                onClick={() => soundEngine.stopApplauseSfx()}
+                className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[10px] font-semibold text-stone-300 cursor-pointer"
+                title="Dừng nghe thử tiếng vỗ tay"
+              >
+                Dừng
+              </button>
+              <label className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[10px] font-semibold text-amber-300 flex items-center gap-1 cursor-pointer">
+                <Upload className="w-3 h-3" />
+                <span>Upload Audio</span>
+                <input
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        if (typeof reader.result === 'string') {
+                          const dataUrl = reader.result;
+                          onUpdateConfig({
+                            applauseMp3Url: dataUrl,
+                            applauseMp3Title: f.name,
+                          });
+                          soundEngine.playApplauseSfx(
+                            config.ttsVolume || 1,
+                            3400,
+                            dataUrl,
+                            config.applauseVolume ?? 1,
+                            true
+                          );
+                        }
+                      };
+                      reader.readAsDataURL(f);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              {config.applauseMp3Url && (
+                <button
+                  type="button"
+                  title="Khôi phục tiếng vỗ tay mặc định"
+                  onClick={() => {
+                    soundEngine.stopApplauseSfx();
+                    onUpdateConfig({
+                      applauseMp3Url: null,
+                      applauseMp3Title: 'Mặc định',
+                    });
+                  }}
+                  className="p-1 rounded bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 text-[10.5px] text-stone-300">
+            <span>Âm lượng tiếng vỗ tay:</span>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="range"
+                min={0.1}
+                max={1.0}
+                step={0.05}
+                value={config.applauseVolume ?? 1.0}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    applauseVolume: parseFloat(e.target.value),
+                  })
+                }
+                className="w-28 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <span className="font-mono text-amber-300 w-10 text-right">
+                {Math.round((config.applauseVolume ?? 1.0) * 100)}%
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* Bong bóng chat cảm ơn quà của Cô Giáo & Thầy Giám Thị */}
         <label className="p-2 rounded-lg bg-pink-950/30 border border-pink-400/40 flex items-center justify-between gap-2 cursor-pointer">
           <span className="text-xs font-bold text-pink-200 flex items-center gap-1.5">
@@ -2905,10 +3016,87 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 />
               </div>
 
+              <div className="flex items-center justify-between gap-2 flex-wrap text-[10px] bg-stone-900/80 px-2 py-1.5 rounded border border-amber-500/30">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-bold text-amber-200">
+                    👏 Âm thanh tiếng vỗ tay:
+                  </span>
+                  <span className="text-emerald-300 truncate max-w-[160px]">
+                    {config.applauseMp3Title || 'Mặc định'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      soundEngine.playApplauseSfx(
+                        config.ttsVolume || 1,
+                        3400,
+                        config.applauseMp3Url,
+                        config.applauseVolume ?? 1,
+                        true
+                      )
+                    }
+                    className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/45 font-bold text-amber-200 cursor-pointer"
+                  >
+                    Thử vỗ tay
+                  </button>
+                  <label className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 font-semibold text-amber-300 flex items-center gap-1 cursor-pointer">
+                    <Upload className="w-3 h-3" />
+                    <span>Upload tiếng vỗ tay</span>
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            if (typeof reader.result === 'string') {
+                              const dataUrl = reader.result;
+                              onUpdateConfig({
+                                applauseMp3Url: dataUrl,
+                                applauseMp3Title: f.name,
+                              });
+                              soundEngine.playApplauseSfx(
+                                config.ttsVolume || 1,
+                                3400,
+                                dataUrl,
+                                config.applauseVolume ?? 1,
+                                true
+                              );
+                            }
+                          };
+                          reader.readAsDataURL(f);
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {config.applauseMp3Url && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.stopApplauseSfx();
+                        onUpdateConfig({
+                          applauseMp3Url: null,
+                          applauseMp3Title: 'Mặc định',
+                        });
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
+                      title="Khôi phục tiếng vỗ tay mặc định"
+                    >
+                      Mặc định
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
                 <span className="text-stone-400">Hiệu ứng kết thúc vòng:</span>
                 <span className="font-mono font-bold text-emerald-300">
-                  🔒 Vỗ tay xong → Reset toàn bộ điểm về 0 (giữ nguyên chỗ ngồi) & sang vòng 10 câu mới
+                  🔒 Vỗ tay xong → Reset toàn bộ điểm về 0 (giữ nguyên chỗ ngồi) &amp; sang vòng 10 câu mới
                 </span>
               </div>
             </div>
@@ -3167,27 +3355,55 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           <h2 className="text-xs font-bold text-amber-200">
             Bộ Giọng Đọc Toàn Game (Cô Giáo • Sự Kiện • Học Sinh)
           </h2>
-          <button
-            type="button"
-            onClick={() => {
-              const isAnyOn = Boolean(
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                if (!config.ttsEnabled) {
+                  onUpdateConfig({ ttsEnabled: true });
+                }
+                onTestTTS();
+              }}
+              className="px-2 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 border border-amber-400/60 text-[10px] font-bold text-amber-200 flex items-center gap-1 cursor-pointer transition"
+            >
+              <Volume2 className="w-3 h-3 text-amber-300" />
+              <span>Thử giọng đang chọn</span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({ ttsEnabled: !config.ttsEnabled })
+              }
+              className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
+                config.ttsEnabled
+                  ? 'bg-cyan-400 text-stone-950'
+                  : 'bg-rose-950/90 border border-rose-500/50 text-rose-200'
+              }`}
+            >
+              {config.ttsEnabled ? '🔊 Giọng Chính: BẬT' : '🔇 Giọng Chính: TẮT'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const isAnyOn = Boolean(
+                  config.realPrayerTtsEnabled || config.npcPrayerTtsEnabled
+                );
+                onUpdateConfig({
+                  realPrayerTtsEnabled: !isAnyOn,
+                  npcPrayerTtsEnabled: !isAnyOn,
+                });
+              }}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
                 config.realPrayerTtsEnabled || config.npcPrayerTtsEnabled
-              );
-              onUpdateConfig({
-                realPrayerTtsEnabled: !isAnyOn,
-                npcPrayerTtsEnabled: !isAnyOn,
-              });
-            }}
-            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
-              config.realPrayerTtsEnabled || config.npcPrayerTtsEnabled
-                ? 'bg-emerald-500 text-stone-950'
-                : 'bg-rose-950/90 border border-rose-500/40 text-rose-300'
-            }`}
-          >
-            {config.realPrayerTtsEnabled || config.npcPrayerTtsEnabled
-              ? '🔊 Đọc Comment Trong Lớp: BẬT'
-              : '🔇 Đọc Comment Học Sinh: TẮT'}
-          </button>
+                  ? 'bg-emerald-500 text-stone-950'
+                  : 'bg-rose-950/90 border border-rose-500/40 text-rose-300'
+              }`}
+            >
+              {config.realPrayerTtsEnabled || config.npcPrayerTtsEnabled
+                ? '🔊 Đọc Comment: BẬT'
+                : '🔇 Đọc Comment: TẮT'}
+            </button>
+          </div>
         </div>
 
         {/* 2 lựa chọn giọng Tiếng Việt sạch 100% */}
@@ -3200,6 +3416,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               type="button"
               onClick={() =>
                 onUpdateConfig({
+                  ttsEnabled: true,
                   ttsEngine: 'web_speech',
                   hostTtsEngine: 'web_speech',
                   ttsPitch: 1.0,
@@ -3229,6 +3446,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               type="button"
               onClick={() =>
                 onUpdateConfig({
+                  ttsEnabled: true,
                   ttsEngine: 'google_stream',
                   hostTtsEngine: 'google_stream',
                   nodeVoice: 'google-vi-warm',
@@ -3258,6 +3476,16 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               </div>
             </button>
           </div>
+          {liveDiagnostic && (
+            <div className="px-2 py-1 rounded bg-stone-950/90 border border-stone-800 flex items-center justify-between gap-2 text-[9.5px]">
+              <span className="text-stone-300 truncate">
+                Trạng thái: <b className="text-amber-300">{liveDiagnostic.statusHeadline}</b>
+              </span>
+              <span className="text-stone-400 font-mono shrink-0">
+                {liveDiagnostic.activeServerLabel}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-[10px] text-emerald-200 leading-relaxed">

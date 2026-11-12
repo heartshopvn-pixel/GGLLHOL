@@ -248,13 +248,15 @@ test('Sequential FIFO batch accumulation with synchronous ref updates preserves 
   assert.equal(classWinners[2].points, 7);
 });
 
-test('NODE_SERVER_CODE template compiles as valid JavaScript with msgId and FIFO batch queue', () => {
+test('NODE_SERVER_CODE template compiles as valid JavaScript with msgId, FIFO batch queue, and Google Warm TTS proxy', () => {
   assert.doesNotThrow(() => {
     new vm.Script(NODE_SERVER_CODE, { filename: 'server.js' });
   });
   assert.ok(NODE_SERVER_CODE.includes('extractOrderFields'));
   assert.ok(NODE_SERVER_CODE.includes('flushCloudWebhookQueue'));
   assert.ok(NODE_SERVER_CODE.includes("type: 'batch'"));
+  assert.ok(NODE_SERVER_CODE.includes("app.get('/api/tts'"));
+  assert.ok(NODE_SERVER_CODE.includes("app.get('/tts'"));
 });
 
 test('isLateCorrectQuizAnswerPure detects late right answers after 2s grace and skips timely winners or bots', () => {

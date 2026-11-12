@@ -859,6 +859,10 @@ export const DEFAULT_CONFIG: GameConfig = {
   answerRevealMp3Url: null,
   answerRevealMp3Title: 'Hiệu ứng mặc định',
 
+  applauseMp3Url: null,
+  applauseMp3Title: 'Mặc định',
+  applauseVolume: 1.0,
+
   giftSoundEnabled: true,
   giftSoundVolume: 1.0,
   giftSoundVolumes: {},
@@ -1612,6 +1616,67 @@ app.post('/disconnect', async (req, res) => {
   broadcast(lastStatusPayload);
   res.json({ ok: true });
 });
+
+const localTtsCache = new Map();
+async function handleLocalGoogleWarmTts(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  try {
+    const text = String(req.query?.text || '').replace(/\\s+/g, ' ').trim().slice(0, 240);
+    if (!text) return res.status(400).end();
+    const cacheKey = 'vi:' + text;
+    if (localTtsCache.has(cacheKey)) {
+      const cached = localTtsCache.get(cacheKey);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('X-TTS-Source', 'ram-cache');
+      return res.send(cached);
+    }
+    const enc = encodeURIComponent(text);
+    const urls = [
+      'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=' + enc,
+      'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc,
+      'https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc,
+    ];
+    let audioBuf = null;
+    for (const u of urls) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2800);
+      try {
+        const r = await fetch(u, {
+          signal: ctrl.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+            Referer: 'https://translate.google.com/',
+          },
+        });
+        clearTimeout(t);
+        if (!r.ok) continue;
+        const ct = String(r.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html') || ct.includes('application/json')) continue;
+        const b = Buffer.from(await r.arrayBuffer());
+        if (b.length >= 128) {
+          audioBuf = b;
+          break;
+        }
+      } catch (e) {
+        clearTimeout(t);
+      }
+    }
+    if (!audioBuf) return res.status(502).end();
+    if (localTtsCache.size >= 200) {
+      const firstKey = localTtsCache.keys().next().value;
+      if (firstKey) localTtsCache.delete(firstKey);
+    }
+    localTtsCache.set(cacheKey, audioBuf);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('X-TTS-Source', 'google-gtx');
+    res.send(audioBuf);
+  } catch (e) {
+    res.status(502).end();
+  }
+}
+app.get('/api/tts', handleLocalGoogleWarmTts);
+app.get('/tts', handleLocalGoogleWarmTts);
 
 // Gộp cả WebSocket (ws://localhost:8080 & ws://127.0.0.1:8080) và HTTP vào cổng 8080 để không bao giờ bị đụng cổng 3000
 const httpServer8080 = http.createServer(app);
