@@ -12,6 +12,7 @@ import {
   ZombieSpikyDamageFX,
 } from '../../types/game';
 import { GoldTrophyIcon, RoseBouquetModel, SchoolGiftArt } from './SchoolGiftArt';
+import { subscribeAnimationLoop } from '../../utils/liveLoopWakeup';
 
 interface ZombieCharacterSpriteProps {
   zombie: ZombieEntityState;
@@ -234,7 +235,7 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
   const spinRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    let rafId = 0;
+    let unsub: (() => void) | null = null;
     const arcHeight =
       proj.kind === 'desk_mate' || proj.kind === 'chair' ? 95 : 50;
     const totalSpin =
@@ -247,7 +248,6 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
         if (containerRef.current && containerRef.current.style.opacity !== '0') {
           containerRef.current.style.opacity = '0';
         }
-        rafId = requestAnimationFrame(update);
         return;
       }
 
@@ -281,12 +281,19 @@ const ZombieProjectileSpriteInner: React.FC<ZombieProjectileSpriteProps> = ({
         spinRef.current.style.transform = `translate(-50%, -50%) rotate(${spinDeg.toFixed(1)}deg)`;
       }
 
-      if (p < 1) {
-        rafId = requestAnimationFrame(update);
+      if (p >= 1 && unsub) {
+        unsub();
+        unsub = null;
       }
     };
     update();
-    return () => cancelAnimationFrame(rafId);
+    unsub = subscribeAnimationLoop(update);
+    return () => {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   }, [proj.createdAt, proj.durationMs, proj.kind, proj.startX, proj.startY, proj.targetX, proj.targetY]);
 
   const heartVariant = proj.heartVariant || 'pencil_case';
@@ -839,7 +846,7 @@ const ZombieSpikyDamageBubbleInner: React.FC<ZombieSpikyDamageBubbleProps> = ({
   const bubbleRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    let rafId = 0;
+    let unsub: (() => void) | null = null;
     const baseScale = fx.scale || 1;
     const tick = () => {
       const elapsed = Date.now() - fx.createdAt;
@@ -858,12 +865,19 @@ const ZombieSpikyDamageBubbleInner: React.FC<ZombieSpikyDamageBubbleProps> = ({
         ).toFixed(3)})`;
         bubbleRef.current.style.opacity = opacity.toFixed(2);
       }
-      if (p < 1) {
-        rafId = requestAnimationFrame(tick);
+      if (p >= 1 && unsub) {
+        unsub();
+        unsub = null;
       }
     };
     tick();
-    return () => cancelAnimationFrame(rafId);
+    unsub = subscribeAnimationLoop(tick);
+    return () => {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   }, [fx.createdAt, fx.scale, fx.vx, fx.vy, fx.x, fx.y]);
 
   return (
@@ -919,7 +933,7 @@ const FlyingMilkTeaSpriteInner: React.FC<FlyingMilkTeaSpriteProps> = ({
   const cupRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    let rafId = 0;
+    let unsub: (() => void) | null = null;
     const safeDur = Math.max(300, tea.durationMs);
     const itemScale =
       tea.variant === 'gold_trophy'
@@ -938,12 +952,19 @@ const FlyingMilkTeaSpriteInner: React.FC<FlyingMilkTeaSpriteProps> = ({
         cupRef.current.style.top = `${curY.toFixed(1)}px`;
         cupRef.current.style.transform = `translate(-50%, -50%) scale(${sc.toFixed(3)})`;
       }
-      if (p < 1) {
-        rafId = requestAnimationFrame(tick);
+      if (p >= 1 && unsub) {
+        unsub();
+        unsub = null;
       }
     };
     tick();
-    return () => cancelAnimationFrame(rafId);
+    unsub = subscribeAnimationLoop(tick);
+    return () => {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   }, [
     tea.createdAt,
     tea.durationMs,
@@ -1034,7 +1055,7 @@ const PaperPlaneProjectileSpriteInner: React.FC<PaperPlaneProjectileSpriteProps>
   const scaledCoreWidth = Math.max(1.8, 3.2 * effectiveScale);
 
   React.useEffect(() => {
-    let rafId = 0;
+    let unsub: (() => void) | null = null;
     const p0x = plane.startX;
     const p0y = plane.startY;
     const p1x = plane.targetX;
@@ -1066,7 +1087,6 @@ const PaperPlaneProjectileSpriteInner: React.FC<PaperPlaneProjectileSpriteProps>
         if (containerRef.current) {
           containerRef.current.style.opacity = '0';
         }
-        rafId = requestAnimationFrame(tick);
         return;
       }
 
@@ -1131,13 +1151,20 @@ const PaperPlaneProjectileSpriteInner: React.FC<PaperPlaneProjectileSpriteProps>
         )}deg) scale(${effectiveScale.toFixed(3)})`;
       }
 
-      if (p < 1) {
-        rafId = requestAnimationFrame(tick);
+      if (p >= 1 && unsub) {
+        unsub();
+        unsub = null;
       }
     };
 
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    tick();
+    unsub = subscribeAnimationLoop(tick);
+    return () => {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   }, [
     effectiveScale,
     isRoseBouquet,
@@ -1304,7 +1331,7 @@ const PaperPlaneEmptySpikyBubbleInner: React.FC<
   const bubbleRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    let rafId = 0;
+    let unsub: (() => void) | null = null;
     const baseScale = Math.max(0.4, Math.min(3, fx.scale ?? 1));
     const totalMs = 680;
 
@@ -1328,13 +1355,20 @@ const PaperPlaneEmptySpikyBubbleInner: React.FC<
         bubbleRef.current.style.opacity = opacity.toFixed(2);
       }
 
-      if (p < 1) {
-        rafId = requestAnimationFrame(tick);
+      if (p >= 1 && unsub) {
+        unsub();
+        unsub = null;
       }
     };
 
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    tick();
+    unsub = subscribeAnimationLoop(tick);
+    return () => {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   }, [fx.createdAt, fx.scale, fx.y]);
 
   return (

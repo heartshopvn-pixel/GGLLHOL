@@ -1,5 +1,9 @@
 import { SyncPacket, TikTokOrderMeta } from '../types/game';
 import { extractTikTokOrderMeta } from '../utils/commentOrder';
+import {
+  setUnthrottledInterval,
+  setUnthrottledTimeout,
+} from '../utils/liveLoopWakeup';
 
 export type WsConnectionStatus = 'simulated' | 'connecting' | 'connected' | 'error';
 
@@ -69,26 +73,30 @@ class LiveSyncService {
   }
 
   constructor() {
-    if ('BroadcastChannel' in window) {
-      this.channel = new BroadcastChannel('chua_online_live_sync_v1');
-      this.channel.onmessage = (ev) => {
-        if (ev.data?.type === 'OBS_HEARTBEAT') {
-          this.recordObsHeartbeat(ev.data.senderId);
-          return;
-        }
-        if (ev.data?.type === 'OBS_CLOSING' && ev.data.senderId) {
-          this.heartbeatObsPeers.delete(ev.data.senderId);
-          this.emitCombinedPeerCounts();
-          return;
-        }
-        if (ev.data?.type === 'ADMIN_SYNC') {
-          this.dispatchIncomingSync(ev.data as SyncPacket);
-        }
-      };
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        this.channel = new BroadcastChannel('chua_online_live_sync_v1');
+        this.channel.onmessage = (ev) => {
+          if (ev.data?.type === 'OBS_HEARTBEAT') {
+            this.recordObsHeartbeat(ev.data.senderId);
+            return;
+          }
+          if (ev.data?.type === 'OBS_CLOSING' && ev.data.senderId) {
+            this.heartbeatObsPeers.delete(ev.data.senderId);
+            this.emitCombinedPeerCounts();
+            return;
+          }
+          if (ev.data?.type === 'ADMIN_SYNC') {
+            this.dispatchIncomingSync(ev.data as SyncPacket);
+          }
+        };
+      } catch {
+        this.channel = null;
+      }
     }
     this.initServerRelay();
     if (typeof window !== 'undefined') {
-      setTimeout(() => {
+      setUnthrottledTimeout(() => {
         if (this.status === 'simulated' && !this.ws) {
           this.connectWebSocket('ws://localhost:8080');
         }
@@ -112,8 +120,8 @@ class LiveSyncService {
             }
           }
         };
-        setTimeout(sendObsBeat, 150);
-        setInterval(sendObsBeat, 2500);
+        setUnthrottledTimeout(sendObsBeat, 150);
+        setUnthrottledInterval(sendObsBeat, 2500);
         window.addEventListener('beforeunload', () => {
           const bye = { type: 'OBS_CLOSING', senderId: this.clientId };
           try {
@@ -250,6 +258,14 @@ class LiveSyncService {
         `/api/sync-stream?clientId=${encodeURIComponent(this.clientId)}&role=${role}`
       );
       this.eventSource = es;
+
+      es.onopen = () => {
+        if (isObs) {
+          setUnthrottledTimeout(() => {
+            this.sendCommand('REQUEST_FULL_SYNC', {});
+          }, 150);
+        }
+      };
 
       es.onmessage = (event) => {
         try {

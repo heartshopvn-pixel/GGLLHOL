@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Maximize2, Minimize2, PanelRightOpen, Volume2, VolumeX } from 'lucide-react';
+import './utils/liveLoopWakeup';
 import { DevTabId } from './types/game';
 import { useClassroomEngine } from './hooks/useClassroomEngine';
 import { syncService } from './services/syncService';
@@ -22,15 +23,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<DevTabId>('control');
   const [compactRemoteStage, setCompactRemoteStage] = useState<boolean>(() => {
     if (isPureStreamMode || typeof window === 'undefined') return false;
-    return sessionStorage.getItem('chua_compact_remote_stage') === 'true';
+    try {
+      return sessionStorage.getItem('chua_compact_remote_stage') === 'true';
+    } catch {
+      return false;
+    }
   });
   const [obsIsFullscreen, setObsIsFullscreen] = useState<boolean>(false);
   const [obsNeedsClickForFullscreen, setObsNeedsClickForFullscreen] = useState<boolean>(false);
   const [obsStretchFullViewport, setObsStretchFullViewport] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
-    const saved = localStorage.getItem('chua_obs_stretch_full_viewport');
-    // Mặc định BẬT bung khít 100% khung hình cho bản OBS Live để màn hình PC dọc không bị viền đen
-    return saved === null ? true : saved === 'true';
+    try {
+      const saved = localStorage.getItem('chua_obs_stretch_full_viewport');
+      // Mặc định BẬT bung khít 100% khung hình cho bản OBS Live để màn hình PC dọc không bị viền đen
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
   });
 
   const engine = useClassroomEngine();

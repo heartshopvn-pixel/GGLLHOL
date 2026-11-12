@@ -228,6 +228,7 @@ class TempleSoundService {
   private currentApplauseBufferSource: AudioBufferSourceNode | null = null;
   private applauseDurationMsCache = new Map<string, number>();
   private hasPrimedSilentUnlock = false;
+  private cefKeepAliveSource: AudioBufferSourceNode | null = null;
 
   // Chế độ kể chuyện / thuyết pháp state
   private dharmaIndex = 0;
@@ -236,15 +237,65 @@ class TempleSoundService {
   private dharmaNextTimer: ReturnType<typeof setTimeout> | null = null;
   private latestConfig: GameConfig | null = null;
 
+  private isStreamViewUrl(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return (
+        p.get('obs') === '1' ||
+        p.get('view') === 'live' ||
+        p.get('mode') === 'live'
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private localTabMuted = (() => {
     if (typeof window !== 'undefined') {
-      const p = new URLSearchParams(window.location.search);
-      if (p.get('obs') === '1' || p.get('view') === 'live') {
-        return false; // OBS Live screen always has audio enabled
+      try {
+        const p = new URLSearchParams(window.location.search);
+        if (
+          p.get('obs') === '1' ||
+          p.get('view') === 'live' ||
+          p.get('mode') === 'live'
+        ) {
+          return false; // OBS / TikTok Live Studio screen always has audio enabled
+        }
+        return sessionStorage.getItem('chua_silent_admin_tab') === 'true';
+      } catch {
+        return false;
       }
     }
-    return sessionStorage.getItem('chua_silent_admin_tab') === 'true';
+    return false;
   })();
+
+  private ensureCefAudioKeepAlive() {
+    if (!this.ctx || this.cefKeepAliveSource || this.localTabMuted) return;
+    if (!this.isStreamViewUrl()) return;
+    try {
+      // Tạo xung âm thanh siêu tĩnh (-100 dB, tai người hoàn toàn không nghe thấy) lặp vô hạn trên WebAudio:
+      // Giúp nhân Chromium/CEF của TikTok Live Studio & OBS nhận diện tiến trình đang phát Media (IsAudioPlaying = true)
+      // nên TUYỆT ĐỐI KHÔNG BAO GIỜ đóng băng tiến trình (Renderer Background Freeze) khi chạy ngầm!
+      const sr = this.ctx.sampleRate || 44100;
+      const keepBuf = this.ctx.createBuffer(1, sr, sr);
+      const ch = keepBuf.getChannelData(0);
+      for (let i = 0; i < ch.length; i += 64) {
+        ch[i] = (i & 64 ? 1 : -1) * 1e-5;
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = keepBuf;
+      src.loop = true;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.0001;
+      src.connect(gain);
+      gain.connect(this.ctx.destination);
+      src.start(0);
+      this.cefKeepAliveSource = src;
+    } catch {
+      // Ignore
+    }
+  }
 
   public primeAudioUnlock() {
     if (typeof window === 'undefined' || this.localTabMuted) return;
@@ -259,6 +310,7 @@ class TempleSoundService {
         src.start(0);
         this.hasPrimedSilentUnlock = true;
       }
+      this.ensureCefAudioKeepAlive();
       if (
         this.bgmAudio &&
         this.bgmAudio.paused &&
@@ -282,6 +334,13 @@ class TempleSoundService {
       window.addEventListener('click', unlockAudio, { passive: true });
       window.addEventListener('keydown', unlockAudio, { passive: true });
       window.addEventListener('touchstart', unlockAudio, { passive: true });
+
+      // Trên TikTok Live Studio / OBS Browser Source (?obs=1), không có thao tác chuột của người dùng -> tự động kích hoạt mở khóa AudioContext & Keep-Alive ngay khi tải trang!
+      if (this.isStreamViewUrl()) {
+        setTimeout(() => {
+          this.primeAudioUnlock();
+        }, 180);
+      }
     }
   }
 
@@ -297,6 +356,7 @@ class TempleSoundService {
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume().catch(() => {});
     }
+    this.ensureCefAudioKeepAlive();
   }
 
   private initTeacherLiveCtx(): AudioContext | null {
@@ -738,7 +798,11 @@ class TempleSoundService {
 
   public setTabMuted(muted: boolean) {
     this.localTabMuted = muted;
-    sessionStorage.setItem('chua_silent_admin_tab', muted ? 'true' : 'false');
+    try {
+      sessionStorage.setItem('chua_silent_admin_tab', muted ? 'true' : 'false');
+    } catch {
+      // Ignore restricted CEF storage
+    }
     if (muted) {
       this.stopBgmInternal();
       this.stopApplauseSfx();
@@ -4089,9 +4153,10 @@ class TempleSoundService {
         settleOnce();
       }, ms);
     };
-    armWatchdog(
-      this.teacherLiveUtterance ? Math.max(28000, maxExpectedMs) : maxExpectedMs
-    );
+    // Chống treo trên nhân CEF của TikTok Live Studio / OBS (nơi speechSynthesis.speak có thể ngâm hàng đợi vô hạn mà không bao giờ gọi onstart):
+    // Trước khi onstart nổ, chỉ chờ tối đa 3.2s; ngay khi onstart xác nhận đã phát tiếng thực tế mới nới sang maxExpectedMs!
+    const preStartWatchdogMs = this.teacherLiveUtterance ? 5500 : 3200;
+    armWatchdog(preStartWatchdogMs);
 
     const startSpeakingUtterance = (retriedVoices = false) => {
       if (settled || token !== this.speechTokenSeq) return;

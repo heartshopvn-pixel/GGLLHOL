@@ -35,6 +35,7 @@ import { ClassroomArt } from './ClassroomArt';
 import { StudentSprite } from './StudentSprite';
 import { TeacherSprite } from './TeacherSprite';
 import { HudBoxKey, ResizeCorner, StageHud } from './StageHud';
+import { subscribeAnimationLoop } from '../../utils/liveLoopWakeup';
 import {
   DeskCatModel,
   FallingMoneyModel,
@@ -822,16 +823,13 @@ export const GameStage: React.FC<GameStageProps> = ({
     stepCameraRig,
   ]);
 
-  // Vòng lặp Camera độc lập chạy khít 100% nhịp quét màn hình gốc (60Hz / 120Hz / 144Hz), tách rời hoàn toàn khỏi bộ chặn 1000 / 62 của hạt VFX
+  // Vòng lặp Camera độc lập chạy khít 100% nhịp quét màn hình gốc (60Hz / 120Hz / 144Hz), tự động được Worker đánh thức khi nhúng vào TikTok Live Studio / OBS CEF
   useEffect(() => {
-    let camRafId = 0;
-    const tickCamera = (now: number) => {
+    const unsubscribeCam = subscribeAnimationLoop((now) => {
       stepCameraRig(now);
-      camRafId = requestAnimationFrame(tickCamera);
-    };
-    camRafId = requestAnimationFrame(tickCamera);
+    });
     return () => {
-      cancelAnimationFrame(camRafId);
+      unsubscribeCam();
       if (viewportRef.current) {
         viewportRef.current.removeAttribute('data-camera-moving');
       }
@@ -881,16 +879,29 @@ export const GameStage: React.FC<GameStageProps> = ({
 
     let wasRaining = false;
     let wasZombieFire = false;
-    let animId = 0;
     let lastTime = performance.now();
+
+    const drawSafeRoundedRect = (
+      targetCtx: CanvasRenderingContext2D,
+      rx: number,
+      ry: number,
+      rw: number,
+      rh: number,
+      radius: number
+    ) => {
+      if (typeof targetCtx.roundRect === 'function') {
+        targetCtx.roundRect(rx, ry, rw, rh, radius);
+      } else {
+        targetCtx.rect(rx, ry, rw, rh);
+      }
+    };
 
     const renderFx = (now: number) => {
       // Khóa trần 60 FPS đồng bộ với vòng lặp mô phỏng di chuyển (tránh chạy 120/144/240Hz trên màn hình tần số quét cao)
       if (now - lastTime < 1000 / 62) {
-        animId = requestAnimationFrame(renderFx);
         return;
       }
-      const dt = Math.min(0.1, (now - lastTime) / 1000);
+      const dt = Math.min(0.1, Math.max(0.001, (now - lastTime) / 1000));
       lastTime = now;
       const timeSec = now / 1000;
 
@@ -905,7 +916,7 @@ export const GameStage: React.FC<GameStageProps> = ({
           ctx.fillStyle = 'rgba(37, 99, 235, 0.22)';
           ctx.lineWidth = 1.5;
           ctx.beginPath();
-          ctx.roundRect(d.centerX - d.width / 2, d.centerY - 15, d.width, 30, 5);
+          drawSafeRoundedRect(ctx, d.centerX - d.width / 2, d.centerY - 15, d.width, 30, 5);
           ctx.fill();
           ctx.stroke();
           ctx.restore();
@@ -918,7 +929,7 @@ export const GameStage: React.FC<GameStageProps> = ({
           ctx.fillStyle = 'rgba(16, 185, 129, 0.18)';
           ctx.lineWidth = 1.3;
           ctx.beginPath();
-          ctx.roundRect(d.centerX - d.width / 2, d.centerY - 15, d.width, 30, 5);
+          drawSafeRoundedRect(ctx, d.centerX - d.width / 2, d.centerY - 15, d.width, 30, 5);
           ctx.fill();
           ctx.stroke();
           ctx.restore();
@@ -1070,11 +1081,9 @@ export const GameStage: React.FC<GameStageProps> = ({
         rainCtx.clearRect(0, 0, rainCanvas.width, rainCanvas.height);
       }
 
-      animId = requestAnimationFrame(renderFx);
     };
 
-    animId = requestAnimationFrame(renderFx);
-    return () => cancelAnimationFrame(animId);
+    return subscribeAnimationLoop(renderFx);
   }, [stepCameraRig]);
 
   useEffect(() => {

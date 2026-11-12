@@ -48,6 +48,11 @@ import {
 } from '../services/soundEngine';
 import { syncService, WsConnectionStatus } from '../services/syncService';
 import {
+  setUnthrottledInterval,
+  setUnthrottledTimeout,
+  subscribeAnimationLoop,
+} from '../utils/liveLoopWakeup';
+import {
   BurnerLotusBurstFX,
   CameraFocusReason,
   CameraFocusState,
@@ -6051,7 +6056,7 @@ export function useClassroomEngine() {
         (peersNow.obsPeers > 0 ||
           (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
 
-      quizNpcTimersRef.current.forEach((tid) => clearTimeout(tid));
+      quizNpcTimersRef.current.forEach((cancelFn) => cancelFn());
       quizNpcTimersRef.current = [];
 
       // Tạm dừng tiết học đang chạy để nhường cho Luồng Sự Kiện
@@ -7680,14 +7685,12 @@ export function useClassroomEngine() {
     ]
   );
 
-  // Vòng lặp vật lý 60FPS cho Học Sinh & Giáo Viên trên bục giảng
+  // Vòng lặp vật lý 60FPS cho Học Sinh & Giáo Viên trên bục giảng (có bộ đánh thức Worker chống treo trên TikTok Live Studio / OBS CEF)
   useEffect(() => {
     let lastMs = performance.now();
-    let frameId = 0;
 
     const stepSimulation = (nowMs: number) => {
       if (nowMs - lastMs < SIMULATION_MIN_FRAME_MS) {
-        frameId = requestAnimationFrame(stepSimulation);
         return;
       }
       const dt = Math.min(0.08, Math.max(0.001, (nowMs - lastMs) / 1000));
@@ -9434,12 +9437,9 @@ export function useClassroomEngine() {
         zombieEventStateRef.current = nextEv;
         setZombieEventState(nextEv);
       }
-
-      frameId = requestAnimationFrame(stepSimulation);
     };
 
-    frameId = requestAnimationFrame(stepSimulation);
-    return () => cancelAnimationFrame(frameId);
+    return subscribeAnimationLoop(stepSimulation);
   }, [
     addLotusPointsToDonor,
     deductLotusPointsFromDonor,
@@ -9455,7 +9455,7 @@ export function useClassroomEngine() {
       const next = prev.filter(keepPredicate);
       return next.length === prev.length ? prev : next;
     };
-    const timer = setInterval(() => {
+    const stopPruneTimer = setUnthrottledInterval(() => {
       const now = Date.now();
       setBurnerLotusBursts((prev) =>
         pruneExpired(prev, (b) => now - b.createdAt < 1800)
@@ -9482,7 +9482,7 @@ export function useClassroomEngine() {
         pruneExpired(prev, (t) => now - t.createdAt < 7500)
       );
     }, 500);
-    return () => clearInterval(timer);
+    return () => stopPruneTimer();
   }, []);
 
   // Quy tắc sắp xếp lớp ĐÚNG ở giây thứ 18 sau khi câu hỏi bắt đầu (15s hỏi bài + 3s đầu công bố đáp án, còn 7s trước câu tiếp theo):
@@ -9958,9 +9958,9 @@ export function useClassroomEngine() {
 
   // Lên lịch cho TẤT CẢ học sinh NPC (cả trong lớp VÀ trong Hàng Chờ) comment trả lời câu hỏi trải đều trong 10s đầu (không đồng thanh)
   // Dựa theo tỉ lệ `npcCorrectAnswerPercent`: Trả lời đúng (từ tiếng Anh ngắn gọn) hoặc nói vẩn vơ (trích danh sách phát biểu)
-  const quizNpcTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const quizNpcTimersRef = useRef<Array<() => void>>([]);
   const clearQuizNpcTimers = useCallback(() => {
-    quizNpcTimersRef.current.forEach((t) => clearTimeout(t));
+    quizNpcTimersRef.current.forEach((cancelFn) => cancelFn());
     quizNpcTimersRef.current = [];
   }, []);
 
@@ -10022,7 +10022,7 @@ export function useClassroomEngine() {
           )
         );
 
-        const timerId = setTimeout(() => {
+        const cancelTimer = setUnthrottledTimeout(() => {
           const curCfg = configRef.current;
           const bState = classBoardStateRef.current;
           if (
@@ -10115,7 +10115,7 @@ export function useClassroomEngine() {
           });
         }, delayMs);
 
-        quizNpcTimersRef.current.push(timerId);
+        quizNpcTimersRef.current.push(cancelTimer);
       });
     },
     [
@@ -10137,7 +10137,7 @@ export function useClassroomEngine() {
     const cfg = configRef.current;
     if (!cfg.autoCrowd) return;
 
-    const seedTimer = setTimeout(() => {
+    const cancelSeedTimer = setUnthrottledTimeout(() => {
       const currentCfg = configRef.current;
       if (!currentCfg.autoCrowd) return;
       const totalSeats =
@@ -10173,7 +10173,7 @@ export function useClassroomEngine() {
       enqueueBatchNpcsAfterQuestion();
     }, 50);
 
-    const initTimer = setTimeout(() => {
+    const cancelInitTimer = setUnthrottledTimeout(() => {
       const curBoard = classBoardStateRef.current;
       const currentCfg = configRef.current;
       if (!curBoard.isRunning || curBoard.engine !== 'english_quiz') return;
@@ -10215,8 +10215,8 @@ export function useClassroomEngine() {
       }
     }, 350);
     return () => {
-      clearTimeout(seedTimer);
-      clearTimeout(initTimer);
+      cancelSeedTimer();
+      cancelInitTimer();
     };
   }, [
     enqueueBatchNpcsAfterQuestion,
@@ -10272,7 +10272,7 @@ export function useClassroomEngine() {
       return Math.round(baseMs * (0.35 + Math.random() * 1.3));
     };
 
-    const timer = setInterval(() => {
+    const stopScatterTimer = setUnthrottledInterval(() => {
       const cfg = configRef.current;
       if (!cfg.autoCrowd) return;
 
@@ -10397,7 +10397,7 @@ export function useClassroomEngine() {
       }
     }, 350);
 
-    return () => clearInterval(timer);
+    return () => stopScatterTimer();
   }, [
     pickRandomReplySpeech,
     pickRandomSpeechFromThreeGroups,
@@ -11034,7 +11034,7 @@ export function useClassroomEngine() {
     if (classBoardState.engine !== 'english_quiz') return;
 
     let lastTick = performance.now();
-    const timer = setInterval(() => {
+    const stopBoardTimer = setUnthrottledInterval(() => {
       const now = performance.now();
       const dtMs = Math.max(20, Math.min(400, now - lastTick));
       lastTick = now;
@@ -12760,7 +12760,7 @@ export function useClassroomEngine() {
       });
     }, 100);
 
-    return () => clearInterval(timer);
+    return () => stopBoardTimer();
   }, [
     classBoardState.isRunning,
     classBoardState.engine,
@@ -12783,7 +12783,7 @@ export function useClassroomEngine() {
     if (!zombieEventState.isActive) return;
 
     let lastTick = performance.now();
-    const timer = setInterval(() => {
+    const stopZombieTimer = setUnthrottledInterval(() => {
       const now = performance.now();
       const dtMs = Math.max(20, Math.min(400, now - lastTick));
       lastTick = now;
@@ -13640,7 +13640,7 @@ export function useClassroomEngine() {
       }
     }, 100);
 
-    return () => clearInterval(timer);
+    return () => stopZombieTimer();
   }, [
     zombieEventState.isActive,
     addLotusPointsToDonor,
@@ -13855,15 +13855,15 @@ export function useClassroomEngine() {
       }
     };
 
-    const initialTimer = setTimeout(runSimulatedNpcHeartWave, 180);
+    const cancelInitialWave = setUnthrottledTimeout(runSimulatedNpcHeartWave, 180);
     const intervalMs = Math.max(
       450,
       config.zombieHeartBatchIntervalMs || 1200
     );
-    const timer = setInterval(runSimulatedNpcHeartWave, intervalMs);
+    const stopWaveTimer = setUnthrottledInterval(runSimulatedNpcHeartWave, intervalMs);
     return () => {
-      clearTimeout(initialTimer);
-      clearInterval(timer);
+      cancelInitialWave();
+      stopWaveTimer();
     };
   }, [
     zombieEventState.isActive,
