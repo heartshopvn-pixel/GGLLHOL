@@ -505,5 +505,16 @@
   will-change: transform, filter;
 }
 
+/* Khóa lớp bitmap GPU cho các tầng Camera & tạm ngắt các drop-shadow nặng trong tích tắc chuyển cảnh (~0.35s - 0.45s) rồi bật lại ngay khi dừng */
+.gpu-camera-layer {
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
 
-
+[data-camera-moving="true"] .gpu-camera-layer *,
+[data-camera-moving="true"] .gpu-camera-layer svg,
+[data-camera-moving="true"] .gpu-camera-layer img {
+  filter: none !important;
+}

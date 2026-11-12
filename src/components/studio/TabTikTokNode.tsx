@@ -251,7 +251,7 @@ export const TabTikTokNode: React.FC<TabTikTokNodeProps> = ({ wsStatus, onConnec
               Mã Nguồn <code className="text-amber-300">server.js</code> (Đã fix log CMD + Cổng 8080)
             </h2>
             <p className="text-[10px] text-stone-400 font-mono mt-0.5">
-              npm i tiktok-live-connector ws express cors msedge-tts
+              npm i tiktok-live-connector ws express cors
             </p>
           </div>
           <button

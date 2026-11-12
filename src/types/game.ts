@@ -1,4 +1,4 @@
-export type TTSEngineType = 'node_edge' | 'google_stream' | 'web_speech' | 'monk_zen';
+export type TTSEngineType = 'web_speech' | 'google_stream';
 
 export type SafetyActionMode = 'purify' | 'block' | 'mask';
 
@@ -672,7 +672,7 @@ export interface GameConfig {
   hostQuickPhrases: string[];
 
   // Live Text-to-Voice Độc Lập (Giọng Thầy Giáo phát song song với game, không vào hàng chờ)
-  teacherLiveEngine?: 'google_stream' | 'node_edge';
+  teacherLiveEngine?: TTSEngineType;
   teacherLiveVoice?: string;
   teacherLiveVolume?: number;
   teacherLiveRate?: number;

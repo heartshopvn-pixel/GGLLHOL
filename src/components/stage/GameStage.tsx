@@ -331,6 +331,7 @@ export const GameStage: React.FC<GameStageProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldCameraRef = useRef<HTMLDivElement>(null);
+  const worldCameraMidUnderlayRef = useRef<HTMLDivElement>(null);
   const worldCameraTeacherOverlayRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dustCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -432,7 +433,7 @@ export const GameStage: React.FC<GameStageProps> = ({
   const activeBoardEngine =
     classBoardState?.engine ||
     config.hudLayout.classBoardEngine ||
-    'english_quiz';
+    'notice';
   const isEnglish15MinLesson =
     activeBoardEngine === 'english_quiz' || activeBoardEngine === 'result_board';
 
@@ -572,18 +573,29 @@ export const GameStage: React.FC<GameStageProps> = ({
   };
 
   const camRigRef = useRef({ x: 270, y: 480, zoom: 1 });
-  const prevTargetRef = useRef<{ id: number | null; x: number; y: number }>({
-    id: null,
-    x: 270,
-    y: 480,
+  const camTransitionRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    startZoom: number;
+    goalTargetId: number | null;
+    goalZoom: number;
+    startTimeMs: number;
+    durationMs: number;
+  }>({
+    active: false,
+    startX: 270,
+    startY: 480,
+    startZoom: 1,
+    goalTargetId: null,
+    goalZoom: 1,
+    startTimeMs: 0,
+    durationMs: 400,
   });
-  const lastCamStepMsRef = useRef<number>(performance.now());
+  const lastCamTransformRef = useRef<string>('');
+  const isCamMovingAttrRef = useRef<boolean>(false);
 
   const stepCameraRig = useCallback((now: number) => {
-    const rawDt = (now - lastCamStepMsRef.current) / 1000;
-    const dt = Math.max(0.001, Math.min(0.1, rawDt));
-    lastCamStepMsRef.current = now;
-
     const st = fxStateRef.current;
     const focusEndMs = Math.max(
       st.cameraFocus.until || 0,
@@ -691,48 +703,111 @@ export const GameStage: React.FC<GameStageProps> = ({
     }
 
     const rig = camRigRef.current;
-    const smoothSpeed = Math.max(1.2, Math.min(14, st.cameraSmoothSpeed || 4.5));
-    const lerpAlpha = 1 - Math.exp(-smoothSpeed * dt);
+    const prevX = rig.x;
+    const prevY = rig.y;
+    const prevZoom = rig.zoom;
 
-    if (activeTargetId !== null) {
-      if (prevTargetRef.current.id === activeTargetId) {
-        rig.x += desiredX - prevTargetRef.current.x;
-        rig.y += desiredY - prevTargetRef.current.y;
+    const smoothSpeed = Math.max(1.2, Math.min(14, st.cameraSmoothSpeed || 4.5));
+    // Ánh xạ tốc độ mượt sang thời lượng Ease-In-Out cố định trong khoảng ~0.35s – 0.45s
+    const fixedDurationMs = Math.round(
+      Math.max(350, Math.min(450, 450 - ((smoothSpeed - 1.2) / 12.8) * 100))
+    );
+
+    const tr = camTransitionRef.current;
+    const targetChanged =
+      activeTargetId !== tr.goalTargetId ||
+      Math.abs(desiredZoom - tr.goalZoom) > 0.01;
+
+    if (targetChanged) {
+      tr.goalTargetId = activeTargetId;
+      tr.goalZoom = desiredZoom;
+      const initialDist = Math.hypot(desiredX - rig.x, desiredY - rig.y);
+      const initialZoomDiff = Math.abs(desiredZoom - rig.zoom);
+      if (initialZoomDiff < 0.002 && initialDist < 0.35) {
+        rig.x = desiredX;
+        rig.y = desiredY;
+        rig.zoom = desiredZoom;
+        tr.active = false;
+      } else {
+        tr.active = true;
+        tr.startX = rig.x;
+        tr.startY = rig.y;
+        tr.startZoom = rig.zoom;
+        tr.startTimeMs = now;
+        tr.durationMs = fixedDurationMs;
       }
-      prevTargetRef.current.id = activeTargetId;
-      prevTargetRef.current.x = desiredX;
-      prevTargetRef.current.y = desiredY;
-    } else {
-      prevTargetRef.current.id = null;
     }
 
-    rig.x += (desiredX - rig.x) * lerpAlpha;
-    rig.y += (desiredY - rig.y) * lerpAlpha;
-    rig.zoom += (desiredZoom - rig.zoom) * lerpAlpha;
+    if (tr.active) {
+      const t = Math.min(
+        1,
+        Math.max(0, (now - tr.startTimeMs) / Math.max(1, tr.durationMs))
+      );
+      // Đường cong Ease-In-Out Cubic mượt đầu - êm cuối
+      const ease =
+        t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-    if (
-      desiredZoom === 1 &&
-      Math.abs(rig.zoom - 1) < 0.001 &&
-      Math.hypot(rig.x - 270, rig.y - 480) < 0.25
-    ) {
-      rig.zoom = 1;
-      rig.x = 270;
-      rig.y = 480;
+      rig.x = tr.startX + (desiredX - tr.startX) * ease;
+      rig.y = tr.startY + (desiredY - tr.startY) * ease;
+      rig.zoom = tr.startZoom + (desiredZoom - tr.startZoom) * ease;
+
+      const distRemain = Math.hypot(desiredX - rig.x, desiredY - rig.y);
+      const zoomRemain = Math.abs(desiredZoom - rig.zoom);
+      // Chốt dừng sớm (Early Snap) để triệt tiêu hoàn toàn đoạn "bò rung" vi điểm ảnh cuối hành trình
+      if (
+        t >= 0.985 ||
+        (t >= 0.72 && zoomRemain < 0.004 && distRemain < 0.45)
+      ) {
+        rig.x = desiredX;
+        rig.y = desiredY;
+        rig.zoom = desiredZoom;
+        tr.active = false;
+      }
+    } else {
+      rig.x = desiredX;
+      rig.y = desiredY;
+      rig.zoom = desiredZoom;
+    }
+
+    const isCamMoving =
+      tr.active ||
+      Math.abs(rig.zoom - prevZoom) > 0.0005 ||
+      Math.hypot(rig.x - prevX, rig.y - prevY) > 0.35;
+
+    if (isCamMoving !== isCamMovingAttrRef.current) {
+      isCamMovingAttrRef.current = isCamMoving;
+      if (viewportRef.current) {
+        if (isCamMoving) {
+          viewportRef.current.setAttribute('data-camera-moving', 'true');
+        } else {
+          viewportRef.current.removeAttribute('data-camera-moving');
+        }
+      }
     }
 
     const tx = 270 - rig.x;
     const ty = 480 - rig.y;
-    const camTransform = `translate3d(0, 0, 0) scale(${rig.zoom.toFixed(
-      4
-    )}) translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0)`;
-    if (worldCameraRef.current) {
-      worldCameraRef.current.style.transform = camTransform;
-    }
-    if (worldCameraTeacherOverlayRef.current) {
-      worldCameraTeacherOverlayRef.current.style.transform = camTransform;
-    }
-    if (dustCanvasRef.current) {
-      dustCanvasRef.current.style.transform = camTransform;
+    const camTransform =
+      rig.zoom === 1 && tx === 0 && ty === 0
+        ? 'translate3d(0, 0, 0) scale(1) translate3d(0px, 0px, 0)'
+        : `translate3d(0, 0, 0) scale(${rig.zoom.toFixed(
+            4
+          )}) translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0)`;
+
+    if (camTransform !== lastCamTransformRef.current) {
+      lastCamTransformRef.current = camTransform;
+      if (worldCameraRef.current) {
+        worldCameraRef.current.style.transform = camTransform;
+      }
+      if (worldCameraMidUnderlayRef.current) {
+        worldCameraMidUnderlayRef.current.style.transform = camTransform;
+      }
+      if (worldCameraTeacherOverlayRef.current) {
+        worldCameraTeacherOverlayRef.current.style.transform = camTransform;
+      }
+      if (dustCanvasRef.current) {
+        dustCanvasRef.current.style.transform = camTransform;
+      }
     }
   }, []);
 
@@ -746,6 +821,23 @@ export const GameStage: React.FC<GameStageProps> = ({
     config.cameraFocusOffsetY,
     stepCameraRig,
   ]);
+
+  // Vòng lặp Camera độc lập chạy khít 100% nhịp quét màn hình gốc (60Hz / 120Hz / 144Hz), tách rời hoàn toàn khỏi bộ chặn 1000 / 62 của hạt VFX
+  useEffect(() => {
+    let camRafId = 0;
+    const tickCamera = (now: number) => {
+      stepCameraRig(now);
+      camRafId = requestAnimationFrame(tickCamera);
+    };
+    camRafId = requestAnimationFrame(tickCamera);
+    return () => {
+      cancelAnimationFrame(camRafId);
+      if (viewportRef.current) {
+        viewportRef.current.removeAttribute('data-camera-moving');
+      }
+      isCamMovingAttrRef.current = false;
+    };
+  }, [stepCameraRig]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -801,10 +893,6 @@ export const GameStage: React.FC<GameStageProps> = ({
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
       const timeSec = now / 1000;
-
-      if (now - lastCamStepMsRef.current >= 8) {
-        stepCameraRig(now);
-      }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       dustCtx.clearRect(0, 0, dustCanvas.width, dustCanvas.height);
@@ -1464,13 +1552,14 @@ export const GameStage: React.FC<GameStageProps> = ({
           transform: `scale(${stageScale.x.toFixed(4)}, ${stageScale.y.toFixed(4)})`,
         }}
       >
-        {/* World Camera Container (60fps Smooth Interpolated Pan & Zoom Rig) */}
+        {/* World Camera Background Layer (z-1: Chỉ chứa duy nhất Background lớp học để Bảng Tin Lớp z-2 nằm ngay phía trên Background và dưới tất cả layer khác) */}
         <div
           ref={worldCameraRef}
-          className="absolute inset-0 will-change-transform"
+          className="absolute inset-0 will-change-transform gpu-camera-layer"
           style={{
             transformOrigin: '270px 480px',
-            transform: 'scale(1) translate(0px, 0px)',
+            transform: 'translate3d(0, 0, 0) scale(1) translate3d(0px, 0px, 0)',
+            zIndex: 1,
           }}
         >
           {/* Layer 1: High School Classroom Background Artwork */}
@@ -1485,8 +1574,19 @@ export const GameStage: React.FC<GameStageProps> = ({
             giftModelScales={config.giftModelScales}
             renderLayer="background"
           />
+        </div>
 
-          {/* Layer 2: Canvas Chalk Dust & Optional Seat Waypoint Cushions */}
+        {/* World Camera Mid-Underlay (z-15: Nằm trên Bảng Tin Lớp z-2, dưới Bảng Lớp z-20 và Bàn Ghế/Học Sinh z-25) */}
+        <div
+          ref={worldCameraMidUnderlayRef}
+          className="absolute inset-0 pointer-events-none will-change-transform gpu-camera-layer"
+          style={{
+            transformOrigin: '270px 480px',
+            transform: 'translate3d(0, 0, 0) scale(1) translate3d(0px, 0px, 0)',
+            zIndex: 15,
+          }}
+        >
+          {/* Layer 2: Canvas Seat Waypoint Cushions */}
           <canvas
             ref={canvasRef}
             width={540}
@@ -1552,7 +1652,7 @@ export const GameStage: React.FC<GameStageProps> = ({
             </div>
           ))}
 
-          {/* Layer 3 (trong worldCameraRef): Chỉ giữ Cô Giáo nếu người dùng cố tình tắt teacherAboveClassBoard trong Dev */}
+          {/* Layer 3: Chỉ giữ Cô Giáo ở tầng z-15 nếu người dùng cố tình tắt teacherAboveClassBoard trong Dev */}
           {config.teacherAboveClassBoard === false && (
             <div className="absolute inset-0 pointer-events-none z-15">
               {monks
@@ -1583,10 +1683,10 @@ export const GameStage: React.FC<GameStageProps> = ({
         {/* Lớp Bàn Học, Học Sinh & Giáo Viên chung một mặt phẳng xếp lớp 2.5D Depth Y-Sorting (z-25 > classBoardBox z-20) */}
         <div
           ref={worldCameraTeacherOverlayRef}
-          className="absolute inset-0 pointer-events-none will-change-transform"
+          className="absolute inset-0 pointer-events-none will-change-transform gpu-camera-layer"
           style={{
             transformOrigin: '270px 480px',
-            transform: 'scale(1) translate(0px, 0px)',
+            transform: 'translate3d(0, 0, 0) scale(1) translate3d(0px, 0px, 0)',
             zIndex: 25,
           }}
         >
@@ -2582,10 +2682,10 @@ export const GameStage: React.FC<GameStageProps> = ({
           ref={dustCanvasRef}
           width={540}
           height={960}
-          className="absolute inset-0 pointer-events-none z-40 will-change-transform"
+          className="absolute inset-0 pointer-events-none z-40 will-change-transform gpu-camera-layer"
           style={{
             transformOrigin: '270px 480px',
-            transform: 'scale(1) translate(0px, 0px)',
+            transform: 'translate3d(0, 0, 0) scale(1) translate3d(0px, 0px, 0)',
           }}
         />
       </div>

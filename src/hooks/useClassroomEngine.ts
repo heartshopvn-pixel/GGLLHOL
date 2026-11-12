@@ -686,6 +686,30 @@ function getLessonPhaseOrder(phase: ClassBoardRuntimeState['phase']): number {
   }
 }
 
+function getZombiePhaseOrder(phase: ZombieEventRuntimeState['phase']): number {
+  switch (phase) {
+    case 'idle':
+    case 'queued':
+      return 0;
+    case 'z_flow_1_intro':
+      return 1;
+    case 'z_flow_2_spawn':
+      return 2;
+    case 'z_flow_3_teacher':
+      return 3;
+    case 'z_flow_4_supervisor':
+      return 4;
+    case 'z_flow_5_combat':
+      return 5;
+    case 'z_flow_5b_dying':
+      return 6;
+    case 'z_flow_6_celebration':
+      return 7;
+    default:
+      return 0;
+  }
+}
+
 function consumeCurrentAndGetNextQuizQueue(
   cfg: GameConfig,
   currentIdx: number,
@@ -830,14 +854,10 @@ function isJoinClassCommand(text: string): boolean {
 function parseGenderCommand(text: string): 'male' | 'female' | null {
   const lower = (text || '').trim().toLowerCase();
   if (!lower) return null;
-  if (lower.includes('1nam') || /\b1\s*nam\b/i.test(lower)) {
+  if (/(?:^|\s)\/\s*nam(?=$|[^\p{L}\p{N}])/iu.test(lower)) {
     return 'male';
   }
-  if (
-    lower.includes('1nu') ||
-    lower.includes('1nữ') ||
-    /\b1\s*(nu|nữ)\b/i.test(lower)
-  ) {
+  if (/(?:^|\s)\/\s*(?:nu|nữ)(?=$|[^\p{L}\p{N}])/iu.test(lower)) {
     return 'female';
   }
   return null;
@@ -1058,6 +1078,24 @@ export function useClassroomEngine() {
           const isOldScoreRecordText =
             !savedRecordText ||
             savedRecordText.includes('Kỷ lục hôm nay với [ĐiểmKỷLục] điểm');
+          const rawSavedTtsEngine = String(parsed.config.ttsEngine || '');
+          const wasLegacyNodeEngine =
+            rawSavedTtsEngine === 'node_edge' ||
+            parsed.config.nodeVoice === 'vi-VN-HoaiMyNeural' ||
+            parsed.config.nodeVoice === 'vi-VN-NamMinhNeural';
+          const normalizedTtsEngine: 'web_speech' | 'google_stream' =
+            rawSavedTtsEngine === 'web_speech' ? 'web_speech' : 'google_stream';
+          const rawSavedHostEngine = String(parsed.config.hostTtsEngine || '');
+          const normalizedHostEngine: 'web_speech' | 'google_stream' =
+            rawSavedHostEngine === 'web_speech' ? 'web_speech' : 'google_stream';
+          const rawSavedTeacherLiveEngine = String(
+            parsed.config.teacherLiveEngine || ''
+          );
+          const normalizedTeacherLiveEngine: 'web_speech' | 'google_stream' =
+            rawSavedTeacherLiveEngine === 'web_speech'
+              ? 'web_speech'
+              : 'google_stream';
+
           const mergedCfg: GameConfig = {
             ...DEFAULT_CONFIG,
             ...parsed.config,
@@ -1065,19 +1103,19 @@ export function useClassroomEngine() {
               ? Boolean(parsed.config.studentLevelExpEnabled)
               : true,
             ieltsRankBadgeSchemaV1: true,
-            nodeTtsEndpoint:
-              !parsed.config.nodeTtsEndpoint ||
-              parsed.config.nodeTtsEndpoint === 'http://localhost:3000/tts'
-                ? DEFAULT_CONFIG.nodeTtsEndpoint
-                : parsed.config.nodeTtsEndpoint,
-            ttsEngine: 'node_edge',
-            nodeVoice: 'vi-VN-HoaiMyNeural',
-            ttsPitch: 1.0,
-            hostTtsEngine: 'node_edge',
-            hostNodeVoice: 'vi-VN-HoaiMyNeural',
-            hostTtsPitch: 1.0,
-            teacherLiveEngine: 'node_edge',
-            teacherLiveVoice: 'vi-VN-HoaiMyNeural',
+            nodeTtsEndpoint: '/api/tts',
+            ttsEngine: normalizedTtsEngine,
+            nodeVoice: 'google-vi-warm',
+            ttsPitch: wasLegacyNodeEngine
+              ? DEFAULT_CONFIG.ttsPitch
+              : parsed.config.ttsPitch ?? DEFAULT_CONFIG.ttsPitch,
+            hostTtsEngine: normalizedHostEngine,
+            hostNodeVoice: 'google-vi-warm',
+            hostTtsPitch: wasLegacyNodeEngine
+              ? DEFAULT_CONFIG.hostTtsPitch
+              : parsed.config.hostTtsPitch ?? DEFAULT_CONFIG.hostTtsPitch,
+            teacherLiveEngine: normalizedTeacherLiveEngine,
+            teacherLiveVoice: 'google-vi-warm',
             quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
             quizDecks: mergedDecks,
             activeQuizDeckId:
@@ -1125,6 +1163,8 @@ export function useClassroomEngine() {
             hudLayout: {
               ...DEFAULT_CONFIG.hudLayout,
               ...(parsed.config.hudLayout || {}),
+              // Luôn khởi động game ở Bảng Thông Báo (không tự nhảy vào Tiết Tiếng Anh ngay khi mở game)
+              classBoardEngine: 'notice',
               dailyRecordTitle:
                 !parsed.config.hudLayout?.dailyRecordTitle ||
                 parsed.config.hudLayout?.dailyRecordTitle === 'Kỷ lục hôm nay'
@@ -1324,8 +1364,8 @@ export function useClassroomEngine() {
       config.lessonStartTtsText ||
       'Chào mừng mấy cưng đến với lớp cô Thảo ! Bắt đầu kiểm tra 15 phút. Có 10 câu hỏi với độ khó tăng dần, đáp nhanh sẽ được thêm điểm, trả lời sai sẽ nhường chỗ cho các bạn top bảng học ké. Cố gắng vào lớp để được xếp hạng.';
     return {
-      engine: config.hudLayout.classBoardEngine || 'english_quiz',
-      isRunning: true,
+      engine: 'notice',
+      isRunning: false,
       roundSeq: 1,
       roundQuestionIndex: 0,
       questionIndex: 0,
@@ -1334,7 +1374,7 @@ export function useClassroomEngine() {
       phase: 'lesson_start',
       lessonStepNumber: 0,
       lessonStartText: startText,
-      activeFlowToken: 'flow_init_0',
+      activeFlowToken: undefined,
       ttsFinishedForPhase: false,
       elapsedPhaseMs: 0,
       timeLeftMs: 12000,
@@ -1615,7 +1655,11 @@ export function useClassroomEngine() {
     };
   }, []);
 
-  // Phóng máy bay giấy (hoặc bó hoa hồng trong 10s sau khi trúng máy bay giấy) từ học sinh đang ngồi trong lớp bay tới đầu học sinh mục tiêu
+  const doorCrowdRef = useRef(doorCrowd);
+  doorCrowdRef.current = doorCrowd;
+  const doorCrowdCursorRef = useRef(0);
+
+  // Phóng máy bay giấy (hoặc bó hoa hồng trong 10s sau khi trúng máy bay giấy) từ học sinh trong lớp hoặc học sinh hàng chờ ở cửa lớp tới đầu học sinh mục tiêu
   const launchPaperPlaneAtStudent = useCallback(
     (
       thrower: PilgrimData,
@@ -1628,10 +1672,10 @@ export function useClassroomEngine() {
     ): void => {
       const projKind = extraOpts?.projectileKind ?? 'paper_plane';
 
-      // Quy tắc nghiêm ngặt: Chỉ các bạn ĐANG NGỒI TẠI BÀN TRONG LỚP (state === 'pray_seated' & có slotId) mới được phép ném máy bay giấy
+      // Cho phép ném cả khi đang ở trong lớp (ngồi bàn, đi vào ghế, đứng phạt...) lẫn khi đứng ở hàng chờ cửa lớp (slotId === null); chỉ chặn khi đang rời lớp
       if (
-        projKind === 'paper_plane' &&
-        (!thrower.slotId || thrower.state !== 'pray_seated')
+        thrower.state === 'leave_side_to_aisle' ||
+        thrower.state === 'leave_down_exit'
       ) {
         return;
       }
@@ -1708,14 +1752,24 @@ export function useClassroomEngine() {
       setTimeout(() => {
         setPaperPlanes((prev) => prev.filter((item) => item.id !== planeId));
 
-        const liveTarget = pilgrimsRef.current.find(
+        const liveTargetInClass = pilgrimsRef.current.find(
           (p) =>
             (p.id === targetId ||
               p.username.trim().toLowerCase() === targetLowerName) &&
-            Boolean(p.slotId) &&
+            (Boolean(p.slotId) ||
+              p.state === 'stand_punishment' ||
+              p.state === 'walk_to_punishment_spot') &&
             p.state !== 'leave_side_to_aisle' &&
             p.state !== 'leave_down_exit'
         );
+        const liveTargetInDoor = !liveTargetInClass
+          ? doorCrowdRef.current.find(
+              (p) =>
+                p.id === targetId ||
+                p.username.trim().toLowerCase() === targetLowerName
+            )
+          : undefined;
+        const liveTarget = liveTargetInClass || liveTargetInDoor;
         const liveHeadPts = liveTarget
           ? computeStudentHeadAndHandCoords(
               liveTarget,
@@ -1762,8 +1816,6 @@ export function useClassroomEngine() {
         }, 720);
 
         // 3) Sau đúng 1s kể từ lúc trúng đạn vào đầu, học sinh bị trúng tự động chat "ui da":
-        //    - Hủy timer "ui da" cũ chưa kịp nổ của cùng học sinh (nếu bị ném dồn liên tiếp < 1s)
-        //    - Khi hiển thị "ui da", xóa ngay lập tức tin nhắn cũ (cấp chatBubbleKey mới) và đặt lại thời gian mới từ Date.now() (tuyệt đối KHÔNG cộng dồn thời gian hiển thị)
         const targetTimerKey =
           targetLowerName || `id_${liveTarget ? liveTarget.id : targetId}`;
         const prevPendingUiDa =
@@ -1778,30 +1830,56 @@ export function useClassroomEngine() {
             (p) =>
               (p.id === targetId ||
                 p.username.trim().toLowerCase() === targetLowerName) &&
-              Boolean(p.slotId) &&
+              (Boolean(p.slotId) ||
+                p.state === 'stand_punishment' ||
+                p.state === 'walk_to_punishment_spot') &&
               p.state !== 'leave_side_to_aisle' &&
               p.state !== 'leave_down_exit'
           );
-          if (!hitStudentStillInClass) return;
-
           const nowUiDa = Date.now();
           const bubbleDurationMs =
             (configRef.current.chatBubbleDurationSec || 12) * 1000;
           const nextBubbleKey = issueChatBubbleKey();
-          const updatedPilgrims = pilgrimsRef.current.map((p) =>
-            p.id === hitStudentStillInClass.id
-              ? {
-                  ...p,
-                  prayer: 'ui da',
-                  hasComment: true,
-                  prayTimer: 0,
-                  chatBubbleKey: nextBubbleKey,
-                  chatBubbleUntil: nowUiDa + bubbleDurationMs,
-                }
-              : p
+
+          if (hitStudentStillInClass) {
+            const updatedPilgrims = pilgrimsRef.current.map((p) =>
+              p.id === hitStudentStillInClass.id
+                ? {
+                    ...p,
+                    prayer: 'ui da',
+                    hasComment: true,
+                    prayTimer: 0,
+                    chatBubbleKey: nextBubbleKey,
+                    chatBubbleUntil: nowUiDa + bubbleDurationMs,
+                  }
+                : p
+            );
+            pilgrimsRef.current = updatedPilgrims;
+            setPilgrims(updatedPilgrims);
+            return;
+          }
+
+          const hitStudentInDoor = doorCrowdRef.current.find(
+            (p) =>
+              p.id === targetId ||
+              p.username.trim().toLowerCase() === targetLowerName
           );
-          pilgrimsRef.current = updatedPilgrims;
-          setPilgrims(updatedPilgrims);
+          if (hitStudentInDoor) {
+            const updatedDoor = doorCrowdRef.current.map((p) =>
+              p.id === hitStudentInDoor.id
+                ? {
+                    ...p,
+                    prayer: 'ui da',
+                    hasComment: true,
+                    stateTimer: 0,
+                    chatBubbleKey: nextBubbleKey,
+                    chatBubbleUntil: nowUiDa + bubbleDurationMs,
+                  }
+                : p
+            );
+            doorCrowdRef.current = updatedDoor;
+            setDoorCrowd(updatedDoor);
+          }
         }, 1000);
 
         pendingUiDaTimersRef.current.set(targetTimerKey, uiDaTimer);
@@ -1809,9 +1887,6 @@ export function useClassroomEngine() {
     },
     [spawnRoseHeartBurstAt]
   );
-  const doorCrowdRef = useRef(doorCrowd);
-  doorCrowdRef.current = doorCrowd;
-  const doorCrowdCursorRef = useRef(0);
   // Giới hạn hiển thị chatbox của học sinh hàng chờ (doorCrowd): mỗi 3s show tối đa 10 chat mới nhất
   const doorCrowdChatWindowRef = useRef<{
     windowStart: number;
@@ -2146,6 +2221,174 @@ export function useClassroomEngine() {
       }
     },
     [applyDoorCrowdChatItems]
+  );
+
+  // Nhập ngẫu nhiên (hoặc giữ nguyên nếu đã có tên) vào 1 học sinh đang đứng ở hàng chờ cửa lớp để hiện tên/chat và ném máy bay giấy
+  const embodyRandomDoorCrowdStudentForThrow = useCallback(
+    (item: {
+      username: string;
+      lowerUser: string;
+      comment?: string;
+      gender: 'female' | 'male';
+      avatarUrl?: string | null;
+      showBubble?: boolean;
+    }): PilgrimData | null => {
+      const cfg = configRef.current;
+      const crowdPos = cfg.doorCrowdPos || LEFT_DOOR_POS;
+      const maxCluster = Math.max(1, cfg.doorCrowdCount ?? 7);
+      let pool = [...doorCrowdRef.current];
+      if (pool.length === 0) {
+        pool = buildDoorCrowdPool(
+          maxCluster,
+          crowdPos,
+          pool,
+          npcNamesRef.current,
+          npcAvatarsRef.current,
+          cfg.doorCrowdSpread ?? 1,
+          Array.from(waitingPoolRef.current.values()),
+          studentTrophyMapRef.current,
+          studentExpMapRef.current
+        );
+      }
+      if (pool.length === 0) return null;
+
+      const now = Date.now();
+      let targetIdx = pool.findIndex(
+        (s) => s.username.trim().toLowerCase() === item.lowerUser
+      );
+
+      if (targetIdx < 0) {
+        const activeRunnerUsers = new Set(
+          specialFlowerRunnersRef.current.map((r) =>
+            r.username.trim().toLowerCase()
+          )
+        );
+        const completelyFree: number[] = [];
+        const nonRunnerFree: number[] = [];
+        for (let i = 0; i < pool.length; i++) {
+          const isRunner = activeRunnerUsers.has(
+            pool[i].username.trim().toLowerCase()
+          );
+          if (!isRunner) {
+            nonRunnerFree.push(i);
+            if (!pool[i].chatBubbleUntil || pool[i].chatBubbleUntil! <= now) {
+              completelyFree.push(i);
+            }
+          }
+        }
+        if (completelyFree.length > 0) {
+          targetIdx =
+            completelyFree[Math.floor(Math.random() * completelyFree.length)];
+        } else if (nonRunnerFree.length > 0) {
+          targetIdx =
+            nonRunnerFree[Math.floor(Math.random() * nonRunnerFree.length)];
+        } else {
+          targetIdx = Math.floor(Math.random() * pool.length);
+        }
+      }
+
+      const chosen = pool[targetIdx];
+      const itemExp = studentExpMapRef.current.get(item.lowerUser) || 0;
+      const itemTrophies =
+        studentTrophyMapRef.current.get(item.lowerUser) || 0;
+      const shouldShowBubble = Boolean(item.showBubble && item.comment?.trim());
+      const freshBubbleKey = shouldShowBubble
+        ? issueChatBubbleKey()
+        : chosen.chatBubbleKey;
+      const freshBubbleUntil = shouldShowBubble
+        ? now + (cfg.chatBubbleDurationSec || 12) * 1000
+        : chosen.chatBubbleUntil;
+
+      for (let i = 0; i < pool.length; i++) {
+        if (
+          i !== targetIdx &&
+          pool[i].username.trim().toLowerCase() === item.lowerUser &&
+          pool[i].chatBubbleUntil
+        ) {
+          pool[i] = {
+            ...pool[i],
+            prayer: '',
+            hasComment: false,
+            chatBubbleUntil: 0,
+            chatBubbleKey: 0,
+          };
+        }
+      }
+
+      const updatedThrower: PilgrimData = {
+        ...chosen,
+        username: item.username,
+        gender: item.gender,
+        avatarUrl: item.avatarUrl || chosen.avatarUrl,
+        exp: itemExp,
+        level: getStudentLevelFromExp(itemExp),
+        goldTrophies: itemTrophies,
+        prayer: shouldShowBubble ? item.comment!.trim() : chosen.prayer,
+        hasComment: shouldShowBubble ? true : chosen.hasComment,
+        stateTimer: 0,
+        chatBubbleKey: freshBubbleKey,
+        chatBubbleUntil: freshBubbleUntil,
+      };
+
+      pool[targetIdx] = updatedThrower;
+      doorCrowdRef.current = pool;
+      setDoorCrowd(pool);
+      return updatedThrower;
+    },
+    []
+  );
+
+  const tryResolveAndLaunchPaperPlane = useCallback(
+    (thrower: PilgrimData, commentText: string): boolean => {
+      if (!commentText || !commentText.includes('@')) return false;
+      const cfg = configRef.current;
+      const activeClassStudents = pilgrimsRef.current.filter(
+        (p) =>
+          (Boolean(p.slotId) ||
+            p.state === 'stand_punishment' ||
+            p.state === 'walk_to_punishment_spot') &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit'
+      );
+      const throwerLower = thrower.username.trim().toLowerCase();
+      const inClassCandidates = activeClassStudents.filter(
+        (p) =>
+          p.id !== thrower.id &&
+          p.username.trim().toLowerCase() !== throwerLower
+      );
+
+      let taggedTarget = resolvePaperPlaneTargetInClass({
+        commentText,
+        thrower,
+        allStudentsInClass: inClassCandidates,
+        vipSlots: vipSlotsRef.current,
+        normalSlots: normalSlotsRef.current,
+        lotusDonors: lotusDonorsRef.current,
+        nameTagMaxChars: cfg.nameTagMaxChars ?? 16,
+      });
+
+      if (!taggedTarget && doorCrowdRef.current.length > 0) {
+        const doorCandidates = doorCrowdRef.current.filter(
+          (p) =>
+            p.id !== thrower.id &&
+            p.username.trim().toLowerCase() !== throwerLower
+        );
+        taggedTarget = resolvePaperPlaneTargetInClass({
+          commentText,
+          thrower,
+          allStudentsInClass: doorCandidates,
+          vipSlots: vipSlotsRef.current,
+          normalSlots: normalSlotsRef.current,
+          lotusDonors: lotusDonorsRef.current,
+          nameTagMaxChars: cfg.nameTagMaxChars ?? 16,
+        });
+      }
+
+      if (!taggedTarget) return false;
+      launchPaperPlaneAtStudent(thrower, taggedTarget, false);
+      return true;
+    },
+    [launchPaperPlaneAtStudent]
   );
 
   // Đồng bộ nhóm học sinh đứng chùm ở cửa lớp với danh sách hàng chờ thực tế (tuân theo giới hạn tối đa doorCrowdCount)
@@ -5228,8 +5471,14 @@ export function useClassroomEngine() {
       }
 
       const zEnt = zombieEntityRef.current;
-      const targetX = zEnt.x + (Math.random() - 0.5) * 18;
-      const targetY = zEnt.y - 42 + (Math.random() - 0.5) * 16;
+      const fallbackStandPos = cfgNowForSpeed.zombieStandPos || {
+        x: 270,
+        y: 486,
+      };
+      const baseTargetX = zEnt.visible ? zEnt.x : fallbackStandPos.x;
+      const baseTargetY = zEnt.visible ? zEnt.y : fallbackStandPos.y;
+      const targetX = baseTargetX + (Math.random() - 0.5) * 18;
+      const targetY = baseTargetY - 42 + (Math.random() - 0.5) * 16;
       const now = Date.now();
 
       // Khi ném "Đứa bàn bên" (desk_mate - 10 xu & 10+ xu): Tìm bạn ngồi cùng bàn đôi (hoặc bạn kế bên) để copy Thẻ Tên gắn dính vào model đạn xoay theo đạn
@@ -5551,18 +5800,21 @@ export function useClassroomEngine() {
             until: Date.now() + dyingDurMs + 1300,
             lockedUntil: Date.now() + dyingDurMs + 200,
           });
-          setZombieEntity((prevZ) => {
-            const dyingZ: ZombieEntityState = {
-              ...prevZ,
-              isWalking: false,
-              isDying: true,
-              dyingProgress: 0.02,
-              recoilOffsetX: 0,
-              recoilOffsetY: 0,
-            };
-            zombieEntityRef.current = dyingZ;
-            return dyingZ;
-          });
+          const standPosDying = cfgNow.zombieStandPos || { x: 270, y: 486 };
+          const prevZSnap = zombieEntityRef.current;
+          const dyingZSnapshot: ZombieEntityState = {
+            ...prevZSnap,
+            visible: true,
+            x: prevZSnap.visible ? prevZSnap.x : standPosDying.x,
+            y: prevZSnap.visible ? prevZSnap.y : standPosDying.y,
+            isWalking: false,
+            isDying: true,
+            dyingProgress: 0.02,
+            recoilOffsetX: 0,
+            recoilOffsetY: 0,
+          };
+          zombieEntityRef.current = dyingZSnapshot;
+          setZombieEntity(dyingZSnapshot);
           const dyingState: ZombieEventRuntimeState = {
             ...curEv,
             phase: 'z_flow_5b_dying',
@@ -5577,7 +5829,11 @@ export function useClassroomEngine() {
           };
           zombieEventStateRef.current = dyingState;
           setZombieEventState(dyingState);
-          syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: dyingState });
+          syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+            state: dyingState,
+            entity: dyingZSnapshot,
+            force: true,
+          });
           return;
         }
 
@@ -5602,11 +5858,26 @@ export function useClassroomEngine() {
 
   // Bắt đầu ngay Luồng 1 của Sự kiện "Zombie tấn công"
   const startZombieEventFlowNow = useCallback(
-    (wasRunningLesson?: boolean, broadcastSync = true) => {
+    (
+      wasRunningLesson?: boolean,
+      broadcastSync = true,
+      broadcastAuthoritativeState = false
+    ) => {
       const cfg = configRef.current;
       if (cfg.zombieEventEnabled === false) {
         return;
       }
+      const isPureLiveTab =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('view') === 'live' ||
+          new URLSearchParams(window.location.search).get('mode') === 'live' ||
+          new URLSearchParams(window.location.search).get('obs') === '1');
+      const peersNow = peerCountsRef.current;
+      const isPassiveZombieTab =
+        !isPureLiveTab &&
+        (peersNow.obsPeers > 0 ||
+          (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
+
       quizNpcTimersRef.current.forEach((tid) => clearTimeout(tid));
       quizNpcTimersRef.current = [];
 
@@ -5726,28 +5997,33 @@ export function useClassroomEngine() {
         .join('. ');
 
       const flowToken1 = `z_flow_1_${Date.now()}`;
-      soundEngine.playBell((cfg.ttsVolume || 1) * 0.8, null, true);
+      if (!soundEngine.isRemoteSlaveMode() && !isPassiveZombieTab) {
+        soundEngine.playBell((cfg.ttsVolume || 1) * 0.8, null, true);
+      }
 
-      const enqueued1 = soundEngine.isRemoteSlaveMode()
-        ? Boolean(cfg.ttsEnabled)
-        : soundEngine.enqueueLessonFlowItems(
-            [
-              {
-                text: fullIntroSpeech,
-                lang: 'vi',
-                speakerRole: 'abbot',
-                lessonFlowToken: flowToken1,
-                lessonStepLabel: 'Sự kiện Zombie - Luồng 1: Cảnh báo',
-              },
-            ],
-            cfg
-          );
+      const enqueued1 =
+        soundEngine.isRemoteSlaveMode() || isPassiveZombieTab
+          ? Boolean(cfg.ttsEnabled)
+          : soundEngine.enqueueLessonFlowItems(
+              [
+                {
+                  text: fullIntroSpeech,
+                  lang: 'vi',
+                  speakerRole: 'abbot',
+                  lessonFlowToken: flowToken1,
+                  lessonStepLabel: 'Sự kiện Zombie - Luồng 1: Cảnh báo',
+                },
+              ],
+              cfg
+            );
 
       const minDur1Ms = Math.max(
         500,
         Math.round((cfg.zombieFlow1MinDurationSec ?? 2.4) * 1000)
       );
-      const dur1 = enqueued1 ? Math.max(15000, minDur1Ms + 4000) : Math.max(2500, minDur1Ms + 1500);
+      const dur1 = enqueued1
+        ? Math.max(15000, minDur1Ms + 4000)
+        : Math.max(2500, minDur1Ms + 1500);
       const nextZState: ZombieEventRuntimeState = {
         isActive: true,
         isQueued: false,
@@ -5768,10 +6044,24 @@ export function useClassroomEngine() {
       zombieEventStateRef.current = nextZState;
       setZombieEventState(nextZState);
       if (broadcastSync) {
-        syncService.sendCommand('TRIGGER_ZOMBIE_EVENT', {
-          wasRunningLesson: shouldResume,
+        if (isPassiveZombieTab) {
+          // Tab Điều Khiển ủy quyền cho Tab Live (?obs=1) làm Master điều phối âm thanh & các luồng Zombie (không gửi đè SYNC_ZOMBIE_EVENT_STATE tránh lệch token)
+          syncService.sendCommand('TRIGGER_ZOMBIE_EVENT', {
+            wasRunningLesson: shouldResume,
+          });
+        } else {
+          syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+            state: nextZState,
+            entity: resetZEntity,
+            force: true,
+          });
+        }
+      } else if (broadcastAuthoritativeState && !isPassiveZombieTab) {
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: nextZState,
+          entity: resetZEntity,
+          force: true,
         });
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: nextZState });
       }
       pushToast('🧟 SỰ KIỆN ĐẨY LÙI ZOMBIE BẮT ĐẦU!', true);
     },
@@ -6278,6 +6568,60 @@ export function useClassroomEngine() {
         return;
       }
 
+      // Nếu trong vòng 10 giây sau khi ném máy bay giấy trúng bạn, học sinh ngoài hàng chờ tặng Hoa Hồng ->
+      // Ném thẳng Bó Hoa Hồng từ nhân vật hàng chờ ở cửa lớp sang cho bạn vừa bị ném đó!
+      if (giftMeta.id === 'rose' && boundCrowdMember) {
+        const roseTargetLock =
+          paperPlaneRoseTargetByThrowerRef.current.get(lowerUser);
+        if (roseTargetLock && now <= roseTargetLock.expiresAt) {
+          const friendTargetInClass = pilgrimsRef.current.find(
+            (p) =>
+              (p.id === roseTargetLock.targetId ||
+                p.username.trim().toLowerCase() ===
+                  roseTargetLock.targetLowerName) &&
+              (Boolean(p.slotId) ||
+                p.state === 'stand_punishment' ||
+                p.state === 'walk_to_punishment_spot') &&
+              p.state !== 'leave_side_to_aisle' &&
+              p.state !== 'leave_down_exit' &&
+              p.username.trim().toLowerCase() !== lowerUser
+          );
+          const friendTargetInDoor = !friendTargetInClass
+            ? doorCrowdRef.current.find(
+                (p) =>
+                  (p.id === roseTargetLock.targetId ||
+                    p.username.trim().toLowerCase() ===
+                      roseTargetLock.targetLowerName) &&
+                  p.id !== boundCrowdMember!.id &&
+                  p.username.trim().toLowerCase() !== lowerUser
+              )
+            : undefined;
+          const friendTarget = friendTargetInClass || friendTargetInDoor;
+          if (friendTarget) {
+            soundEngine.playGiftEventSound('rose', cfg, !isAttackerBot);
+            launchPaperPlaneAtStudent(boundCrowdMember, friendTarget, false, {
+              projectileKind: 'rose_bouquet',
+              onHitCallback: () => {
+                if (!isAttackerBot && bonusPts > 0) {
+                  const queuedSender = pool.get(lowerUser);
+                  if (queuedSender) {
+                    queuedSender.points = (queuedSender.points || 0) + bonusPts;
+                    recomputeWaitingQueueLazy();
+                  } else {
+                    addLotusPointsToDonor(safeName, bonusPts);
+                  }
+                }
+              },
+            });
+            pushToast(
+              `🌹 ${safeName} (hàng chờ) gửi bó hoa hồng bay tới ${friendTarget.username}! ❤️`,
+              true
+            );
+            return;
+          }
+        }
+      }
+
       // Nếu là Tặng hoa cho cô (rose) hoặc Tặng hoa cho thầy (icecream) khi học sinh không có trong lớp:
       // Đã thêm vào hàng chờ (nếu chưa có) + nhập thẻ tên vào 1 người trong hàng chờ (boundCrowdMember) -> cho đúng người đó chạy từ vị trí đứng trong hàng chờ lên tặng hoa rồi quay về vị trí cũ!
       if (giftMeta.id === 'rose' || giftMeta.id === 'icecream') {
@@ -6521,19 +6865,51 @@ export function useClassroomEngine() {
       const existingInClassNow = pilgrimsRef.current.find(
         (p) =>
           p.username.trim().toLowerCase() === lowerUser &&
-          Boolean(p.slotId) &&
+          (Boolean(p.slotId) ||
+            p.state === 'stand_punishment' ||
+            p.state === 'walk_to_punishment_spot') &&
           p.state !== 'leave_side_to_aisle' &&
           p.state !== 'leave_down_exit'
       );
       const isJoinCmd = isJoinClassCommand(safeComment);
 
-      // Nhận diện lệnh gõ 1nam hoặc 1nu để đổi giới tính nhân vật học sinh (Nam / Nữ)
+      // Nhận diện lệnh gõ /nam hoặc /nu để đổi giới tính nhân vật học sinh (Nam / Nữ)
       const genderCmd = parseGenderCommand(safeComment);
       if (genderCmd) {
         userGenderOverridesRef.current.set(lowerUser, genderCmd);
         const queuedEntry = waitingPoolRef.current.get(lowerUser);
         if (queuedEntry) {
           queuedEntry.gender = genderCmd;
+        }
+        if (
+          doorCrowdRef.current.some(
+            (p) =>
+              p.username.trim().toLowerCase() === lowerUser &&
+              p.gender !== genderCmd
+          )
+        ) {
+          const nextDoor = doorCrowdRef.current.map((p) =>
+            p.username.trim().toLowerCase() === lowerUser
+              ? { ...p, gender: genderCmd }
+              : p
+          );
+          doorCrowdRef.current = nextDoor;
+          setDoorCrowd(nextDoor);
+        }
+        if (
+          pilgrimsRef.current.some(
+            (p) =>
+              p.username.trim().toLowerCase() === lowerUser &&
+              p.gender !== genderCmd
+          )
+        ) {
+          const nextPilgrimsGender = pilgrimsRef.current.map((p) =>
+            p.username.trim().toLowerCase() === lowerUser
+              ? { ...p, gender: genderCmd }
+              : p
+          );
+          pilgrimsRef.current = nextPilgrimsGender;
+          setPilgrims(nextPilgrimsGender);
         }
         pushToast(
           `✨ ${safeName} đã đổi nhân vật sang Học Sinh ${
@@ -6672,34 +7048,16 @@ export function useClassroomEngine() {
           pilgrimsRef.current = nextPilgrims;
           setPilgrims(nextPilgrims);
 
-          // Chỉ các bạn ĐANG NGỒI TRONG LỚP (state === 'pray_seated' và có slotId) gõ lệnh @tên mới được phép ném máy bay giấy!
-          if (
-            safeComment.includes('@') &&
-            Boolean(existing.slotId) &&
-            existing.state === 'pray_seated'
-          ) {
-            const activeClassStudents = nextPilgrims.filter(
+          // Cho phép tất cả học sinh ĐANG Ở TRONG LỚP (ngồi bàn, đang bước vào chỗ, đứng phạt...) gõ @tên để ném máy bay giấy
+          if (safeComment.includes('@')) {
+            const updatedThrower = nextPilgrims.find(
               (p) =>
-                Boolean(p.slotId) &&
+                p.id === existing.id &&
                 p.state !== 'leave_side_to_aisle' &&
                 p.state !== 'leave_down_exit'
             );
-            const updatedThrower = activeClassStudents.find(
-              (p) => p.id === existing.id && p.state === 'pray_seated'
-            );
             if (updatedThrower) {
-              const taggedTarget = resolvePaperPlaneTargetInClass({
-                commentText: safeComment,
-                thrower: updatedThrower,
-                allStudentsInClass: activeClassStudents,
-                vipSlots: vipSlotsRef.current,
-                normalSlots: normalSlotsRef.current,
-                lotusDonors: lotusDonorsRef.current,
-                nameTagMaxChars: cfg.nameTagMaxChars ?? 16,
-              });
-              if (taggedTarget) {
-                launchPaperPlaneAtStudent(updatedThrower, taggedTarget, false);
-              }
+              tryResolveAndLaunchPaperPlane(updatedThrower, safeComment);
             }
           }
 
@@ -6736,10 +7094,12 @@ export function useClassroomEngine() {
 
       // 5. Quy tắc khi người chơi hoặc NPC đang có mặt trong Hàng Chờ (không ngồi trong lớp) comment:
       // - Cập nhật nội dung comment mới nhất O(1) trong waitingPoolRef (không re-render mảng).
-      // - Chọn 1 học sinh trong nhóm đang đứng chờ ngay cửa lớp (doorCrowd) để load tên + hiện bong bóng chat đẩy lên layer đầu.
+      // - Nếu comment có @tên: nhập ngẫu nhiên vào 1 học sinh đứng chờ cửa lớp (doorCrowd), hiện tên + bong bóng chat và ném máy bay giấy ngay!
       if (
         !bypassWaitingQueue &&
-        (!opts.isBot || opts.allowDoorCrowdBubbleForBot)
+        (!opts.isBot ||
+          opts.allowDoorCrowdBubbleForBot ||
+          safeComment.includes('@'))
       ) {
         const queuedEntry = waitingPoolRef.current.get(lowerUser);
         if (!queuedEntry) {
@@ -6753,19 +7113,32 @@ export function useClassroomEngine() {
           return false;
         }
 
+        const resolvedGender = resolveUserGender(
+          safeName,
+          genderCmd || queuedEntry.gender || opts.gender
+        );
+
         if (safeComment.trim() && !isJoinCmd) {
           queuedEntry.prayer = safeComment;
-          queuedEntry.gender = resolveUserGender(
-            safeName,
-            genderCmd || queuedEntry.gender
-          );
+          queuedEntry.gender = resolvedGender;
+        }
+
+        if (safeComment.includes('@')) {
+          const embodiedDoorThrower = embodyRandomDoorCrowdStudentForThrow({
+            username: safeName,
+            lowerUser,
+            comment: !isJoinCmd ? safeComment : undefined,
+            gender: resolvedGender,
+            avatarUrl: opts.avatarUrl || queuedEntry.avatarUrl,
+            showBubble: Boolean(safeComment.trim() && !isJoinCmd),
+          });
+          if (embodiedDoorThrower) {
+            tryResolveAndLaunchPaperPlane(embodiedDoorThrower, safeComment);
+          }
+          return false;
         }
 
         if (safeComment.trim() && doorCrowdRef.current.length > 0) {
-          const resolvedGender = resolveUserGender(
-            safeName,
-            genderCmd || opts.gender
-          );
           enqueueDoorCrowdChat({
             username: safeName,
             lowerUser,
@@ -6831,6 +7204,27 @@ export function useClassroomEngine() {
           isBot: opts.isBot,
           avatarUrl: opts.avatarUrl,
         });
+        if (
+          !isAdmittingFromQueue &&
+          !hideCorrectAnswerBubble &&
+          safeComment.includes('@')
+        ) {
+          const resolvedGender = resolveUserGender(
+            safeName,
+            genderCmd || opts.gender
+          );
+          const embodiedDoorThrower = embodyRandomDoorCrowdStudentForThrow({
+            username: safeName,
+            lowerUser,
+            comment: !isJoinCmd ? safeComment : undefined,
+            gender: resolvedGender,
+            avatarUrl: opts.avatarUrl,
+            showBubble: Boolean(safeComment.trim() && !isJoinCmd),
+          });
+          if (embodiedDoorThrower) {
+            tryResolveAndLaunchPaperPlane(embodiedDoorThrower, safeComment);
+          }
+        }
         return false;
       }
 
@@ -6962,6 +7356,14 @@ export function useClassroomEngine() {
       pilgrimsRef.current = nextPilgrimsList;
       if (!skipStateCommit) {
         setPilgrims(nextPilgrimsList);
+      }
+
+      if (
+        !isAdmittingFromQueue &&
+        !hideCorrectAnswerBubble &&
+        safeComment.includes('@')
+      ) {
+        tryResolveAndLaunchPaperPlane(newStudent, safeComment);
       }
 
       if (!opts.isBot && cfg.hudLayout.showNewPilgrimToast) {
@@ -9494,7 +9896,7 @@ export function useClassroomEngine() {
     const initTimer = setTimeout(() => {
       const curBoard = classBoardStateRef.current;
       const currentCfg = configRef.current;
-      if (!curBoard.isRunning) return;
+      if (!curBoard.isRunning || curBoard.engine !== 'english_quiz') return;
 
       if (curBoard.phase === 'lesson_start') {
         const startSpeech =
@@ -9725,7 +10127,7 @@ export function useClassroomEngine() {
   // Đồng bộ cấu hình engine, bộ câu hỏi & thời gian câu hỏi (mặc định 12s cho Luồng 2 & 3) vào classBoardState khi người dùng chỉnh trong Studio
   // Quy tắc nguồn chuẩn duy nhất: Câu hỏi trên Bảng Lớp (currentQuestion) LUÔN LUÔN là câu đầu tiên (#1 Đang phát: quizList[0]) trong Hàng Chờ Câu Hỏi!
   useEffect(() => {
-    const nextEngine = config.hudLayout.classBoardEngine || 'english_quiz';
+    const nextEngine = config.hudLayout.classBoardEngine || 'notice';
     const quizList = getActiveQuizList(config);
     setClassBoardState((prev) => {
       const safeIdx = 0;
@@ -12019,6 +12421,64 @@ export function useClassroomEngine() {
       if (!prev.isActive) return;
 
       const cfg = configRef.current;
+      const isPureLiveTab =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('view') === 'live' ||
+          new URLSearchParams(window.location.search).get('mode') === 'live' ||
+          new URLSearchParams(window.location.search).get('obs') === '1');
+      const peersNow = peerCountsRef.current;
+      const isPassiveZombieTab =
+        !isPureLiveTab &&
+        (peersNow.obsPeers > 0 ||
+          (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
+
+      // Tự phục hồi hiển thị Zombie tức thì nếu đồng bộ liên tab làm nhảy qua z_flow_1_intro -> z_flow_2..5b
+      const shouldShowZombieEntity =
+        prev.phase === 'z_flow_2_spawn' ||
+        prev.phase === 'z_flow_3_teacher' ||
+        prev.phase === 'z_flow_4_supervisor' ||
+        prev.phase === 'z_flow_5_combat' ||
+        prev.phase === 'z_flow_5b_dying';
+      if (shouldShowZombieEntity && !zombieEntityRef.current.visible) {
+        const spawnPosGuard = cfg.zombieSpawnPos || { x: 42, y: 520 };
+        const standPosGuard = cfg.zombieStandPos || { x: 270, y: 486 };
+        const isSpawnPhase = prev.phase === 'z_flow_2_spawn';
+        const lockCamGuardMs = Math.max(
+          500,
+          Math.round((cfg.zombieFlow2LockCameraSec ?? 3.0) * 1000)
+        );
+        const healedZ: ZombieEntityState = {
+          ...zombieEntityRef.current,
+          visible: true,
+          x: isSpawnPhase ? spawnPosGuard.x : standPosGuard.x,
+          y: isSpawnPhase ? spawnPosGuard.y : standPosGuard.y,
+          targetX: standPosGuard.x,
+          targetY: standPosGuard.y,
+          isWalking:
+            isSpawnPhase && (prev.elapsedPhaseMs || 0) >= lockCamGuardMs,
+          facing:
+            isSpawnPhase && standPosGuard.x < spawnPosGuard.x
+              ? 'left'
+              : 'right',
+          isDying: prev.phase === 'z_flow_5b_dying',
+          dyingProgress:
+            prev.phase === 'z_flow_5b_dying'
+              ? Math.max(0.05, zombieEntityRef.current.dyingProgress || 0.05)
+              : 0,
+        };
+        zombieEntityRef.current = healedZ;
+        setZombieEntity(healedZ);
+      } else if (!shouldShowZombieEntity && zombieEntityRef.current.visible) {
+        const hiddenGuardZ: ZombieEntityState = {
+          ...zombieEntityRef.current,
+          visible: false,
+          isWalking: false,
+          isDying: false,
+        };
+        zombieEntityRef.current = hiddenGuardZ;
+        setZombieEntity(hiddenGuardZ);
+      }
+
       const nextElapsed = (prev.elapsedPhaseMs || 0) + dtMs;
       const nextLeft = Math.max(0, (prev.timeLeftMs || 0) - dtMs);
 
@@ -12030,9 +12490,20 @@ export function useClassroomEngine() {
           500,
           Math.round((cfg.zombieFlow1MinDurationSec ?? 2.4) * 1000)
         );
-        const done1 =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= minDur1Ms) ||
-          nextLeft <= 0;
+        const stillPendingTts1 =
+          !soundEngine.isTabMuted() &&
+          Boolean(prev.activeFlowToken) &&
+          soundEngine.hasPendingFlowToken(prev.activeFlowToken);
+        const rawDone1 =
+          (!stillPendingTts1 &&
+            Boolean(prev.ttsFinishedForPhase) &&
+            nextElapsed >= minDur1Ms) ||
+          (nextLeft <= 0 && (!stillPendingTts1 || nextElapsed >= 35000));
+        const followerGrace1 =
+          isPassiveZombieTab &&
+          nextLeft <= 0 &&
+          nextElapsed >= (prev.totalDurationMs || 6000) + 6500;
+        const done1 = isPassiveZombieTab ? followerGrace1 : rawDone1;
         if (!done1) {
           const tick1: ZombieEventRuntimeState = {
             ...prev,
@@ -12075,11 +12546,13 @@ export function useClassroomEngine() {
         setZombieEntity(spawnedZ);
 
         // Khóa camera vào Zombie + phát tiếng Zombie gầm gừ
-        soundEngine.playZombieGrowlSfx(
-          cfg.ttsVolume || 1,
-          cfg.zombieGrowlMp3Url,
-          true
-        );
+        if (!soundEngine.isRemoteSlaveMode() && !isPassiveZombieTab) {
+          soundEngine.playZombieGrowlSfx(
+            cfg.ttsVolume || 1,
+            cfg.zombieGrowlMp3Url,
+            true
+          );
+        }
         setCameraFocus({
           pilgrimId: null,
           focusRole: 'zombie',
@@ -12101,7 +12574,10 @@ export function useClassroomEngine() {
         };
         zombieEventStateRef.current = state2;
         setZombieEventState(state2);
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: state2 });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: state2,
+          entity: spawnedZ,
+        });
         return;
       }
 
@@ -12125,6 +12601,7 @@ export function useClassroomEngine() {
           if (distToStand > 5) {
             const walkingZ: ZombieEntityState = {
               ...curZ,
+              visible: true,
               targetX: standPos.x,
               targetY: standPos.y,
               isWalking: true,
@@ -12139,8 +12616,14 @@ export function useClassroomEngine() {
           standPos.y - zombieEntityRef.current.y
         );
         const arrivedAfterLock = nextElapsed >= lockCam2Ms + 200 && distNow <= 6;
+        const rawDone2 = arrivedAfterLock || nextLeft <= 0;
+        const followerGrace2 =
+          isPassiveZombieTab &&
+          nextLeft <= 0 &&
+          nextElapsed >= (prev.totalDurationMs || 6500) + 6500;
+        const done2 = isPassiveZombieTab ? followerGrace2 : rawDone2;
 
-        if (!arrivedAfterLock && nextLeft > 0) {
+        if (!done2) {
           const tick2: ZombieEventRuntimeState = {
             ...prev,
             elapsedPhaseMs: nextElapsed,
@@ -12151,13 +12634,17 @@ export function useClassroomEngine() {
           return;
         }
 
-        // Đảm bảo Zombie đứng đúng vị trí quy định
+        // Đảm bảo Zombie đứng đúng vị trí quy định và luôn hiển thị
         const settledZ: ZombieEntityState = {
           ...zombieEntityRef.current,
+          visible: true,
           x: standPos.x,
           y: standPos.y,
+          targetX: standPos.x,
+          targetY: standPos.y,
           isWalking: false,
           facing: 'right',
+          isDying: false,
         };
         zombieEntityRef.current = settledZ;
         setZombieEntity(settledZ);
@@ -12192,19 +12679,25 @@ export function useClassroomEngine() {
         });
 
         const flowToken3 = `z_flow_3_${Date.now()}`;
-        const enqueued3 = soundEngine.enqueueLessonFlowItems(
-          [
-            {
-              text: teacherLine,
-              lang: 'vi',
-              speakerRole: 'abbot',
-              lessonFlowToken: flowToken3,
-              lessonStepLabel: 'Sự kiện Zombie - Luồng 3: Cô giáo cầu cứu',
-            },
-          ],
-          cfg
-        );
-        const dur3 = enqueued3 ? Math.max(9000, minDur3Ms + 4000) : Math.max(2500, minDur3Ms + 1000);
+        const enqueued3 =
+          soundEngine.isRemoteSlaveMode() || isPassiveZombieTab
+            ? Boolean(cfg.ttsEnabled)
+            : soundEngine.enqueueLessonFlowItems(
+                [
+                  {
+                    text: teacherLine,
+                    lang: 'vi',
+                    speakerRole: 'abbot',
+                    lessonFlowToken: flowToken3,
+                    lessonStepLabel:
+                      'Sự kiện Zombie - Luồng 3: Cô giáo cầu cứu',
+                  },
+                ],
+                cfg
+              );
+        const dur3 = enqueued3
+          ? Math.max(11000, minDur3Ms + 4500)
+          : Math.max(2500, minDur3Ms + 1000);
 
         const state3: ZombieEventRuntimeState = {
           ...prev,
@@ -12217,7 +12710,10 @@ export function useClassroomEngine() {
         };
         zombieEventStateRef.current = state3;
         setZombieEventState(state3);
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: state3 });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: state3,
+          entity: settledZ,
+        });
         return;
       }
 
@@ -12229,9 +12725,20 @@ export function useClassroomEngine() {
           500,
           Math.round((cfg.zombieFlow3MinDurationSec ?? 2.0) * 1000)
         );
-        const done3 =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= minDur3Ms) ||
-          nextLeft <= 0;
+        const stillPendingTts3 =
+          !soundEngine.isTabMuted() &&
+          Boolean(prev.activeFlowToken) &&
+          soundEngine.hasPendingFlowToken(prev.activeFlowToken);
+        const rawDone3 =
+          (!stillPendingTts3 &&
+            Boolean(prev.ttsFinishedForPhase) &&
+            nextElapsed >= minDur3Ms) ||
+          (nextLeft <= 0 && (!stillPendingTts3 || nextElapsed >= 35000));
+        const followerGrace3 =
+          isPassiveZombieTab &&
+          nextLeft <= 0 &&
+          nextElapsed >= (prev.totalDurationMs || 6000) + 6500;
+        const done3 = isPassiveZombieTab ? followerGrace3 : rawDone3;
         if (!done3) {
           const tick3: ZombieEventRuntimeState = {
             ...prev,
@@ -12278,19 +12785,25 @@ export function useClassroomEngine() {
         });
 
         const flowToken4 = `z_flow_4_${Date.now()}`;
-        const enqueued4 = soundEngine.enqueueLessonFlowItems(
-          [
-            {
-              text: supervisorLine,
-              lang: 'vi',
-              speakerRole: 'abbot',
-              lessonFlowToken: flowToken4,
-              lessonStepLabel: 'Sự kiện Zombie - Luồng 4: Cô giáo kêu gọi',
-            },
-          ],
-          cfg
-        );
-        const dur4 = enqueued4 ? Math.max(11000, minDur4Ms + 4000) : Math.max(2500, minDur4Ms + 1200);
+        const enqueued4 =
+          soundEngine.isRemoteSlaveMode() || isPassiveZombieTab
+            ? Boolean(cfg.ttsEnabled)
+            : soundEngine.enqueueLessonFlowItems(
+                [
+                  {
+                    text: supervisorLine,
+                    lang: 'vi',
+                    speakerRole: 'abbot',
+                    lessonFlowToken: flowToken4,
+                    lessonStepLabel:
+                      'Sự kiện Zombie - Luồng 4: Cô giáo kêu gọi',
+                  },
+                ],
+                cfg
+              );
+        const dur4 = enqueued4
+          ? Math.max(12000, minDur4Ms + 4500)
+          : Math.max(2500, minDur4Ms + 1200);
 
         const state4: ZombieEventRuntimeState = {
           ...prev,
@@ -12303,7 +12816,10 @@ export function useClassroomEngine() {
         };
         zombieEventStateRef.current = state4;
         setZombieEventState(state4);
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: state4 });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: state4,
+          entity: zombieEntityRef.current,
+        });
         return;
       }
 
@@ -12315,9 +12831,20 @@ export function useClassroomEngine() {
           500,
           Math.round((cfg.zombieFlow4MinDurationSec ?? 2.2) * 1000)
         );
-        const done4 =
-          (Boolean(prev.ttsFinishedForPhase) && nextElapsed >= minDur4Ms) ||
-          nextLeft <= 0;
+        const stillPendingTts4 =
+          !soundEngine.isTabMuted() &&
+          Boolean(prev.activeFlowToken) &&
+          soundEngine.hasPendingFlowToken(prev.activeFlowToken);
+        const rawDone4 =
+          (!stillPendingTts4 &&
+            Boolean(prev.ttsFinishedForPhase) &&
+            nextElapsed >= minDur4Ms) ||
+          (nextLeft <= 0 && (!stillPendingTts4 || nextElapsed >= 35000));
+        const followerGrace4 =
+          isPassiveZombieTab &&
+          nextLeft <= 0 &&
+          nextElapsed >= (prev.totalDurationMs || 6500) + 6500;
+        const done4 = isPassiveZombieTab ? followerGrace4 : rawDone4;
         if (!done4) {
           const tick4: ZombieEventRuntimeState = {
             ...prev,
@@ -12331,7 +12858,24 @@ export function useClassroomEngine() {
 
         // Mở camera về toàn cảnh lớp học để chiến đấu
         setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
-        soundEngine.playWoodenFish((cfg.ttsVolume || 1) * 0.8);
+        if (!soundEngine.isRemoteSlaveMode() && !isPassiveZombieTab) {
+          soundEngine.playWoodenFish((cfg.ttsVolume || 1) * 0.8);
+        }
+
+        const standPos5 = cfg.zombieStandPos || { x: 270, y: 486 };
+        const combatZ: ZombieEntityState = {
+          ...zombieEntityRef.current,
+          visible: true,
+          x: standPos5.x,
+          y: standPos5.y,
+          targetX: standPos5.x,
+          targetY: standPos5.y,
+          isWalking: false,
+          facing: 'right',
+          isDying: false,
+        };
+        zombieEntityRef.current = combatZ;
+        setZombieEntity(combatZ);
 
         const state5: ZombieEventRuntimeState = {
           ...prev,
@@ -12344,7 +12888,10 @@ export function useClassroomEngine() {
         };
         zombieEventStateRef.current = state5;
         setZombieEventState(state5);
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: state5 });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: state5,
+          entity: combatZ,
+        });
         pushToast(
           '⚔️ CHIẾN ĐẤU BẮT ĐẦU! Thả tim & tặng quà để ném đồ đẩy lùi Zombie!',
           true
@@ -12369,7 +12916,10 @@ export function useClassroomEngine() {
       // PHA GỤC NGÃ (z_flow_5b_dying - 3.2s) -> Chuyển sang LUỒNG 6 (z_flow_6_celebration)
       // ------------------------------------------------------------------------
       if (prev.phase === 'z_flow_5b_dying') {
-        if (nextLeft > 0) {
+        const done5b = isPassiveZombieTab
+          ? nextLeft <= 0 && nextElapsed >= (prev.totalDurationMs || 3200) + 4500
+          : nextLeft <= 0;
+        if (!done5b) {
           const tick5b: ZombieEventRuntimeState = {
             ...prev,
             elapsedPhaseMs: nextElapsed,
@@ -12384,6 +12934,7 @@ export function useClassroomEngine() {
         const hiddenZ: ZombieEntityState = {
           ...zombieEntityRef.current,
           visible: false,
+          isWalking: false,
           isDying: false,
           dyingProgress: 1,
         };
@@ -12503,12 +13054,14 @@ export function useClassroomEngine() {
           durationMs: 1250 + (idx % 5) * 110,
         }));
         setFlyingMilkTeas(milkTeaItems);
-        soundEngine.playAnswerRevealSfx(
-          cfg.ttsVolume || 1,
-          'victory_fanfare',
-          null,
-          true
-        );
+        if (!soundEngine.isRemoteSlaveMode() && !isPassiveZombieTab) {
+          soundEngine.playAnswerRevealSfx(
+            cfg.ttsVolume || 1,
+            'victory_fanfare',
+            null,
+            true
+          );
+        }
 
         const top1Name = top1?.username || 'Học Sinh Giỏi';
         const top2Name = top2?.username || 'Bạn Bàn Đầu';
@@ -12537,24 +13090,28 @@ export function useClassroomEngine() {
           Math.round((cfg.zombieFlow6MinDurationSec ?? 4.5) * 1000)
         );
         const flowToken6 = `z_flow_6_${Date.now()}`;
-        const enqueued6 = soundEngine.enqueueLessonFlowItems(
-          [
-            {
-              text: celebSpeech1,
-              lang: 'vi',
-              speakerRole: 'abbot',
-              lessonStepLabel: 'Sự kiện Zombie - Luồng 6: Chúc mừng',
-            },
-            {
-              text: celebSpeech2,
-              lang: 'vi',
-              speakerRole: 'abbot',
-              lessonFlowToken: flowToken6,
-              lessonStepLabel: 'Sự kiện Zombie - Luồng 6: Trao thưởng Trà Sữa',
-            },
-          ],
-          cfg
-        );
+        const enqueued6 =
+          soundEngine.isRemoteSlaveMode() || isPassiveZombieTab
+            ? Boolean(cfg.ttsEnabled)
+            : soundEngine.enqueueLessonFlowItems(
+                [
+                  {
+                    text: celebSpeech1,
+                    lang: 'vi',
+                    speakerRole: 'abbot',
+                    lessonStepLabel: 'Sự kiện Zombie - Luồng 6: Chúc mừng',
+                  },
+                  {
+                    text: celebSpeech2,
+                    lang: 'vi',
+                    speakerRole: 'abbot',
+                    lessonFlowToken: flowToken6,
+                    lessonStepLabel:
+                      'Sự kiện Zombie - Luồng 6: Trao thưởng Trà Sữa',
+                  },
+                ],
+                cfg
+              );
         const dur6 = enqueued6
           ? Math.max(60000, minDur6Ms + 45000)
           : Math.max(5500, minDur6Ms + 2500);
@@ -12572,7 +13129,10 @@ export function useClassroomEngine() {
         };
         zombieEventStateRef.current = state6;
         setZombieEventState(state6);
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: state6 });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: state6,
+          entity: hiddenZ,
+        });
         pushToast(
           `🧋 CÔ GIÁO KHAO CẢ LỚP & HÀNG CHỜ TRÀ SỮA MATCHA LATTE FULL TOPPING!`,
           true
@@ -12589,6 +13149,7 @@ export function useClassroomEngine() {
           Math.round((cfg.zombieFlow6MinDurationSec ?? 4.5) * 1000)
         );
         const stillPendingTts6 =
+          !soundEngine.isTabMuted() &&
           Boolean(prev.activeFlowToken) &&
           soundEngine.hasPendingFlowToken(prev.activeFlowToken);
         const postTtsElapsed6 =
@@ -12596,12 +13157,17 @@ export function useClassroomEngine() {
           typeof prev.ttsFinishedAtElapsedMs === 'number'
             ? nextElapsed - prev.ttsFinishedAtElapsedMs
             : 9999;
-        const done6 =
+        const rawDone6 =
           (!stillPendingTts6 &&
             Boolean(prev.ttsFinishedForPhase) &&
             nextElapsed >= minDur6Ms &&
             postTtsElapsed6 >= 1200) ||
-          nextLeft <= 0;
+          (nextLeft <= 0 && (!stillPendingTts6 || nextElapsed >= 75000));
+        const followerGrace6 =
+          isPassiveZombieTab &&
+          nextLeft <= 0 &&
+          nextElapsed >= (prev.totalDurationMs || 15000) + 6500;
+        const done6 = isPassiveZombieTab ? followerGrace6 : rawDone6;
         if (!done6) {
           const tick6: ZombieEventRuntimeState = {
             ...prev,
@@ -12616,6 +13182,15 @@ export function useClassroomEngine() {
         // Giữ nguyên Cấp và HP của Zombie hoàn toàn độc lập theo thiết lập của Dev (không tự động cộng tăng cấp)
         const devSetLevel = Math.max(1, cfg.zombieLevel || prev.level || 1);
         const devSetMaxHp = Math.max(100, cfg.zombieMaxHp || prev.maxHp || 10000);
+
+        const hiddenEndZ: ZombieEntityState = {
+          ...zombieEntityRef.current,
+          visible: false,
+          isWalking: false,
+          isDying: false,
+        };
+        zombieEntityRef.current = hiddenEndZ;
+        setZombieEntity(hiddenEndZ);
 
         const shouldResumeLesson = prev.resumeLessonAfterEvent;
         const finishedState: ZombieEventRuntimeState = {
@@ -12637,6 +13212,7 @@ export function useClassroomEngine() {
         setZombieEventState(finishedState);
         syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
           state: finishedState,
+          entity: hiddenEndZ,
         });
 
         // Tiếp tục lại tiết học đang dở ở câu hỏi kế tiếp (Luồng 1: Chuẩn bị)
@@ -12644,19 +13220,19 @@ export function useClassroomEngine() {
           const prepDurMs =
             Math.max(1, cfg.lessonPrepareDurationSec || 3) * 1000;
           const prepSpeech = pickRandomLessonPrepSpeech(cfg);
-          soundEngine.playWoodenFish((cfg.ttsVolume || 1) * 0.65);
-          soundEngine.enqueueLessonFlowItems(
-            [
-              {
-                text: prepSpeech,
-                lang: 'vi',
-                lessonStepLabel: `Luồng 1: Chuẩn bị (${Math.round(
-                  prepDurMs / 1000
-                )}s)`,
-              },
-            ],
-            cfg
-          );
+          const resumePrepItems = [
+            {
+              text: prepSpeech,
+              lang: 'vi' as const,
+              lessonStepLabel: `Luồng 1: Chuẩn bị (${Math.round(
+                prepDurMs / 1000
+              )}s)`,
+            },
+          ];
+          if (!soundEngine.isRemoteSlaveMode() && !isPassiveZombieTab) {
+            soundEngine.playWoodenFish((cfg.ttsVolume || 1) * 0.65);
+            soundEngine.enqueueLessonFlowItems(resumePrepItems, cfg);
+          }
 
           const resumedBoard: ClassBoardRuntimeState = {
             ...classBoardStateRef.current,
@@ -12679,6 +13255,7 @@ export function useClassroomEngine() {
           setClassBoardState(resumedBoard);
           syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
             state: resumedBoard,
+            lessonTtsItems: resumePrepItems,
           });
         }
       }
@@ -13505,27 +14082,41 @@ export function useClassroomEngine() {
           });
           break;
         case 'TRIGGER_PAPER_PLANE': {
-          const tFrom = String(p.throwerUsername || '').trim().toLowerCase();
+          const rawThrowerName = String(p.throwerUsername || '').trim();
+          const tFrom = rawThrowerName.toLowerCase();
           const tTo = String(p.targetUsername || '').trim().toLowerCase();
           const pKind: 'paper_plane' | 'rose_bouquet' =
             p.projectileKind === 'rose_bouquet' ? 'rose_bouquet' : 'paper_plane';
           if (tFrom && tTo) {
             const inClassNow = pilgrimsRef.current.filter(
               (st) =>
-                Boolean(st.slotId) &&
+                (Boolean(st.slotId) ||
+                  st.state === 'stand_punishment' ||
+                  st.state === 'walk_to_punishment_spot') &&
                 st.state !== 'leave_side_to_aisle' &&
                 st.state !== 'leave_down_exit'
             );
-            const throwerSt = inClassNow.find(
-              (st) =>
-                st.username.trim().toLowerCase() === tFrom &&
-                (pKind === 'rose_bouquet' || st.state === 'pray_seated')
-            );
-            const targetSt = inClassNow.find(
-              (st) =>
-                st.username.trim().toLowerCase() === tTo &&
-                st.id !== throwerSt?.id
-            );
+            const throwerSt =
+              inClassNow.find(
+                (st) => st.username.trim().toLowerCase() === tFrom
+              ) ||
+              embodyRandomDoorCrowdStudentForThrow({
+                username: rawThrowerName,
+                lowerUser: tFrom,
+                gender: resolveUserGender(rawThrowerName),
+                showBubble: false,
+              });
+            const targetSt =
+              inClassNow.find(
+                (st) =>
+                  st.username.trim().toLowerCase() === tTo &&
+                  st.id !== throwerSt?.id
+              ) ||
+              doorCrowdRef.current.find(
+                (st) =>
+                  st.username.trim().toLowerCase() === tTo &&
+                  st.id !== throwerSt?.id
+              );
             if (throwerSt && targetSt) {
               launchPaperPlaneAtStudent(throwerSt, targetSt, false, {
                 projectileKind: pKind,
@@ -14085,15 +14676,437 @@ export function useClassroomEngine() {
             setClassBoardState(syncedState);
           }
           break;
-        case 'SYNC_ZOMBIE_EVENT_STATE':
+        case 'SYNC_ZOMBIE_EVENT_STATE': {
           if (p.state) {
-            zombieEventStateRef.current = p.state;
-            setZombieEventState(p.state);
+            const incoming = p.state as ZombieEventRuntimeState;
+            const current = zombieEventStateRef.current;
+            const incOrder = getZombiePhaseOrder(incoming.phase);
+            const curOrder = getZombiePhaseOrder(current.phase);
+
+            // Chặn gói đồng bộ trễ (luồng cũ hơn) khi sự kiện đang chạy
+            if (
+              !p.force &&
+              incoming.isActive &&
+              current.isActive &&
+              incOrder < curOrder
+            ) {
+              break;
+            }
+
+            // Chống cắt ngang câu thoại Zombie đang đọc thực tế trên tab phát âm thanh (Live)
+            const isAutoPhaseAdvanceFromPeer =
+              !p.force &&
+              incoming.isActive &&
+              current.isActive &&
+              incoming.phase !== current.phase;
+            const isActivelySpeakingZombieFlowLocally =
+              !soundEngine.isTabMuted() &&
+              Boolean(current.activeFlowToken) &&
+              !current.ttsFinishedForPhase &&
+              soundEngine.hasPendingFlowToken(current.activeFlowToken);
+            if (
+              isAutoPhaseAdvanceFromPeer &&
+              isActivelySpeakingZombieFlowLocally
+            ) {
+              break;
+            }
+
+            const phaseChanged =
+              Boolean(p.force) ||
+              incoming.phase !== current.phase ||
+              incoming.isActive !== current.isActive;
+
+            if (phaseChanged) {
+              const cfgSync = configRef.current;
+              const spawnPosSync = cfgSync.zombieSpawnPos || { x: 42, y: 520 };
+              const standPosSync = cfgSync.zombieStandPos || { x: 270, y: 486 };
+              const teacherEvPosSync = cfgSync.zombieTeacherPos || {
+                x: 392,
+                y: 444,
+              };
+              const supervisorEvPosSync = cfgSync.zombieSupervisorPos || {
+                x: 148,
+                y: 498,
+              };
+              const syncedEnt = p.entity as ZombieEntityState | undefined;
+
+              if (
+                !incoming.isActive ||
+                incoming.phase === 'idle' ||
+                incoming.phase === 'queued'
+              ) {
+                const hiddenSyncZ: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: false,
+                  isWalking: false,
+                  isDying: false,
+                };
+                zombieEntityRef.current = hiddenSyncZ;
+                setZombieEntity(hiddenSyncZ);
+                if (!incoming.isActive && current.isActive) {
+                  setZombieProjectiles([]);
+                  setZombieSpikyDamages([]);
+                  setFlyingMilkTeas([]);
+                  setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
+                }
+              } else if (incoming.phase === 'z_flow_1_intro') {
+                if (classBoardStateRef.current.isRunning) {
+                  const pausedB: ClassBoardRuntimeState = {
+                    ...classBoardStateRef.current,
+                    isRunning: false,
+                  };
+                  classBoardStateRef.current = pausedB;
+                  setClassBoardState(pausedB);
+                }
+                setMonks((prevMonks) => {
+                  const nextMonks = prevMonks.map((m) => {
+                    if (m.role === 'abbot') {
+                      return {
+                        ...m,
+                        name: 'Cô Thảo',
+                        x: teacherEvPosSync.x,
+                        y: teacherEvPosSync.y,
+                        targetX: teacherEvPosSync.x,
+                        targetY: teacherEvPosSync.y,
+                        moveAxis: 'idle' as const,
+                        facingLeft: true,
+                        pauseTimer: 999,
+                      };
+                    }
+                    if (m.role === 'senior_novice') {
+                      return {
+                        ...m,
+                        name: 'Thầy Tùng',
+                        x: supervisorEvPosSync.x,
+                        y: supervisorEvPosSync.y,
+                        targetX: supervisorEvPosSync.x,
+                        targetY: supervisorEvPosSync.y,
+                        moveAxis: 'idle' as const,
+                        facingLeft: false,
+                        pauseTimer: 999,
+                      };
+                    }
+                    return m;
+                  });
+                  monksRef.current = nextMonks;
+                  return nextMonks;
+                });
+                const introZ: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: false,
+                  x: spawnPosSync.x,
+                  y: spawnPosSync.y,
+                  targetX: standPosSync.x,
+                  targetY: standPosSync.y,
+                  isWalking: false,
+                  isDying: false,
+                  dyingProgress: 0,
+                };
+                zombieEntityRef.current = introZ;
+                setZombieEntity(introZ);
+                setZombieProjectiles([]);
+                setZombieSpikyDamages([]);
+                setFlyingMilkTeas([]);
+                setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
+              } else if (incoming.phase === 'z_flow_2_spawn') {
+                const lockCam2Ms = Math.max(
+                  500,
+                  Math.round((cfgSync.zombieFlow2LockCameraSec ?? 3.0) * 1000)
+                );
+                const maxDur2Ms =
+                  incoming.totalDurationMs ||
+                  Math.max(
+                    lockCam2Ms + 1000,
+                    Math.round((cfgSync.zombieFlow2MaxDurationSec ?? 6.5) * 1000)
+                  );
+                const spawnZSync: ZombieEntityState = syncedEnt
+                  ? { ...syncedEnt, visible: true }
+                  : {
+                      visible: true,
+                      x: spawnPosSync.x,
+                      y: spawnPosSync.y,
+                      targetX: standPosSync.x,
+                      targetY: standPosSync.y,
+                      isWalking: false,
+                      facing:
+                        standPosSync.x >= spawnPosSync.x ? 'right' : 'left',
+                      recoilOffsetX: 0,
+                      recoilOffsetY: 0,
+                      isDying: false,
+                      dyingProgress: 0,
+                      animTime: 0,
+                      hitFlashUntil: 0,
+                    };
+                zombieEntityRef.current = spawnZSync;
+                setZombieEntity(spawnZSync);
+                if (!soundEngine.isRemoteSlaveMode()) {
+                  soundEngine.playZombieGrowlSfx(
+                    cfgSync.ttsVolume || 1,
+                    cfgSync.zombieGrowlMp3Url,
+                    true
+                  );
+                }
+                setCameraFocus({
+                  pilgrimId: null,
+                  focusRole: 'zombie',
+                  customZoom: cfgSync.cameraZoomScale || 2.35,
+                  reason: 'special_gift',
+                  startedAt: Date.now(),
+                  until: Date.now() + maxDur2Ms,
+                  lockedUntil: Date.now() + lockCam2Ms,
+                });
+              } else if (incoming.phase === 'z_flow_3_teacher') {
+                const standZSync: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: true,
+                  x: standPosSync.x,
+                  y: standPosSync.y,
+                  targetX: standPosSync.x,
+                  targetY: standPosSync.y,
+                  isWalking: false,
+                  facing: 'right',
+                  isDying: false,
+                };
+                zombieEntityRef.current = standZSync;
+                setZombieEntity(standZSync);
+                const teacherLine = (
+                  cfgSync.zombieFlow3TeacherDialog || 'Ối giời ơi ! Chu mi a !'
+                ).replace(/\[Cấp\]/gi, String(incoming.level || 1));
+                const minDur3Ms = Math.max(
+                  500,
+                  Math.round((cfgSync.zombieFlow3MinDurationSec ?? 2.0) * 1000)
+                );
+                const bubbleUntil3 =
+                  Date.now() + Math.max(5500, minDur3Ms + 2500);
+                setMonks((prevM) => {
+                  const nextM = prevM.map((m) =>
+                    m.role === 'abbot'
+                      ? {
+                          ...m,
+                          chatText: teacherLine,
+                          chatBubbleUntil: bubbleUntil3,
+                        }
+                      : m
+                  );
+                  monksRef.current = nextM;
+                  return nextM;
+                });
+                setCameraFocus({
+                  pilgrimId: null,
+                  focusRole: 'abbot',
+                  customZoom: cfgSync.cameraZoomScale || 2.5,
+                  reason: 'special_gift',
+                  startedAt: Date.now(),
+                  until: Date.now() + Math.max(9000, minDur3Ms + 4000),
+                  lockedUntil: Date.now() + Math.max(4500, minDur3Ms + 1000),
+                });
+              } else if (incoming.phase === 'z_flow_4_supervisor') {
+                const standZSync4: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: true,
+                  x: standPosSync.x,
+                  y: standPosSync.y,
+                  targetX: standPosSync.x,
+                  targetY: standPosSync.y,
+                  isWalking: false,
+                  facing: 'right',
+                  isDying: false,
+                };
+                zombieEntityRef.current = standZSync4;
+                setZombieEntity(standZSync4);
+                const supervisorLine = (
+                  cfgSync.zombieFlow4SupervisorDialog ||
+                  'Các em hãy thả tim liên tục để đẩy lùi zombie !'
+                ).replace(/\[Cấp\]/gi, String(incoming.level || 1));
+                const minDur4Ms = Math.max(
+                  500,
+                  Math.round((cfgSync.zombieFlow4MinDurationSec ?? 2.2) * 1000)
+                );
+                const bubbleUntil4 =
+                  Date.now() + Math.max(6500, minDur4Ms + 2500);
+                setMonks((prevM) => {
+                  const nextM = prevM.map((m) =>
+                    m.role === 'abbot'
+                      ? {
+                          ...m,
+                          chatText: supervisorLine,
+                          chatBubbleUntil: bubbleUntil4,
+                        }
+                      : m
+                  );
+                  monksRef.current = nextM;
+                  return nextM;
+                });
+                setCameraFocus({
+                  pilgrimId: null,
+                  focusRole: 'abbot',
+                  customZoom: cfgSync.cameraZoomScale || 2.4,
+                  reason: 'special_gift',
+                  startedAt: Date.now(),
+                  until: Date.now() + Math.max(10000, minDur4Ms + 4000),
+                  lockedUntil: Date.now() + Math.max(5000, minDur4Ms + 1000),
+                });
+              } else if (incoming.phase === 'z_flow_5_combat') {
+                const combatZSync: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: true,
+                  x: standPosSync.x,
+                  y: standPosSync.y,
+                  targetX: standPosSync.x,
+                  targetY: standPosSync.y,
+                  isWalking: false,
+                  facing: 'right',
+                  isDying: false,
+                };
+                zombieEntityRef.current = combatZSync;
+                setZombieEntity(combatZSync);
+                setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
+              } else if (incoming.phase === 'z_flow_5b_dying') {
+                const dyingDurMsSync =
+                  incoming.totalDurationMs ||
+                  Math.max(
+                    1000,
+                    Math.round(
+                      (cfgSync.zombieFlow5bDyingDurationSec ?? 3.2) * 1000
+                    )
+                  );
+                const dyingZSync: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: true,
+                  x: zombieEntityRef.current.visible
+                    ? zombieEntityRef.current.x
+                    : standPosSync.x,
+                  y: zombieEntityRef.current.visible
+                    ? zombieEntityRef.current.y
+                    : standPosSync.y,
+                  isWalking: false,
+                  isDying: true,
+                  dyingProgress: Math.max(
+                    0.02,
+                    syncedEnt?.dyingProgress ??
+                      zombieEntityRef.current.dyingProgress ??
+                      0.02
+                  ),
+                  recoilOffsetX: 0,
+                  recoilOffsetY: 0,
+                };
+                zombieEntityRef.current = dyingZSync;
+                setZombieEntity(dyingZSync);
+                if (!soundEngine.isRemoteSlaveMode()) {
+                  soundEngine.playZombieGrowlSfx(
+                    (cfgSync.ttsVolume || 1) * 0.9,
+                    cfgSync.zombieGrowlMp3Url,
+                    true
+                  );
+                }
+                soundEngine.setZombieEventActive(false, cfgSync);
+                setCameraFocus({
+                  pilgrimId: null,
+                  focusRole: 'zombie',
+                  customZoom: cfgSync.cameraZoomScale || 2.35,
+                  reason: 'special_gift',
+                  startedAt: Date.now(),
+                  until: Date.now() + dyingDurMsSync + 1300,
+                  lockedUntil: Date.now() + dyingDurMsSync + 200,
+                });
+              } else if (incoming.phase === 'z_flow_6_celebration') {
+                const hiddenCelebZ: ZombieEntityState = {
+                  ...(syncedEnt || zombieEntityRef.current),
+                  visible: false,
+                  isWalking: false,
+                  isDying: false,
+                  dyingProgress: 1,
+                };
+                zombieEntityRef.current = hiddenCelebZ;
+                setZombieEntity(hiddenCelebZ);
+                setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
+                const abbotNpc =
+                  monksRef.current.find((m) => m.role === 'abbot') ||
+                  monksRef.current[0];
+                const startTeaX = abbotNpc ? abbotNpc.x : 270;
+                const startTeaY = abbotNpc ? abbotNpc.y - 24 : 430;
+                const seatedTargets = pilgrimsRef.current.filter(
+                  (st) =>
+                    Boolean(st.slotId) &&
+                    st.state !== 'leave_side_to_aisle' &&
+                    st.state !== 'leave_down_exit'
+                );
+                const allTeaTargets = [...seatedTargets, ...doorCrowdRef.current];
+                const nowTeaMs = Date.now();
+                setFlyingMilkTeas(
+                  allTeaTargets.map((st, idx) => ({
+                    id: `mtea_sync_${nowTeaMs}_${idx}_${st.id}`,
+                    startX: startTeaX,
+                    startY: startTeaY,
+                    targetX: st.x,
+                    targetY: st.y - 18,
+                    createdAt: nowTeaMs + idx * 45,
+                    durationMs: 1250 + (idx % 5) * 110,
+                  }))
+                );
+              }
+            }
+
+            const mergedZombieState: ZombieEventRuntimeState = phaseChanged
+              ? incoming
+              : {
+                  ...current,
+                  ...incoming,
+                  timeLeftMs: current.timeLeftMs,
+                  elapsedPhaseMs: current.elapsedPhaseMs,
+                  activeFlowToken:
+                    current.activeFlowToken || incoming.activeFlowToken,
+                  ttsFinishedForPhase: Boolean(
+                    current.ttsFinishedForPhase || incoming.ttsFinishedForPhase
+                  ),
+                };
+            zombieEventStateRef.current = mergedZombieState;
+            setZombieEventState(mergedZombieState);
           }
           break;
-        case 'TRIGGER_ZOMBIE_EVENT':
-          startZombieEventFlowNow(Boolean(p.wasRunningLesson), false);
+        }
+        case 'TRIGGER_ZOMBIE_EVENT': {
+          const isPureLiveTab =
+            typeof window !== 'undefined' &&
+            (new URLSearchParams(window.location.search).get('view') === 'live' ||
+              new URLSearchParams(window.location.search).get('mode') === 'live' ||
+              new URLSearchParams(window.location.search).get('obs') === '1');
+          const peersNow = peerCountsRef.current;
+          const isPassiveZombieTab =
+            !isPureLiveTab &&
+            (peersNow.obsPeers > 0 ||
+              (peersNow.totalPeers > 1 && soundEngine.isTabMuted()));
+          if (!isPassiveZombieTab) {
+            startZombieEventFlowNow(Boolean(p.wasRunningLesson), false, true);
+          }
           break;
+        }
+        case 'REQUEST_FULL_SYNC': {
+          const isPureLiveTab =
+            typeof window !== 'undefined' &&
+            (new URLSearchParams(window.location.search).get('view') === 'live' ||
+              new URLSearchParams(window.location.search).get('mode') === 'live' ||
+              new URLSearchParams(window.location.search).get('obs') === '1');
+          if (!isPureLiveTab) {
+            syncService.sendCommand('UPDATE_CONFIG', {
+              patch: configRef.current,
+            });
+            syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
+              state: classBoardStateRef.current,
+            });
+            if (
+              zombieEventStateRef.current.isActive ||
+              zombieEventStateRef.current.isQueued
+            ) {
+              syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+                state: zombieEventStateRef.current,
+                entity: zombieEntityRef.current,
+                force: true,
+              });
+            }
+          }
+          break;
+        }
         case 'UPDATE_NPC_LISTS':
           if (Array.isArray(p.npcNames) && p.npcNames.length > 0) {
             setNpcNames(p.npcNames);
@@ -14200,6 +15213,7 @@ export function useClassroomEngine() {
     handleTriggerFollow,
     handleTriggerLike,
     spawnOrPromotePilgrim,
+    startZombieEventFlowNow,
   ]);
 
   // Đồng bộ vị trí Học Sinh đang ngồi hoặc đang đi tới bàn khi bàn đôi được di chuyển hoặc chỉnh khoảng cách 2 học sinh cùng bàn
@@ -14307,6 +15321,15 @@ export function useClassroomEngine() {
     });
 
     if (patch.zombieEventEnabled === false) {
+      const nextDisabledEntity: ZombieEntityState = {
+        ...zombieEntityRef.current,
+        visible: false,
+        isWalking: false,
+        isDying: false,
+      };
+      zombieEntityRef.current = nextDisabledEntity;
+      setZombieEntity(nextDisabledEntity);
+
       setZombieEventState((prevZ) => {
         if (!prevZ.isActive && !prevZ.isQueued) return prevZ;
         const nextZ: ZombieEventRuntimeState = {
@@ -14320,18 +15343,12 @@ export function useClassroomEngine() {
           timeLeftMs: 0,
         };
         zombieEventStateRef.current = nextZ;
-        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: nextZ });
+        syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+          state: nextZ,
+          entity: nextDisabledEntity,
+          force: true,
+        });
         return nextZ;
-      });
-      setZombieEntity((prevE) => {
-        const nextE = {
-          ...prevE,
-          visible: false,
-          isWalking: false,
-          isDying: false,
-        };
-        zombieEntityRef.current = nextE;
-        return nextE;
       });
     }
 
@@ -15985,12 +17002,11 @@ export function useClassroomEngine() {
       const cfg = configRef.current;
       const volume = options?.volume ?? cfg.teacherLiveVolume ?? 1.0;
       const rate = options?.rate ?? cfg.teacherLiveRate ?? 1.0;
-      const pitch = options?.pitch ?? cfg.teacherLivePitch ?? 0.8;
-      const engine = options?.engine ?? cfg.teacherLiveEngine ?? 'google_stream';
-      const voice =
-        options?.voice ??
-        cfg.teacherLiveVoice ??
-        (engine === 'node_edge' ? 'vi-VN-NamMinhNeural' : 'google-vi-male-deep');
+      const pitch = options?.pitch ?? cfg.teacherLivePitch ?? 0.84;
+      const rawEngine = options?.engine ?? cfg.teacherLiveEngine ?? 'google_stream';
+      const engine: 'web_speech' | 'google_stream' =
+        rawEngine === 'web_speech' ? 'web_speech' : 'google_stream';
+      const voice = options?.voice ?? cfg.teacherLiveVoice ?? 'google-vi-warm';
       const showBubble =
         options?.showBubble ?? cfg.teacherLiveShowBubble !== false;
 
@@ -16607,7 +17623,11 @@ export function useClassroomEngine() {
     };
     zombieEventStateRef.current = stoppedZ;
     setZombieEventState(stoppedZ);
-    syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: stoppedZ });
+    syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+      state: stoppedZ,
+      entity: hiddenZ,
+      force: true,
+    });
 
     if (prevZ.isActive && prevZ.resumeLessonAfterEvent) {
       const cfg = configRef.current;
@@ -16693,11 +17713,13 @@ export function useClassroomEngine() {
     };
     setZombieSpikyDamages((prev) => [...prev.slice(-14), spikyKill]);
 
-    soundEngine.playZombieGrowlSfx(
-      (cfgNow.ttsVolume || 1) * 0.9,
-      cfgNow.zombieGrowlMp3Url,
-      true
-    );
+    if (!soundEngine.isRemoteSlaveMode()) {
+      soundEngine.playZombieGrowlSfx(
+        (cfgNow.ttsVolume || 1) * 0.9,
+        cfgNow.zombieGrowlMp3Url,
+        true
+      );
+    }
 
     setCameraFocus({
       pilgrimId: null,
@@ -16709,22 +17731,20 @@ export function useClassroomEngine() {
       lockedUntil: Date.now() + dyingDurMs + 200,
     });
 
-    setZombieEntity((prevZ) => {
-      const dyingZ: ZombieEntityState = {
-        ...prevZ,
-        visible: true,
-        x: prevZ.visible ? prevZ.x : standPos.x,
-        y: prevZ.visible ? prevZ.y : standPos.y,
-        isWalking: false,
-        isDying: true,
-        dyingProgress: 0.02,
-        recoilOffsetX: 0,
-        recoilOffsetY: 0,
-        hitFlashUntil: Date.now() + 260,
-      };
-      zombieEntityRef.current = dyingZ;
-      return dyingZ;
-    });
+    const dyingZSnapshot: ZombieEntityState = {
+      ...curZ,
+      visible: true,
+      x: zX,
+      y: zY,
+      isWalking: false,
+      isDying: true,
+      dyingProgress: 0.02,
+      recoilOffsetX: 0,
+      recoilOffsetY: 0,
+      hitFlashUntil: Date.now() + 260,
+    };
+    zombieEntityRef.current = dyingZSnapshot;
+    setZombieEntity(dyingZSnapshot);
 
     const topList = getSortedZombieTopDamagers();
     soundEngine.setZombieEventActive(false, configRef.current);
@@ -16743,7 +17763,11 @@ export function useClassroomEngine() {
     };
     zombieEventStateRef.current = dyingState;
     setZombieEventState(dyingState);
-    syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', { state: dyingState });
+    syncService.sendCommand('SYNC_ZOMBIE_EVENT_STATE', {
+      state: dyingState,
+      entity: dyingZSnapshot,
+      force: true,
+    });
     pushToast('💀 Đã giết Zombie ngay lập tức! Chuyển sang pha hạ gục & tổng kết!', true);
   }, [getSortedZombieTopDamagers, pushToast]);
 
@@ -16889,21 +17913,28 @@ export function useClassroomEngine() {
     handleTestPaperPlaneThrow: () => {
       const inClassList = pilgrimsRef.current.filter(
         (p) =>
-          Boolean(p.slotId) &&
+          (Boolean(p.slotId) ||
+            p.state === 'stand_punishment' ||
+            p.state === 'walk_to_punishment_spot') &&
           p.state !== 'leave_side_to_aisle' &&
           p.state !== 'leave_down_exit'
       );
-      const seatedList = inClassList.filter((p) => p.state === 'pray_seated');
-      if (seatedList.length < 1 || inClassList.length < 2) {
+      const doorList = doorCrowdRef.current;
+      const allThrowers = [...inClassList, ...doorList];
+      if (allThrowers.length < 1 || inClassList.length + doorList.length < 2) {
         pushToast(
-          '⚠️ Cần có ít nhất 2 học sinh trong lớp (người ném phải đang ngồi tại bàn) để test ném máy bay giấy!',
+          '⚠️ Cần có ít nhất 2 học sinh (trong lớp hoặc hàng chờ) để test ném máy bay giấy!',
           false
         );
         return;
       }
-      const thrower = seatedList[Math.floor(Math.random() * seatedList.length)];
-      const others = inClassList.filter((p) => p.id !== thrower.id);
-      const target = others[Math.floor(Math.random() * others.length)];
+      const thrower =
+        allThrowers[Math.floor(Math.random() * allThrowers.length)];
+      const targetPool =
+        inClassList.filter((p) => p.id !== thrower.id).length > 0
+          ? inClassList.filter((p) => p.id !== thrower.id)
+          : allThrowers.filter((p) => p.id !== thrower.id);
+      const target = targetPool[Math.floor(Math.random() * targetPool.length)];
       launchPaperPlaneAtStudent(thrower, target, true);
       pushToast(
         `✈️ ${thrower.username} ném máy bay giấy tới ${target.username}! (Tặng Hoa Hồng trong 10s sau khi trúng sẽ gửi bó hoa cho bạn)`,

@@ -25,7 +25,6 @@ import {
   LessonFlow5ConditionKey,
   LessonFlow6ConditionKey,
   QuizQuestionDurationByLevel,
-  TTSEngineType,
 } from '../../types/game';
 import {
   CLASSROOM_GIFT_EVENTS_META,
@@ -351,9 +350,9 @@ export const TabAudio: React.FC<TabAudioProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-1.5 text-center">
+          <div className="grid grid-cols-2 gap-1.5 text-center">
             <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
-              <div className="text-[9px] text-stone-400">Bị đứt / Treo</div>
+              <div className="text-[9px] text-stone-400">Số câu đã Skip (Lỗi)</div>
               <div
                 className={`text-xs font-black font-mono ${
                   liveDiagnostic.totalDisconnects > 0
@@ -364,28 +363,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 {liveDiagnostic.totalDisconnects}
               </div>
             </div>
-            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
-              <div className="text-[9px] text-stone-400">Chuyển Server</div>
-              <div
-                className={`text-xs font-black font-mono ${
-                  liveDiagnostic.totalServerSwitches > 0
-                    ? 'text-sky-300'
-                    : 'text-stone-400'
-                }`}
-              >
-                {liveDiagnostic.totalServerSwitches}
-              </div>
-            </div>
-            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-stone-800">
-              <div className="text-[9px] text-stone-400">Tự Fallback</div>
-              <div
-                className={`text-xs font-black font-mono ${
-                  liveDiagnostic.totalFallbacks > 0
-                    ? 'text-amber-300'
-                    : 'text-stone-400'
-                }`}
-              >
-                {liveDiagnostic.totalFallbacks}
+            <div className="px-1.5 py-1 rounded bg-stone-900/80 border border-emerald-500/30">
+              <div className="text-[9px] text-stone-400">Chế độ dự phòng</div>
+              <div className="text-[10.5px] font-extrabold text-emerald-300">
+                TẮT (Lỗi tự Skip)
               </div>
             </div>
           </div>
@@ -393,7 +374,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           {liveDiagnostic.recentIncidents.length > 0 && (
             <div className="space-y-1 pt-0.5">
               <div className="text-[9.5px] font-bold text-amber-200/90">
-                Nhật ký chuyển Server / Fallback gần nhất:
+                Nhật ký câu bị bỏ qua (Skip) gần nhất:
               </div>
               <div className="max-h-24 overflow-y-auto space-y-1 pr-0.5">
                 {liveDiagnostic.recentIncidents.slice(0, 4).map((inc) => (
@@ -3180,11 +3161,11 @@ export const TabAudio: React.FC<TabAudioProps> = ({
         </div>
       </section>
 
-      {/* 5. CẤU HÌNH GIỌNG ĐỌC THƯỜNG (HỌC SINH / COMMENT / SỰ KIỆN) */}
-      <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2.5">
-        <div className="flex items-center justify-between gap-2">
+      {/* 5. CẤU HÌNH GIỌNG ĐỌC DUY NHẤT TOÀN GAME (2 LỰA CHỌN SẠCH • KHÔNG FALLBACK) */}
+      <section className="p-3 rounded-xl bg-stone-900/85 border border-amber-500/40 space-y-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <h2 className="text-xs font-bold text-amber-200">
-            Giọng Đọc Thường — Học Sinh & Sự Kiện
+            Bộ Giọng Đọc Toàn Game (Cô Giáo • Sự Kiện • Học Sinh)
           </h2>
           <button
             type="button"
@@ -3209,157 +3190,94 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </button>
         </div>
 
-        {/* Nguồn phát xếp theo thứ tự ổn định nhất từ trên xuống */}
-        <div className="space-y-1">
-          <div className="text-[10px] text-stone-400 font-medium">
-            Nguồn phát giọng thường (Xếp hạng ổn định 1 → 3):
+        {/* 2 lựa chọn giọng Tiếng Việt sạch 100% */}
+        <div className="space-y-1.5">
+          <div className="text-[10px] text-stone-300 font-medium">
+            Chọn 1 trong 2 giọng đọc Tiếng Việt (Không Fallback • Đọc lỗi tự Skip):
           </div>
-          <select
-            value={config.ttsEngine === 'monk_zen' ? 'web_speech' : config.ttsEngine}
-            onChange={(e) => {
-              const nextEngine = e.target.value as TTSEngineType;
-              onUpdateConfig({
-                ttsEngine: nextEngine,
-                ...(nextEngine === 'node_edge' &&
-                config.nodeVoice !== 'vi-VN-HoaiMyNeural' &&
-                config.nodeVoice !== 'vi-VN-NamMinhNeural'
-                  ? { nodeVoice: 'vi-VN-HoaiMyNeural', ttsPitch: 1.0 }
-                  : {}),
-              });
-            }}
-            className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-amber-500/40 text-xs text-stone-100 font-semibold focus:outline-none focus:border-amber-400"
-          >
-            <option value="web_speech">
-              1. [Ổn định #1 - 0ms] Web Speech Hệ Thống (Microsoft An / Google VN)
-            </option>
-            <option value="google_stream">
-              2. [Ổn định #2 - Chuẩn OBS/TLS] Google Cloud Stream Đa Máy Chủ (GTX + Cache)
-            </option>
-            <option value="node_edge">
-              3. [Ổn định #3 - Node.js] Giọng Nữ Node.js Hoài My / Nam Minh (Edge AI + GTX)
-            </option>
-          </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  ttsEngine: 'web_speech',
+                  hostTtsEngine: 'web_speech',
+                  ttsPitch: 1.0,
+                  hostTtsPitch: 1.0,
+                })
+              }
+              className={`p-2.5 rounded-lg border text-left transition cursor-pointer ${
+                config.ttsEngine === 'web_speech'
+                  ? 'bg-amber-400/20 border-amber-400 text-amber-100 shadow'
+                  : 'bg-stone-950 border-stone-800 hover:border-stone-700 text-stone-300'
+              }`}
+            >
+              <div className="text-[11px] font-extrabold flex items-center justify-between gap-1">
+                <span>1. 🇻🇳 Web Speech Tiếng Việt</span>
+                {config.ttsEngine === 'web_speech' && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-400 text-stone-950 text-[9px] font-black">
+                    ĐANG CHỌN
+                  </span>
+                )}
+              </div>
+              <div className="text-[9.5px] text-stone-400 mt-0.5">
+                Đọc trực tiếp từ trình duyệt/máy (0ms mạng, không giới hạn lượt).
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  ttsEngine: 'google_stream',
+                  hostTtsEngine: 'google_stream',
+                  nodeVoice: 'google-vi-warm',
+                  hostNodeVoice: 'google-vi-warm',
+                  ttsPitch:
+                    config.ttsPitch > 0.96 ? 0.88 : config.ttsPitch || 0.88,
+                  hostTtsPitch:
+                    config.ttsPitch > 0.96 ? 0.88 : config.ttsPitch || 0.88,
+                })
+              }
+              className={`p-2.5 rounded-lg border text-left transition cursor-pointer ${
+                config.ttsEngine === 'google_stream'
+                  ? 'bg-amber-400/20 border-amber-400 text-amber-100 shadow'
+                  : 'bg-stone-950 border-stone-800 hover:border-stone-700 text-stone-300'
+              }`}
+            >
+              <div className="text-[11px] font-extrabold flex items-center justify-between gap-1">
+                <span>2. 🎙️ Google Warm (Trầm Ấm)</span>
+                {config.ttsEngine === 'google_stream' && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-400 text-stone-950 text-[9px] font-black">
+                    ĐANG CHỌN
+                  </span>
+                )}
+              </div>
+              <div className="text-[9.5px] text-stone-400 mt-0.5">
+                Giọng Google hạ trầm ấm áp + lưu RAM Cache 0ms cho câu lặp lại.
+              </div>
+            </button>
+          </div>
         </div>
 
-        {/* Lựa chọn giọng đọc chi tiết cho Google Cloud Stream */}
-        {config.ttsEngine === 'google_stream' && (
+        <div className="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-[10px] text-emerald-200 leading-relaxed">
+          🇬🇧 <b>Từ vựng Tiếng Anh:</b> Luôn tự động dùng <b>Web Speech Nước Ngoài (en-US)</b> bất kể đang chọn giọng Tiếng Việt nào. Không tự đổi giọng giữa chừng — câu nào lỗi mạng/thiếu giọng sẽ tự động <b>Skip</b> gọn.
+        </div>
+
+        {/* Tùy chọn chi tiết khi chọn Web Speech Tiếng Việt */}
+        {config.ttsEngine === 'web_speech' && (
           <div className="space-y-1">
             <div className="text-[10px] text-stone-400 font-medium">
-              Chọn máy chủ & màu giọng cho Học sinh / Sự kiện:
-            </div>
-            <select
-              value={
-                config.nodeVoice?.startsWith('google-')
-                  ? config.nodeVoice
-                  : 'google-vi-gtx'
-              }
-              onChange={(e) => {
-                const picked = e.target.value;
-                if (
-                  picked === 'vi-VN-HoaiMyNeural' ||
-                  picked === 'vi-VN-NamMinhNeural'
-                ) {
-                  onUpdateConfig({
-                    ttsEngine: 'node_edge',
-                    nodeVoice: picked,
-                    ttsPitch: 1.0,
-                  });
-                } else {
-                  onUpdateConfig({ nodeVoice: picked });
-                }
-              }}
-              className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-200 font-medium"
-            >
-              <option value="google-vi-gtx">
-                1. Google Cloud GTX — Nữ Chuẩn Rõ Chữ (Mặc định cho Học sinh)
-              </option>
-              <option value="google-vi-twob">
-                2. Google Translate TW-OB — Nữ Dịu Dàng (Máy chủ độc lập #2)
-              </option>
-              <option value="google-vi-bright">
-                3. Google Nữ Cao Trong Trẻo — Giọng Học Sinh Sáng Rõ
-              </option>
-              <option value="google-vi-slow">
-                4. Google Nữ Trang Nghiêm — Nhịp Chậm Rõ Chữ
-              </option>
-              <option value="google-vi-warm">
-                5. Google Trầm Ấm — Hạ Tần Số Ấm & Dày Giọng
-              </option>
-              <option value="google-vi-male-deep">
-                6. Google Nam Trầm — Giọng Trầm Sâu
-              </option>
-              <option value="vi-VN-HoaiMyNeural">
-                7. 🤖 Giọng Nữ Node.js — Edge AI Hoài My Neural (Tự bật Node.js)
-              </option>
-              <option value="vi-VN-NamMinhNeural">
-                8. 🤖 Giọng Nam Node.js — Edge AI Nam Minh Neural (Tự bật Node.js)
-              </option>
-            </select>
-          </div>
-        )}
-
-        {/* Lựa chọn giọng đọc chi tiết cho Node.js Local TTS */}
-        {config.ttsEngine === 'node_edge' && (
-          <div className="space-y-1.5">
-            <div className="text-[10px] text-stone-400 font-medium">
-              Chọn giọng Node.js cho Cô Thảo / Học sinh / Sự kiện:
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-              <select
-                value={config.nodeVoice || 'vi-VN-HoaiMyNeural'}
-                onChange={(e) => onUpdateConfig({ nodeVoice: e.target.value })}
-                className="px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-200 font-medium"
-              >
-                <option value="vi-VN-HoaiMyNeural">
-                  1. 🤖 Giọng Nữ Node.js — Edge AI Hoài My Neural (Nữ truyền cảm)
-                </option>
-                <option value="vi-VN-NamMinhNeural">
-                  2. 🤖 Giọng Nam Node.js — Edge AI Nam Minh Neural (Nam trầm ấm)
-                </option>
-                <option value="google-vi-gtx">
-                  3. Node.js Google GTX (Ổn định - Nữ chuẩn)
-                </option>
-                <option value="google-vi-twob">
-                  4. Node.js Google TW-OB (Nữ dịu)
-                </option>
-                <option value="google-vi-bright">
-                  5. Node.js Nữ Cao Trong Trẻo (Sáng tiếng)
-                </option>
-                <option value="google-vi-slow">
-                  6. Node.js Nữ Trang Nghiêm (Nhịp chậm)
-                </option>
-                <option value="google-vi-warm">
-                  7. Node.js Trầm Ấm (Dày tiếng)
-                </option>
-                <option value="google-vi-male-deep">
-                  8. Node.js Nam Trầm (Giọng trầm sâu)
-                </option>
-              </select>
-              <input
-                type="text"
-                value={config.nodeTtsEndpoint}
-                onChange={(e) =>
-                  onUpdateConfig({ nodeTtsEndpoint: e.target.value })
-                }
-                placeholder="http://localhost:8080/tts"
-                className="px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-300 font-mono"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Lựa chọn giọng hệ thống khi dùng Web Speech */}
-        {(config.ttsEngine === 'web_speech' ||
-          config.ttsEngine === 'monk_zen') && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-stone-400 font-medium">
-              Chọn giọng Tiếng Việt trong máy ({systemVoices.length} giọng khả dụng):
+              Chọn gói giọng Tiếng Việt trong máy ({systemVoices.length} giọng khả dụng):
             </div>
             <div className="flex items-center gap-1.5">
               <select
                 value={config.selectedSystemVoiceURI}
                 onChange={(e) =>
-                  onUpdateConfig({ selectedSystemVoiceURI: e.target.value })
+                  onUpdateConfig({
+                    selectedSystemVoiceURI: e.target.value,
+                    hostSystemVoiceURI: e.target.value,
+                  })
                 }
                 className="flex-1 px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-stone-200"
               >
@@ -3384,111 +3302,64 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
         )}
 
-        {/* Preset Tông Giọng 1-chạm */}
-        <div className="space-y-1 pt-0.5">
-          <div className="text-[10px] text-stone-400 font-medium">
-            Chọn nhanh Tông Giọng mẫu:
+        {/* Mức độ trầm ấm nhanh khi chọn Google Warm */}
+        {config.ttsEngine === 'google_stream' && (
+          <div className="space-y-1">
+            <div className="text-[10px] text-stone-400 font-medium">
+              Màu độ ấm Google Warm (Chỉnh nhanh hoặc kéo thanh Cao độ bên dưới):
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    ttsPitch: 0.82,
+                    hostTtsPitch: 0.82,
+                  })
+                }
+                className={`px-2 py-1 rounded border text-[10px] font-semibold cursor-pointer transition ${
+                  Math.abs(config.ttsPitch - 0.82) <= 0.02
+                    ? 'bg-sky-400 text-stone-950 border-sky-300 font-bold'
+                    : 'bg-stone-950 hover:bg-stone-800 border-stone-800 text-sky-200'
+                }`}
+              >
+                Nam Ấm Trầm (0.82)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    ttsPitch: 0.88,
+                    hostTtsPitch: 0.88,
+                  })
+                }
+                className={`px-2 py-1 rounded border text-[10px] font-semibold cursor-pointer transition ${
+                  Math.abs(config.ttsPitch - 0.88) <= 0.02
+                    ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold'
+                    : 'bg-stone-950 hover:bg-stone-800 border-stone-800 text-amber-200'
+                }`}
+              >
+                Google Warm Chuẩn (0.88)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    ttsPitch: 0.94,
+                    hostTtsPitch: 0.94,
+                  })
+                }
+                className={`px-2 py-1 rounded border text-[10px] font-semibold cursor-pointer transition ${
+                  Math.abs(config.ttsPitch - 0.94) <= 0.02
+                    ? 'bg-emerald-400 text-stone-950 border-emerald-300 font-bold'
+                    : 'bg-stone-950 hover:bg-stone-800 border-stone-800 text-emerald-200'
+                }`}
+              >
+                Ấm Nhẹ Sáng Rõ (0.94)
+              </button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1">
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  ttsEngine: 'node_edge',
-                  nodeVoice: 'vi-VN-HoaiMyNeural',
-                  ttsRate: 1.02,
-                  ttsPitch: 1.0,
-                  ttsReverb: 0,
-                })
-              }
-              className={`px-1.5 py-1 rounded border text-[10px] font-semibold cursor-pointer truncate transition ${
-                config.ttsEngine === 'node_edge' &&
-                config.nodeVoice === 'vi-VN-HoaiMyNeural'
-                  ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold'
-                  : 'bg-stone-950 hover:bg-stone-800 border-amber-500/40 text-amber-200'
-              }`}
-            >
-              🤖 Nữ Node (Hoài My)
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  ttsEngine: 'node_edge',
-                  nodeVoice: 'vi-VN-NamMinhNeural',
-                  ttsRate: 1.02,
-                  ttsPitch: 1.0,
-                  ttsReverb: 0,
-                })
-              }
-              className={`px-1.5 py-1 rounded border text-[10px] font-semibold cursor-pointer truncate transition ${
-                config.ttsEngine === 'node_edge' &&
-                config.nodeVoice === 'vi-VN-NamMinhNeural'
-                  ? 'bg-cyan-400 text-stone-950 border-cyan-300 font-bold'
-                  : 'bg-stone-950 hover:bg-stone-800 border-cyan-500/40 text-cyan-200'
-              }`}
-            >
-              🤖 Nam Node (Nam Minh)
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  ...(config.ttsEngine === 'web_speech'
-                    ? { ttsEngine: 'google_stream' }
-                    : {}),
-                  nodeVoice:
-                    config.ttsEngine === 'node_edge'
-                      ? 'vi-VN-HoaiMyNeural'
-                      : 'google-vi-gtx',
-                  ttsRate: 1.05,
-                  ttsPitch: 1.0,
-                  ttsReverb: 0,
-                })
-              }
-              className="px-1.5 py-1 rounded bg-stone-950 hover:bg-stone-800 border border-stone-800 text-[10px] font-semibold text-stone-200 cursor-pointer truncate"
-            >
-              Nữ Chuẩn
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  ...(config.ttsEngine === 'web_speech'
-                    ? { ttsEngine: 'google_stream' }
-                    : {}),
-                  nodeVoice: 'google-vi-twob',
-                  ttsRate: 0.96,
-                  ttsPitch: 1.08,
-                  ttsReverb: 0,
-                })
-              }
-              className="px-1.5 py-1 rounded bg-stone-950 hover:bg-stone-800 border border-stone-800 text-[10px] font-semibold text-pink-300 cursor-pointer truncate"
-            >
-              Nữ Dịu
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  ...(config.ttsEngine === 'web_speech'
-                    ? { ttsEngine: 'google_stream' }
-                    : {}),
-                  nodeVoice:
-                    config.ttsEngine === 'node_edge'
-                      ? 'vi-VN-NamMinhNeural'
-                      : 'google-vi-male-deep',
-                  ttsRate: 0.96,
-                  ttsPitch: config.ttsEngine === 'node_edge' ? 1.0 : 0.82,
-                  ttsReverb: 0,
-                })
-              }
-              className="px-1.5 py-1 rounded bg-stone-950 hover:bg-stone-800 border border-stone-800 text-[10px] font-semibold text-sky-300 cursor-pointer truncate"
-            >
-              Nam Trầm
-            </button>
-          </div>
-        </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2 pt-1">
           <div className="p-2 rounded-lg bg-stone-950/80 border border-stone-800">
@@ -3504,9 +3375,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               max={2.0}
               step={0.05}
               value={config.ttsRate}
-              onChange={(e) =>
-                onUpdateConfig({ ttsRate: parseFloat(e.target.value) })
-              }
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onUpdateConfig({ ttsRate: v, hostTtsRate: v });
+              }}
               className="w-full accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
             />
           </div>
@@ -3533,20 +3405,21 @@ export const TabAudio: React.FC<TabAudioProps> = ({
 
           <div className="p-2 rounded-lg bg-stone-950/80 border border-stone-800">
             <div className="flex justify-between text-[10.5px] text-stone-400">
-              <span>Cao độ</span>
+              <span>Cao độ / Độ ấm (Pitch)</span>
               <span className="text-stone-200 font-mono">
                 {config.ttsPitch.toFixed(2)}
               </span>
             </div>
             <input
               type="range"
-              min={0.6}
-              max={1.4}
-              step={0.05}
+              min={0.65}
+              max={1.25}
+              step={0.02}
               value={config.ttsPitch}
-              onChange={(e) =>
-                onUpdateConfig({ ttsPitch: parseFloat(e.target.value) })
-              }
+              onChange={(e) => {
+                const p = parseFloat(e.target.value);
+                onUpdateConfig({ ttsPitch: p, hostTtsPitch: p });
+              }}
               className="w-full accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
             />
           </div>
@@ -3564,9 +3437,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               max={1.0}
               step={0.05}
               value={config.ttsVolume}
-              onChange={(e) =>
-                onUpdateConfig({ ttsVolume: parseFloat(e.target.value) })
-              }
+              onChange={(e) => {
+                const vol = parseFloat(e.target.value);
+                onUpdateConfig({ ttsVolume: vol, hostTtsVolume: vol });
+              }}
               className="w-full accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
             />
           </div>

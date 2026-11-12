@@ -357,7 +357,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
     classBoardFontSize = 13,
     classBoardOpacity = 0.42,
     classBoardBlur = 2,
-    classBoardEngine = 'english_quiz',
+    classBoardEngine = 'notice',
     classBoardLessonTitle = 'Tiết Tiếng Anh',
     classBoardLetterMode = 'default',
     showClassBoardBox = true,
@@ -523,7 +523,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
   };
 
   // Trạng thái Bảng Lớp Chính (Engine: Tiết Tiếng Anh / Kết Quả / Bảng Thông Báo)
-  const activeEngine = classBoardState?.engine || classBoardEngine || 'english_quiz';
+  const activeEngine = classBoardState?.engine || classBoardEngine || 'notice';
   const qIdx = classBoardState?.questionIndex ?? 0;
   const totalQuizCount =
     classBoardState?.totalQuestions || ENGLISH_QUIZ_QUESTIONS.length;
@@ -2232,7 +2232,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
             top: `${safeNoticeBoardBox.y}px`,
             width: `${safeNoticeBoardBox.width}px`,
             height: `${safeNoticeBoardBox.height}px`,
-            zIndex: editLayoutMode ? 55 : 45,
+            zIndex: editLayoutMode ? 55 : 2,
             ...buildBoxSurfaceStyle(opNotice),
             ...noticeBoardCycleStyle,
           }}

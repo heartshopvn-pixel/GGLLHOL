@@ -43,13 +43,15 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
   const [newQuickPhrase, setNewQuickPhrase] = useState('');
   const [recentSentList, setRecentSentList] = useState<string[]>([]);
 
-  const engine = config.teacherLiveEngine || 'google_stream';
+  const engine: 'web_speech' | 'google_stream' =
+    config.teacherLiveEngine === 'web_speech' ? 'web_speech' : 'google_stream';
   const voice =
-    config.teacherLiveVoice ||
-    (engine === 'node_edge' ? 'vi-VN-NamMinhNeural' : 'google-vi-male-deep');
+    engine === 'web_speech'
+      ? config.selectedSystemVoiceURI || ''
+      : 'google-vi-warm';
   const volume = config.teacherLiveVolume ?? 1.0;
   const rate = config.teacherLiveRate ?? 1.0;
-  const pitch = config.teacherLivePitch ?? 0.8;
+  const pitch = config.teacherLivePitch ?? 0.84;
   const showBubble = config.teacherLiveShowBubble !== false;
 
   const quickPhrases =
@@ -187,41 +189,25 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
           {/* Chọn nguồn giọng Nam của Thầy */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <select
-              value={`${engine}::${voice}`}
+              value={engine}
               onChange={(e) => {
-                const [nextEng, nextVoice] = e.target.value.split('::');
-                const isFemaleNext =
-                  nextVoice === 'vi-VN-HoaiMyNeural' ||
-                  nextVoice === 'google-vi-gtx';
+                const nextEng: 'web_speech' | 'google_stream' =
+                  e.target.value === 'web_speech'
+                    ? 'web_speech'
+                    : 'google_stream';
                 onUpdateConfig({
-                  teacherLiveEngine:
-                    nextEng === 'node_edge' ? 'node_edge' : 'google_stream',
-                  teacherLiveVoice: nextVoice || 'google-vi-male-deep',
-                  teacherLivePitch: isFemaleNext
-                    ? 1.0
-                    : nextEng === 'node_edge'
-                    ? 0.96
-                    : nextVoice === 'google-vi-warm'
-                    ? 0.85
-                    : 0.8,
+                  teacherLiveEngine: nextEng,
+                  teacherLiveVoice: 'google-vi-warm',
+                  teacherLivePitch: nextEng === 'google_stream' ? 0.84 : 1.0,
                 });
               }}
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10.5px] text-sky-200 font-semibold focus:outline-none"
             >
-              <option value="node_edge::vi-VN-HoaiMyNeural">
-                🤖 Giọng Nữ Node.js: Hoài My AI (Node Local)
+              <option value="google_stream">
+                🎙️ Google Warm (Trầm ấm • Không Fallback)
               </option>
-              <option value="node_edge::vi-VN-NamMinhNeural">
-                🤖 Giọng Nam Node.js: Nam Minh AI (Node Local)
-              </option>
-              <option value="google_stream::google-vi-male-deep">
-                👨‍🏫 Giọng Thầy Trầm Ấm (Google Stream)
-              </option>
-              <option value="google_stream::google-vi-warm">
-                🎙️ Giọng Thầy Sáng Rõ (Google Warm)
-              </option>
-              <option value="google_stream::google-vi-gtx">
-                👩‍🏫 Giọng Cô Thảo Chuẩn (Google Nữ)
+              <option value="web_speech">
+                🇻🇳 Web Speech Tiếng Việt (Nội bộ • Không Fallback)
               </option>
             </select>
 
@@ -403,13 +389,7 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
                 type="button"
                 onClick={() =>
                   onUpdateConfig({
-                    teacherLivePitch:
-                      voice === 'vi-VN-HoaiMyNeural' ||
-                      voice === 'google-vi-gtx'
-                        ? 1.0
-                        : engine === 'node_edge'
-                        ? 0.96
-                        : 0.8,
+                    teacherLivePitch: engine === 'google_stream' ? 0.84 : 1.0,
                   })
                 }
                 className="px-1 py-0.2 rounded bg-stone-800 hover:bg-stone-700 text-[8.5px] font-mono text-stone-300 cursor-pointer"

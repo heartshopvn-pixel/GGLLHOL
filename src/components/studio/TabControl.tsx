@@ -574,7 +574,7 @@ export const TabControl: React.FC<TabControlProps> = ({
     height: 218,
   };
   const activeEngine: ClassBoardEngineId =
-    hud.classBoardEngine || classBoardState?.engine || 'english_quiz';
+    hud.classBoardEngine || classBoardState?.engine || 'notice';
   const isBoardRunning = Boolean(classBoardState?.isRunning);
   const qIdx = classBoardState?.questionIndex ?? 0;
   const curQuiz =
@@ -623,6 +623,73 @@ export const TabControl: React.FC<TabControlProps> = ({
         onSpeakTeacherLiveVoice={onSpeakTeacherLiveVoice}
         onStopTeacherLiveVoice={onStopTeacherLiveVoice}
       />
+
+      {/* 00B. BẢNG TIN LỚP (BẢNG THÔNG BÁO) + CHẠY BẢNG THEO CHU KỲ */}
+      <section className="p-3 rounded-xl bg-stone-900/75 border border-amber-500/35 space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <BellRing className="w-3.5 h-3.5 text-amber-400" />
+            <h2 className="text-xs font-bold text-amber-200">
+              Bảng Tin Lớp (Bảng Thông Báo)
+            </h2>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateHudLayout({
+                  showNoticeBoardBox: !hud.showNoticeBoardBox,
+                })
+              }
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition ${
+                hud.showNoticeBoardBox
+                  ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                  : 'bg-stone-900 border-stone-700 text-stone-400'
+              }`}
+            >
+              {hud.showNoticeBoardBox ? 'Đang Hiện' : 'Đang Ẩn'}
+            </button>
+            <span className="text-[10.5px] text-stone-400">Cỡ chữ:</span>
+            <input
+              type="range"
+              min={7}
+              max={22}
+              step={0.5}
+              value={hud.noticeBoardFontSize || 10}
+              onChange={(e) =>
+                onUpdateHudLayout({
+                  noticeBoardFontSize: parseFloat(e.target.value),
+                })
+              }
+              className="w-20 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+            />
+            <span className="text-[11px] font-mono font-bold text-amber-300 w-9 text-right">
+              {hud.noticeBoardFontSize || 10}px
+            </span>
+          </div>
+        </div>
+
+        <textarea
+          rows={2}
+          value={
+            hud.noticeBoardContent ??
+            'Chào mừng các bạn học sinh vào lớp 12A1! Bình luận để giơ tay phát biểu và nhận Hoa Điểm 10 🌺'
+          }
+          onChange={(e) =>
+            onUpdateHudLayout({ noticeBoardContent: e.target.value })
+          }
+          placeholder="Nội dung bảng tin lớp..."
+          className="w-full px-2 py-1.5 rounded bg-stone-950 border border-stone-800 text-xs text-stone-100 focus:outline-none focus:border-amber-500 resize-y"
+        />
+
+        <HudCycleSettingsCard
+          title="Bảng Tin Lớp"
+          cycle={hud.noticeBoardCycle}
+          onChange={(nextCycle) =>
+            onUpdateHudLayout({ noticeBoardCycle: nextCycle })
+          }
+        />
+      </section>
 
       {/* 0A. HÀNG CHỜ ĐỌC SỰ KIỆN & ĐỒNG BỘ GIỌNG ĐỌC CÔ GIÁO */}
       <section className="p-2.5 rounded-xl bg-stone-900/95 border border-amber-500/45 space-y-2 shadow-md">
@@ -2556,73 +2623,6 @@ export const TabControl: React.FC<TabControlProps> = ({
             />
           </div>
         </div>
-      </section>
-
-      {/* 4. BẢNG TIN LỚP (BẢNG THÔNG BÁO) & BẢNG HOA ĐIỂM 10 + CHẠY BẢNG THEO CHU KỲ */}
-      <section className="p-3 rounded-xl bg-stone-900/75 border border-amber-500/35 space-y-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <BellRing className="w-3.5 h-3.5 text-amber-400" />
-            <h2 className="text-xs font-bold text-amber-200">
-              Bảng Tin Lớp (Bảng Thông Báo)
-            </h2>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateHudLayout({
-                  showNoticeBoardBox: !hud.showNoticeBoardBox,
-                })
-              }
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition ${
-                hud.showNoticeBoardBox
-                  ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
-                  : 'bg-stone-900 border-stone-700 text-stone-400'
-              }`}
-            >
-              {hud.showNoticeBoardBox ? 'Đang Hiện' : 'Đang Ẩn'}
-            </button>
-            <span className="text-[10.5px] text-stone-400">Cỡ chữ:</span>
-            <input
-              type="range"
-              min={7}
-              max={22}
-              step={0.5}
-              value={hud.noticeBoardFontSize || 10}
-              onChange={(e) =>
-                onUpdateHudLayout({
-                  noticeBoardFontSize: parseFloat(e.target.value),
-                })
-              }
-              className="w-20 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
-            />
-            <span className="text-[11px] font-mono font-bold text-amber-300 w-9 text-right">
-              {hud.noticeBoardFontSize || 10}px
-            </span>
-          </div>
-        </div>
-
-        <textarea
-          rows={2}
-          value={
-            hud.noticeBoardContent ??
-            'Chào mừng các bạn học sinh vào lớp 12A1! Bình luận để giơ tay phát biểu và nhận Hoa Điểm 10 🌺'
-          }
-          onChange={(e) =>
-            onUpdateHudLayout({ noticeBoardContent: e.target.value })
-          }
-          placeholder="Nội dung bảng tin lớp..."
-          className="w-full px-2 py-1.5 rounded bg-stone-950 border border-stone-800 text-xs text-stone-100 focus:outline-none focus:border-amber-500 resize-y"
-        />
-
-        <HudCycleSettingsCard
-          title="Bảng Tin Lớp"
-          cycle={hud.noticeBoardCycle}
-          onChange={(nextCycle) =>
-            onUpdateHudLayout({ noticeBoardCycle: nextCycle })
-          }
-        />
       </section>
 
       {/* 4.8. BẢNG NOTE 1 ("Đây là trò chơi 2D.") */}

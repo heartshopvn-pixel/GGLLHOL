@@ -450,58 +450,62 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
 
   return (
     <>
-      {/* FLOATING TEXT CÚP VÀNG KHI TUYÊN DƯƠNG TOP 1, 2, 3 CUỐI VÒNG 15 PHÚT (+3 🏆 / +2 🏆 / +1 🏆) */}
-      {showFloatingTrophy && (
-        <div
-          key={`ftrophy_${pilgrim.floatingTrophyKey || 1}`}
-          className="absolute left-0 top-0 pointer-events-none select-none"
-          style={{
-            transform: `translate3d(${posX}px, ${(
-              posY -
-              (quizBadgeTopOffsetPx + 8)
-            ).toFixed(2)}px, 0) translate(-50%, -100%)`,
-            zIndex: badgeUiZIndex + 35,
-          }}
-        >
-          <style>{`
-            @keyframes floatingGoldTrophyRise {
-              0% {
-                opacity: 0;
-                transform: translateY(10px) scale(0.55);
-              }
-              18% {
-                opacity: 1;
-                transform: translateY(-4px) scale(1.18);
-              }
-              72% {
-                opacity: 1;
-                transform: translateY(-18px) scale(1.04);
-              }
-              100% {
-                opacity: 0;
-                transform: translateY(-30px) scale(0.92);
-              }
-            }
-          `}</style>
+      {/* FLOATING TEXT CÚP VÀNG KHI TUYÊN DƯƠNG TOP 1, 2, 3 CUỐI VÒNG 15 PHÚT (+3 🏆 / +2 🏆 / +1 🏆): Hạ xuống nằm sát ngay trên đỉnh đầu học sinh */}
+      {showFloatingTrophy && (() => {
+        const trophyHeadTopOffsetPx = Math.round(
+          (isSeated ? 42 : 53) * finalScale
+        );
+        return (
           <div
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/90 border-2 border-yellow-300 shadow-[0_0_14px_rgba(250,204,21,0.95)] whitespace-nowrap"
+            key={`ftrophy_${pilgrim.floatingTrophyKey || 1}`}
+            className="absolute left-0 top-0 pointer-events-none select-none"
             style={{
-              animation: 'floatingGoldTrophyRise 3200ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
+              transform: `translate3d(${posX}px, ${(
+                posY - trophyHeadTopOffsetPx
+              ).toFixed(2)}px, 0) translate(-50%, -100%)`,
+              zIndex: Math.max(22500, badgeUiZIndex + 35),
             }}
           >
-            <span
-              className="font-mono font-black text-[13px] leading-none text-yellow-300 tabular-nums"
+            <style>{`
+              @keyframes floatingGoldTrophyRise {
+                0% {
+                  opacity: 0;
+                  transform: translateY(4px) scale(0.65);
+                }
+                18% {
+                  opacity: 1;
+                  transform: translateY(-2px) scale(1.12);
+                }
+                72% {
+                  opacity: 1;
+                  transform: translateY(-7px) scale(1.02);
+                }
+                100% {
+                  opacity: 0;
+                  transform: translateY(-12px) scale(0.94);
+                }
+              }
+            `}</style>
+            <div
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/90 border-2 border-yellow-300 shadow-[0_0_14px_rgba(250,204,21,0.95)] whitespace-nowrap"
               style={{
-                textShadow:
-                  '-1px -1px 0 #451a03, 1px -1px 0 #451a03, -1px 1px 0 #451a03, 1px 1px 0 #451a03',
+                animation: 'floatingGoldTrophyRise 3200ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
               }}
             >
-              +{pilgrim.floatingTrophyCount}
-            </span>
-            <GoldTrophyIcon className="w-4 h-4 drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]" />
+              <span
+                className="font-mono font-black text-[13px] leading-none text-yellow-300 tabular-nums"
+                style={{
+                  textShadow:
+                    '-1px -1px 0 #451a03, 1px -1px 0 #451a03, -1px 1px 0 #451a03, 1px 1px 0 #451a03',
+                }}
+              >
+                +{pilgrim.floatingTrophyCount}
+              </span>
+              <GoldTrophyIcon className="w-4 h-4 drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]" />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* THÔNG BÁO ĐẶC BIỆT (VD: ĐỠ BẰNG KHIÊN) */}
       {showFloatingScore && (

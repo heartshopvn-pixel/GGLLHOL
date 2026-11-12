@@ -1,6 +1,5 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
-import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -531,57 +530,36 @@ async function startServer() {
     }
   });
 
-  // In-memory LRU cache for TTS MP3 buffers to eliminate latency & repeated requests
+  // In-memory LRU cache for Google Warm TTS MP3 buffers (0ms repeat playback)
   const ttsBufferCache = new Map<string, Buffer>();
-  const MAX_TTS_CACHE_ITEMS = 160;
+  const inFlightGoogleTts = new Map<string, Promise<Buffer>>();
+  const MAX_TTS_CACHE_ITEMS = 240;
 
-  async function fetchGoogleTtsBuffer(
-    text: string,
-    variant: string,
-    lang = 'vi'
-  ): Promise<{
+  async function fetchGoogleWarmViBuffer(text: string): Promise<{
     buf: Buffer;
-    source: 'ram-cache' | 'google-gtx' | 'google-tw-ob';
-    switchedMirror: boolean;
-    failReason?: string;
+    source: 'ram-cache' | 'google-gtx';
   }> {
-    const isSlow = variant === 'google-vi-slow' || variant === 'slow';
-    const speedParam = isSlow ? '0.24' : '1';
-    const tl = lang === 'en' || variant.includes('-en') ? 'en' : 'vi';
-    const cacheKey = `${tl}:${variant}:${text}`;
+    const cacheKey = `vi:${text}`;
     const cached = ttsBufferCache.get(cacheKey);
     if (cached) {
       ttsBufferCache.delete(cacheKey);
       ttsBufferCache.set(cacheKey, cached);
-      return {
-        buf: cached,
-        source: 'ram-cache',
-        switchedMirror: false,
-      };
+      return { buf: cached, source: 'ram-cache' };
     }
 
-    const encoded = encodeURIComponent(text);
-    const gtxUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=${tl}&client=gtx&ttsspeed=${speedParam}&q=${encoded}`;
-    const twObUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&ttsspeed=${speedParam}&q=${encoded}`;
-    const endpoints: Array<{ url: string; label: 'google-gtx' | 'google-tw-ob' }> =
-      variant === 'google-vi-twob'
-        ? [
-            { url: twObUrl, label: 'google-tw-ob' },
-            { url: gtxUrl, label: 'google-gtx' },
-          ]
-        : [
-            { url: gtxUrl, label: 'google-gtx' },
-            { url: twObUrl, label: 'google-tw-ob' },
-          ];
+    const existing = inFlightGoogleTts.get(cacheKey);
+    if (existing) {
+      const buf = await existing;
+      return { buf, source: 'google-gtx' };
+    }
 
-    let lastErr: unknown = null;
-    let firstFailReason = '';
-    for (let idx = 0; idx < endpoints.length; idx++) {
-      const ep = endpoints[idx];
+    const task = (async () => {
+      const encoded = encodeURIComponent(text);
+      const gtxUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=${encoded}`;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
+      const timeout = setTimeout(() => controller.abort(), 3200);
       try {
-        const response = await fetch(ep.url, {
+        const response = await fetch(gtxUrl, {
           signal: controller.signal,
           headers: {
             'User-Agent':
@@ -591,201 +569,31 @@ async function startServer() {
         });
         clearTimeout(timeout);
         if (!response.ok) {
-          const reason = `HTTP ${response.status} (${ep.label})`;
-          if (!firstFailReason) firstFailReason = reason;
-          lastErr = new Error(reason);
-          continue;
+          throw new Error(`HTTP ${response.status}`);
         }
         const arrayBuffer = await response.arrayBuffer();
         const buf = Buffer.from(arrayBuffer);
         if (buf.length < 128) {
-          const reason = `Buffer rỗng (${ep.label})`;
-          if (!firstFailReason) firstFailReason = reason;
-          lastErr = new Error(reason);
-          continue;
+          throw new Error('Empty Google TTS buffer');
         }
         if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
           const oldestKey = ttsBufferCache.keys().next().value;
           if (oldestKey) ttsBufferCache.delete(oldestKey);
         }
         ttsBufferCache.set(cacheKey, buf);
-        return {
-          buf,
-          source: ep.label,
-          switchedMirror: idx > 0,
-          failReason: firstFailReason || undefined,
-        };
-      } catch (err: any) {
+        return buf;
+      } catch (err) {
         clearTimeout(timeout);
-        const reason =
-          err?.name === 'AbortError'
-            ? `Quá hạn >2.2s (${ep.label})`
-            : `${err?.message || 'Lỗi mạng'} (${ep.label})`;
-        if (!firstFailReason) firstFailReason = reason;
-        lastErr = err;
-      }
-    }
-    throw lastErr || new Error('All Google TTS mirrors failed');
-  }
-
-  type SupportedEdgeVoice =
-    | 'vi-VN-HoaiMyNeural'
-    | 'en-US-AndrewNeural'
-    | 'en-US-GuyNeural';
-
-  interface EdgeWorkerSlot {
-    id: number;
-    busy: boolean;
-  }
-
-  // Hai khe điều phối song song (tối đa 2 kết nối TLS đồng thời tới Edge để không bị chặn mạng),
-  // mỗi request khởi tạo 1 instance MsEdgeTTS ĐỘC LẬP MỚI 100% và đóng ngay khi tải xong!
-  const EDGE_WORKER_SLOTS: EdgeWorkerSlot[] = [
-    { id: 1, busy: false },
-    { id: 2, busy: false },
-  ];
-  const edgeSlotWaiters: Array<(slot: EdgeWorkerSlot) => void> = [];
-  const inFlightEdgeRequests = new Map<string, Promise<Buffer>>();
-
-  function acquireEdgeWorkerSlot(): Promise<EdgeWorkerSlot> {
-    const free = EDGE_WORKER_SLOTS.find((s) => !s.busy);
-    if (free) {
-      free.busy = true;
-      return Promise.resolve(free);
-    }
-    return new Promise<EdgeWorkerSlot>((resolve) => {
-      edgeSlotWaiters.push(resolve);
-    });
-  }
-
-  function releaseEdgeWorkerSlot(slot: EdgeWorkerSlot) {
-    const nextWaiter = edgeSlotWaiters.shift();
-    if (nextWaiter) {
-      nextWaiter(slot);
-    } else {
-      slot.busy = false;
-    }
-  }
-
-  async function synthesizeIndependentEdgeOnce(
-    text: string,
-    edgeVoice: SupportedEdgeVoice
-  ): Promise<Buffer> {
-    return new Promise<Buffer>((resolve, reject) => {
-      let settled = false;
-      let ttsInstance: MsEdgeTTS | null = null;
-
-      const closeCleanly = () => {
-        if (!ttsInstance) return;
-        const inst = ttsInstance;
-        ttsInstance = null;
-        try {
-          inst.close();
-        } catch {
-          // Ignore close error
-        }
-      };
-
-      const doneErr = (err: unknown) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(guardTimer);
-        closeCleanly();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      };
-
-      const guardTimer = setTimeout(() => {
-        doneErr(new Error(`Edge Neural TTS timeout (${edgeVoice})`));
-      }, 8000);
-
-      (async () => {
-        try {
-          ttsInstance = new MsEdgeTTS({
-            connectionTimeoutMs: 4500,
-            synthesisTimeoutMs: 7500,
-          });
-          await ttsInstance.setMetadata(
-            edgeVoice,
-            OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3
-          );
-          const streamObj = ttsInstance.toStream(text);
-          const audioStream = streamObj?.audioStream;
-          if (!audioStream) {
-            doneErr(new Error('Missing Edge audioStream'));
-            return;
-          }
-          const chunks: Buffer[] = [];
-          audioStream.on('data', (chunk: Buffer | Uint8Array) => {
-            chunks.push(Buffer.from(chunk));
-          });
-          audioStream.on('error', (err: unknown) => {
-            doneErr(err);
-          });
-          audioStream.on('end', () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(guardTimer);
-            closeCleanly();
-            const fullBuf = Buffer.concat(chunks);
-            if (fullBuf.length < 128) {
-              reject(new Error('Empty Edge TTS buffer'));
-              return;
-            }
-            resolve(fullBuf);
-          });
-        } catch (err) {
-          doneErr(err);
-        }
-      })();
-    });
-  }
-
-  async function synthesizeEdgeNeuralBuffer(
-    text: string,
-    primaryVoice: SupportedEdgeVoice,
-    secondaryVoice?: SupportedEdgeVoice
-  ): Promise<{ buf: Buffer; usedVoice: SupportedEdgeVoice; fromCache: boolean }> {
-    const cacheKey = `edge:${primaryVoice}:${text}`;
-    const cached = ttsBufferCache.get(cacheKey);
-    if (cached) {
-      ttsBufferCache.delete(cacheKey);
-      ttsBufferCache.set(cacheKey, cached);
-      return { buf: cached, usedVoice: primaryVoice, fromCache: true };
-    }
-
-    const existingInFlight = inFlightEdgeRequests.get(cacheKey);
-    if (existingInFlight) {
-      const buf = await existingInFlight;
-      return { buf, usedVoice: primaryVoice, fromCache: false };
-    }
-
-    let resolvedVoice: SupportedEdgeVoice = primaryVoice;
-    const task = (async () => {
-      const slot = await acquireEdgeWorkerSlot();
-      try {
-        try {
-          return await synthesizeIndependentEdgeOnce(text, primaryVoice);
-        } catch {
-          const retryVoice = secondaryVoice || primaryVoice;
-          resolvedVoice = retryVoice;
-          return await synthesizeIndependentEdgeOnce(text, retryVoice);
-        }
-      } finally {
-        releaseEdgeWorkerSlot(slot);
+        throw err;
       }
     })();
 
-    inFlightEdgeRequests.set(cacheKey, task);
+    inFlightGoogleTts.set(cacheKey, task);
     try {
-      const fullBuf = await task;
-      if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
-        const oldestKey = ttsBufferCache.keys().next().value;
-        if (oldestKey) ttsBufferCache.delete(oldestKey);
-      }
-      ttsBufferCache.set(cacheKey, fullBuf);
-      return { buf: fullBuf, usedVoice: resolvedVoice, fromCache: false };
+      const buf = await task;
+      return { buf, source: 'google-gtx' };
     } finally {
-      inFlightEdgeRequests.delete(cacheKey);
+      inFlightGoogleTts.delete(cacheKey);
     }
   }
 
@@ -793,132 +601,24 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Private-Network', 'true');
     try {
-      const rawText = String(req.query.text || 'Chào cả lớp')
-        .trim()
-        .slice(0, 200);
-      const voiceVariant = String(req.query.voice || 'vi-VN-HoaiMyNeural').trim();
-      const lang = String(req.query.lang || 'vi').trim().toLowerCase();
-      const strictEdge = String(req.query.strictEdge || '') === '1';
-
-      const isEnglishRequest =
-        lang === 'en' ||
-        voiceVariant.startsWith('en-US-') ||
-        voiceVariant.includes('-en');
-
-      // Chuẩn hóa từ vựng Tiếng Anh viết IN HOA toàn bộ (VD: "APPLE", "SUN") sang chữ thường để AI đọc thành từ thay vì đánh vần chữ cái
-      const text =
-        isEnglishRequest && /^[A-Z\s'-]{2,}$/.test(rawText)
-          ? rawText.toLowerCase()
-          : rawText;
-
-      if (isEnglishRequest) {
-        const primaryEnVoice: SupportedEdgeVoice =
-          voiceVariant === 'en-US-GuyNeural'
-            ? 'en-US-GuyNeural'
-            : 'en-US-AndrewNeural';
-        const backupEnVoice: SupportedEdgeVoice =
-          primaryEnVoice === 'en-US-AndrewNeural'
-            ? 'en-US-GuyNeural'
-            : 'en-US-AndrewNeural';
-        try {
-          const enRes = await synthesizeEdgeNeuralBuffer(
-            text,
-            primaryEnVoice,
-            backupEnVoice
-          );
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.setHeader(
-            'X-TTS-Source',
-            enRes.fromCache ? 'ram-cache' : `msedge-${enRes.usedVoice}`
-          );
-          res.setHeader('X-TTS-Switched', '0');
-          res.setHeader(
-            'Access-Control-Expose-Headers',
-            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
-          );
-          res.send(enRes.buf);
-          return;
-        } catch {
-          if (strictEdge) {
-            res.status(503).json({ error: 'Edge English Neural unavailable' });
-            return;
-          }
-          const fallbackEn = await fetchGoogleTtsBuffer(text, 'google-en-gtx', 'en');
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.setHeader('X-TTS-Source', `node-${fallbackEn.source}`);
-          res.setHeader('X-TTS-Switched', '0');
-          res.setHeader(
-            'Access-Control-Expose-Headers',
-            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
-          );
-          res.send(fallbackEn.buf);
-          return;
-        }
+      const text = String(req.query.text || '').trim().slice(0, 195);
+      if (!text) {
+        res.status(400).end();
+        return;
       }
-
-      // Quy tắc 100% Tiếng Việt dùng chung 1 giọng Nữ duy nhất: vi-VN-HoaiMyNeural (Node.js Edge AI)
-      const isGoogleExplicitFallback = voiceVariant.startsWith('google-');
-      if (!isGoogleExplicitFallback) {
-        const viEdgeVoice: SupportedEdgeVoice = 'vi-VN-HoaiMyNeural';
-        try {
-          const edgeRes = await synthesizeEdgeNeuralBuffer(text, viEdgeVoice);
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.setHeader(
-            'X-TTS-Source',
-            edgeRes.fromCache ? 'ram-cache' : `msedge-${edgeRes.usedVoice}`
-          );
-          res.setHeader('X-TTS-Switched', '0');
-          res.setHeader(
-            'Access-Control-Expose-Headers',
-            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
-          );
-          res.send(edgeRes.buf);
-          return;
-        } catch {
-          if (strictEdge) {
-            res.status(503).json({ error: 'Edge Neural unavailable' });
-            return;
-          }
-          const fallbackRes = await fetchGoogleTtsBuffer(
-            text,
-            'google-vi-gtx',
-            'vi'
-          );
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.setHeader('X-TTS-Source', `node-${fallbackRes.source}`);
-          res.setHeader('X-TTS-Switched', '0');
-          res.setHeader(
-            'Access-Control-Expose-Headers',
-            'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
-          );
-          res.send(fallbackRes.buf);
-          return;
-        }
-      }
-
-      const result = await fetchGoogleTtsBuffer(text, 'google-vi-gtx', 'vi');
+      const result = await fetchGoogleWarmViBuffer(text);
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.setHeader('X-TTS-Source', result.source);
-      res.setHeader('X-TTS-Switched', result.switchedMirror ? '1' : '0');
-      if (result.failReason) {
-        res.setHeader('X-TTS-Fail-Reason', encodeURIComponent(result.failReason));
-      }
-      res.setHeader(
-        'Access-Control-Expose-Headers',
-        'X-TTS-Source, X-TTS-Switched, X-TTS-Fail-Reason'
-      );
+      res.setHeader('X-TTS-Switched', '0');
+      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source, X-TTS-Switched');
       res.send(result.buf);
     } catch {
       res.status(502).end();
     }
   };
 
-  // Built-in Node.js TTS routes (/api/tts & /tts) mounted before Vite SPA middleware
+  // Built-in Google Warm TTS proxy routes (/api/tts & /tts) — no fallback, fail fast 502 so client skips cleanly
   app.get('/api/tts', handleTtsHttpRequest);
   app.get('/tts', handleTtsHttpRequest);
 

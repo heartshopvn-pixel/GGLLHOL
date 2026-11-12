@@ -821,13 +821,13 @@ export const DEFAULT_NPC_SPEECH_CATEGORIES: NpcSpeechCategoriesConfig = {
 export const DEFAULT_CONFIG: GameConfig = {
   ttsEnabled: true,
   ttsVipOnly: false,
-  ttsEngine: 'node_edge',
-  nodeVoice: 'vi-VN-HoaiMyNeural',
-  nodeTtsEndpoint: 'http://localhost:8080/tts',
+  ttsEngine: 'google_stream',
+  nodeVoice: 'google-vi-warm',
+  nodeTtsEndpoint: '/api/tts',
   selectedSystemVoiceURI: '',
   ttsRate: 1.05,
   englishTtsRate: 0.95,
-  ttsPitch: 1.0,
+  ttsPitch: 0.88,
   ttsVolume: 1.0,
   ttsReverb: 0,
   ttsTemplate: 'Học sinh {name} phát biểu: {prayer}',
@@ -1007,11 +1007,11 @@ export const DEFAULT_CONFIG: GameConfig = {
   filterCorrectAnswerBubble: true,
 
   // Live Text-to-Audio (Giọng đọc riêng ưu tiên của Chủ Phòng / Giáo Viên)
-  hostTtsEngine: 'node_edge',
-  hostNodeVoice: 'vi-VN-HoaiMyNeural',
+  hostTtsEngine: 'google_stream',
+  hostNodeVoice: 'google-vi-warm',
   hostSystemVoiceURI: '',
   hostTtsRate: 1.02,
-  hostTtsPitch: 1.0,
+  hostTtsPitch: 0.88,
   hostTtsVolume: 1.0,
   hostTtsReverb: 0,
   hostTtsInterrupt: true,
@@ -1023,12 +1023,12 @@ export const DEFAULT_CONFIG: GameConfig = {
     'Bạn nào muốn vào lớp ngồi bàn học thì comment vào lớp nha!',
   ],
 
-  // Live Text-to-Voice (Đồng nhất giọng Nữ Hoài My Node.js, không đè chồng giọng)
-  teacherLiveEngine: 'node_edge',
-  teacherLiveVoice: 'vi-VN-HoaiMyNeural',
+  // Live Text-to-Voice (Hỗ trợ 2 lựa chọn: Web Speech Tiếng Việt & Google Warm)
+  teacherLiveEngine: 'google_stream',
+  teacherLiveVoice: 'google-vi-warm',
   teacherLiveVolume: 1.0,
   teacherLiveRate: 1.0,
-  teacherLivePitch: 0.8,
+  teacherLivePitch: 0.84,
   teacherLiveShowBubble: true,
   teacherLiveQuickPhrases: [
     'Trật tự nào mấy đứa, tập trung nhìn lên bảng trả lời câu hỏi của cô Thảo đi!',
@@ -1258,7 +1258,7 @@ export const DEFAULT_CONFIG: GameConfig = {
     classBoardFontSize: 13,
     classBoardOpacity: 0.42,
     classBoardBlur: 2,
-    classBoardEngine: 'english_quiz',
+    classBoardEngine: 'notice',
     classBoardLessonTitle: 'Tiết Tiếng Anh',
     classBoardLetterMode: 'default',
     classBoardQuestionDurationSec: 12,
@@ -1585,11 +1585,6 @@ process.on('unhandledRejection', err => {
   console.warn('⚠️ [BỎ QUA PROMISE LỖI]:', err?.message || err);
 });
 
-let MsEdgeTTS, OUTPUT_FORMAT;
-try {
-  ({ MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts'));
-} catch (e) {}
-
 const app = express();
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1601,161 +1596,6 @@ app.use((req, res, next) => {
 });
 app.use(cors());
 app.use(express.json());
-
-const ttsCache = new Map();
-const MAX_TTS_CACHE = 180;
-
-const inFlightEdge = new Map();
-
-async function fetchGoogleMirrorBuffer(text, voiceVariant, lang = 'vi') {
-  const isSlow = voiceVariant === 'google-vi-slow';
-  const speedParam = isSlow ? '0.24' : '1';
-  const tl = lang === 'en' || String(voiceVariant).includes('-en') ? 'en' : 'vi';
-  const encoded = encodeURIComponent(text);
-  const gtxUrl = \`https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=\${tl}&client=gtx&ttsspeed=\${speedParam}&q=\${encoded}\`;
-  const twObUrl = \`https://translate.google.com/translate_tts?ie=UTF-8&tl=\${tl}&client=tw-ob&ttsspeed=\${speedParam}&q=\${encoded}\`;
-  const urls = voiceVariant === 'google-vi-twob' ? [twObUrl, gtxUrl] : [gtxUrl, twObUrl];
-
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-          'Referer': 'https://translate.google.com/'
-        }
-      });
-      if (!response.ok) continue;
-      const arrayBuffer = await response.arrayBuffer();
-      const buf = Buffer.from(arrayBuffer);
-      if (buf.length > 128) return buf;
-    } catch (e) {}
-  }
-  throw new Error('Google TTS mirrors unreachable');
-}
-
-const edgeSlots = [{ busy: false }, { busy: false }];
-const edgeWaiters = [];
-function acquireEdgeSlot() {
-  const free = edgeSlots.find(s => !s.busy);
-  if (free) { free.busy = true; return Promise.resolve(free); }
-  return new Promise(resolve => edgeWaiters.push(resolve));
-}
-function releaseEdgeSlot(slot) {
-  const next = edgeWaiters.shift();
-  if (next) next(slot); else slot.busy = false;
-}
-
-async function synthesizeIndependentEdge(text, edgeVoice) {
-  const tts = new MsEdgeTTS({ connectionTimeoutMs: 3800, synthesisTimeoutMs: 4400 });
-  const mp3Fmt = OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3 || 'audio-24khz-48kbitrate-mono-mp3';
-  await tts.setMetadata(edgeVoice, mp3Fmt);
-  const streamRes = tts.toStream(text);
-  const readable = streamRes && streamRes.audioStream ? streamRes.audioStream : streamRes;
-  return await new Promise((resolve, reject) => {
-    const chunks = [];
-    let settled = false;
-    const cleanup = () => { try { tts.close && tts.close(); } catch (e) {} };
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error('Edge TTS timeout'));
-    }, 4800);
-    readable.on('data', chunk => chunks.push(Buffer.from(chunk)));
-    readable.on('error', err => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      cleanup();
-      reject(err);
-    });
-    readable.on('end', () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      cleanup();
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 128) return reject(new Error('Empty Edge buffer'));
-      resolve(buf);
-    });
-  });
-}
-
-app.get('/tts', async (req, res) => {
-  try {
-    const rawText = String(req.query.text || 'Chào cả lớp').trim().slice(0, 220);
-    const voice = String(req.query.voice || 'vi-VN-HoaiMyNeural').trim();
-    const lang = String(req.query.lang || 'vi').trim().toLowerCase();
-    const isEn = lang === 'en' || voice.startsWith('en-US-') || voice.includes('-en');
-    const text = isEn && /^[A-Z\\s'-]{2,}$/.test(rawText) ? rawText.toLowerCase() : rawText;
-    const edgeVoice = isEn
-      ? (voice === 'en-US-GuyNeural' ? 'en-US-GuyNeural' : 'en-US-AndrewNeural')
-      : 'vi-VN-HoaiMyNeural';
-    const cacheKey = \`\${edgeVoice}:\${text}\`;
-
-    if (ttsCache.has(cacheKey)) {
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('X-TTS-Source', 'ram-cache');
-      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
-      return res.send(ttsCache.get(cacheKey));
-    }
-
-    if (!MsEdgeTTS) {
-      const buf = await fetchGoogleMirrorBuffer(text, isEn ? 'google-en-gtx' : 'google-vi-gtx', isEn ? 'en' : 'vi');
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('X-TTS-Source', 'node-google-fallback');
-      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
-      return res.send(buf);
-    }
-
-    try {
-      let task = inFlightEdge.get(cacheKey);
-      if (!task) {
-        task = (async () => {
-          const slot = await acquireEdgeSlot();
-          try {
-            try {
-              return await synthesizeIndependentEdge(text, edgeVoice);
-            } catch (e1) {
-              const retryVoice = isEn
-                ? (edgeVoice === 'en-US-AndrewNeural' ? 'en-US-GuyNeural' : 'en-US-AndrewNeural')
-                : 'vi-VN-HoaiMyNeural';
-              return await synthesizeIndependentEdge(text, retryVoice);
-            }
-          } finally {
-            releaseEdgeSlot(slot);
-          }
-        })();
-        inFlightEdge.set(cacheKey, task);
-      }
-      const fullBuf = await task.finally(() => inFlightEdge.delete(cacheKey));
-      if (fullBuf && fullBuf.length > 128) {
-        if (ttsCache.size >= MAX_TTS_CACHE) {
-          const firstKey = ttsCache.keys().next().value;
-          if (firstKey) ttsCache.delete(firstKey);
-        }
-        ttsCache.set(cacheKey, fullBuf);
-        res.setHeader('Content-Type', 'audio/mpeg');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.setHeader('X-TTS-Source', 'msedge-' + edgeVoice);
-        res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
-        return res.send(fullBuf);
-      }
-    } catch (edgeErr) {
-      const fallbackBuf = await fetchGoogleMirrorBuffer(text, isEn ? 'google-en-gtx' : 'google-vi-gtx', isEn ? 'en' : 'vi');
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('X-TTS-Source', 'node-google-fallback');
-      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source');
-      return res.send(fallbackBuf);
-    }
-    res.status(500).end();
-  } catch (err) {
-    res.status(500).end();
-  }
-});
 
 // ================= CẤU HÌNH KẾT NỐI TIKTOK LIVE =================
 // Cách 1: Điền ID kênh TikTok vào dòng dưới (VD: "lophocthaygiao")

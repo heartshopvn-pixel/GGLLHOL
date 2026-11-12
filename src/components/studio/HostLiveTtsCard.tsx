@@ -68,10 +68,10 @@ export const HostLiveTtsCard: React.FC<HostLiveTtsCardProps> = ({
     }
   }, []);
 
-  const hostEngine = config.hostTtsEngine || 'google_stream';
-  const hostVoice = config.hostNodeVoice || 'google-vi-male-deep';
-  const hostRate = config.hostTtsRate ?? 0.96;
-  const hostPitch = config.hostTtsPitch ?? 0.82;
+  const hostEngine: TTSEngineType =
+    config.hostTtsEngine === 'web_speech' ? 'web_speech' : 'google_stream';
+  const hostRate = config.hostTtsRate ?? 1.02;
+  const hostPitch = config.hostTtsPitch ?? 0.88;
   const hostVolume = config.hostTtsVolume ?? 1.0;
   const hostInterrupt = config.hostTtsInterrupt ?? true;
   const hostSpeakerRole = config.hostTtsSpeakerRole ?? 'abbot';
@@ -126,40 +126,7 @@ export const HostLiveTtsCard: React.FC<HostLiveTtsCardProps> = ({
     });
   };
 
-  const getHostVoiceShortLabel = () => {
-    if (hostEngine === 'web_speech' || hostEngine === 'monk_zen') {
-      const found = systemVoices.find(
-        (v) => v.voiceURI === config.hostSystemVoiceURI
-      );
-      return found
-        ? `WebSpeech: ${found.name.slice(0, 18)} (Pitch ${hostPitch.toFixed(2)})`
-        : `WebSpeech Hệ Thống (Pitch ${hostPitch.toFixed(2)})`;
-    }
-    if (hostVoice === 'vi-VN-NamMinhNeural') return 'Edge AI: Nam Minh (Nam)';
-    if (hostVoice === 'vi-VN-HoaiMyNeural') return 'Edge AI: Hoài My (Nữ)';
-    if (hostVoice === 'google-vi-male-deep')
-      return `Nam Trầm Chủ Phòng (Pitch ${hostPitch.toFixed(2)})`;
-    if (hostVoice === 'google-vi-warm')
-      return `Trầm Ấm Dày Tiếng (Pitch ${hostPitch.toFixed(2)})`;
-    if (hostVoice === 'google-vi-bright')
-      return `Cô Giáo Trong Trẻo (Pitch ${hostPitch.toFixed(2)})`;
-    if (hostVoice === 'google-vi-twob') return 'Google Nữ Dịu Dàng (TW-OB)';
-    if (hostVoice === 'google-vi-slow') return 'Google Nữ Chậm Trang Nghiêm';
-    return `Google GTX (Pitch ${hostPitch.toFixed(2)})`;
-  };
 
-  const getNormalVoiceShortLabel = () => {
-    if (config.ttsEngine === 'web_speech' || config.ttsEngine === 'monk_zen') {
-      return `WebSpeech (Pitch ${config.ttsPitch.toFixed(2)})`;
-    }
-    if (config.nodeVoice === 'vi-VN-NamMinhNeural') return 'Edge Nam Minh';
-    if (config.nodeVoice === 'vi-VN-HoaiMyNeural') return 'Edge Hoài My';
-    if (config.nodeVoice === 'google-vi-male-deep') return 'Nam Trầm';
-    if (config.nodeVoice === 'google-vi-warm') return 'Trầm Ấm';
-    if (config.nodeVoice === 'google-vi-bright') return 'Nữ Trong Trẻo';
-    if (config.nodeVoice === 'google-vi-twob') return 'Google TW-OB';
-    return `Google GTX (Pitch ${config.ttsPitch.toFixed(2)})`;
-  };
 
   return (
     <section className="p-2.5 rounded-xl bg-stone-900/95 border border-cyan-500/40 space-y-2">
@@ -274,68 +241,22 @@ export const HostLiveTtsCard: React.FC<HostLiveTtsCardProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1">
+          <div className="grid grid-cols-2 gap-1.5">
             <button
               type="button"
               onClick={() =>
                 onUpdateConfig({
-                  hostTtsEngine: 'node_edge',
-                  hostNodeVoice: 'vi-VN-HoaiMyNeural',
-                  hostTtsRate: 1.0,
+                  hostTtsEngine: 'web_speech',
                   hostTtsPitch: 1.0,
-                  hostTtsReverb: 0,
                 })
               }
-              className={`px-1.5 py-1 rounded border text-[10px] font-bold cursor-pointer transition truncate ${
-                hostEngine === 'node_edge' &&
-                hostVoice === 'vi-VN-HoaiMyNeural'
+              className={`px-2 py-1.5 rounded border text-[10.5px] font-bold cursor-pointer transition ${
+                hostEngine === 'web_speech'
                   ? 'bg-cyan-500 text-stone-950 border-cyan-300'
-                  : 'bg-stone-900 hover:bg-stone-800 text-pink-200 border-stone-800'
+                  : 'bg-stone-900 hover:bg-stone-800 text-stone-200 border-stone-800'
               }`}
             >
-              🤖 Nữ Node.js (Hoài My)
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  hostTtsEngine: 'node_edge',
-                  hostNodeVoice: 'vi-VN-NamMinhNeural',
-                  hostTtsRate: 1.0,
-                  hostTtsPitch: 0.95,
-                  hostTtsReverb: 0,
-                })
-              }
-              className={`px-1.5 py-1 rounded border text-[10px] font-bold cursor-pointer transition truncate ${
-                hostEngine === 'node_edge' &&
-                hostVoice === 'vi-VN-NamMinhNeural'
-                  ? 'bg-cyan-500 text-stone-950 border-cyan-300'
-                  : 'bg-stone-900 hover:bg-stone-800 text-emerald-200 border-stone-800'
-              }`}
-            >
-              🤖 Nam Node.js (Nam Minh)
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  hostTtsEngine: 'google_stream',
-                  hostNodeVoice: 'google-vi-bright',
-                  hostTtsRate: 1.02,
-                  hostTtsPitch: 1.16,
-                  hostTtsReverb: 0,
-                })
-              }
-              className={`px-1.5 py-1 rounded border text-[10px] font-bold cursor-pointer transition truncate ${
-                hostEngine === 'google_stream' &&
-                hostVoice === 'google-vi-bright'
-                  ? 'bg-cyan-500 text-stone-950 border-cyan-300'
-                  : 'bg-stone-900 hover:bg-stone-800 text-pink-200 border-stone-800'
-              }`}
-            >
-              ✨ Nữ Trong Trẻo
+              1. 🇻🇳 Web Speech Tiếng Việt
             </button>
 
             <button
@@ -344,107 +265,36 @@ export const HostLiveTtsCard: React.FC<HostLiveTtsCardProps> = ({
                 onUpdateConfig({
                   hostTtsEngine: 'google_stream',
                   hostNodeVoice: 'google-vi-warm',
-                  hostTtsRate: 0.94,
                   hostTtsPitch: 0.88,
-                  hostTtsReverb: 0,
                 })
               }
-              className={`px-1.5 py-1 rounded border text-[10px] font-bold cursor-pointer transition truncate ${
-                hostEngine === 'google_stream' && hostVoice === 'google-vi-warm'
+              className={`px-2 py-1.5 rounded border text-[10.5px] font-bold cursor-pointer transition ${
+                hostEngine === 'google_stream'
                   ? 'bg-cyan-500 text-stone-950 border-cyan-300'
                   : 'bg-stone-900 hover:bg-stone-800 text-amber-200 border-stone-800'
               }`}
             >
-              🎙️ Cô Trầm Ấm
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateConfig({
-                  hostTtsEngine: 'google_stream',
-                  hostNodeVoice: 'google-vi-male-deep',
-                  hostTtsRate: 0.96,
-                  hostTtsPitch: 0.8,
-                  hostTtsReverb: 0,
-                })
-              }
-              className={`px-1.5 py-1 rounded border text-[10px] font-bold cursor-pointer transition truncate ${
-                hostEngine === 'google_stream' &&
-                hostVoice === 'google-vi-male-deep'
-                  ? 'bg-cyan-500 text-stone-950 border-cyan-300'
-                  : 'bg-stone-900 hover:bg-stone-800 text-cyan-200 border-stone-800'
-              }`}
-            >
-              👨‍🏫 Nam Trầm
+              2. 🎙️ Google Warm (Trầm Ấm)
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {hostEngine === 'web_speech' && (
             <select
-              value={hostEngine === 'monk_zen' ? 'web_speech' : hostEngine}
-              onChange={(e) => {
-                const nextEng = e.target.value as TTSEngineType;
-                onUpdateConfig({
-                  hostTtsEngine: nextEng,
-                  ...(nextEng === 'node_edge' &&
-                  hostVoice !== 'vi-VN-HoaiMyNeural' &&
-                  hostVoice !== 'vi-VN-NamMinhNeural'
-                    ? { hostNodeVoice: 'vi-VN-HoaiMyNeural', hostTtsPitch: 1.0 }
-                    : {}),
-                });
-              }}
-              className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[10.5px] text-cyan-200 font-semibold focus:outline-none"
+              value={config.hostSystemVoiceURI || ''}
+              onChange={(e) =>
+                onUpdateConfig({ hostSystemVoiceURI: e.target.value })
+              }
+              className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[10.5px] text-amber-200 focus:outline-none"
             >
-              <option value="google_stream">1. Google Stream</option>
-              <option value="node_edge">2. Node.js Edge AI (Hoài My / Nam Minh)</option>
-              <option value="web_speech">3. Web Speech</option>
+              <option value="">★ Tự động chọn giọng Tiếng Việt (vi-VN)</option>
+              {systemVoices.map((v) => (
+                <option key={v.voiceURI} value={v.voiceURI}>
+                  {v.lang.toLowerCase().includes('vi') ? '🇻🇳 ' : ''}
+                  {v.name} ({v.lang})
+                </option>
+              ))}
             </select>
-
-            {(hostEngine === 'google_stream' || hostEngine === 'node_edge') && (
-              <select
-                value={hostVoice}
-                onChange={(e) => {
-                  const picked = e.target.value;
-                  const isEdgePicked =
-                    picked === 'vi-VN-HoaiMyNeural' ||
-                    picked === 'vi-VN-NamMinhNeural';
-                  onUpdateConfig({
-                    hostNodeVoice: picked,
-                    ...(isEdgePicked ? { hostTtsEngine: 'node_edge' } : {}),
-                  });
-                }}
-                className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[10.5px] text-amber-200 font-semibold focus:outline-none"
-              >
-                <option value="vi-VN-HoaiMyNeural">🤖 Giọng Nữ Node.js - Hoài My AI</option>
-                <option value="vi-VN-NamMinhNeural">🤖 Giọng Nam Node.js - Nam Minh AI</option>
-                <option value="google-vi-gtx">🔊 Google GTX (Nữ Chuẩn)</option>
-                <option value="google-vi-bright">✨ Nữ Trong Trẻo</option>
-                <option value="google-vi-twob">🌸 Nữ Dịu Dàng</option>
-                <option value="google-vi-slow">📖 Nữ Chậm Rõ</option>
-                <option value="google-vi-warm">🎙️ Cô Trầm Ấm</option>
-                <option value="google-vi-male-deep">👨‍🏫 Nam Trầm</option>
-              </select>
-            )}
-
-            {(hostEngine === 'web_speech' || hostEngine === 'monk_zen') && (
-              <select
-                value={config.hostSystemVoiceURI || ''}
-                onChange={(e) =>
-                  onUpdateConfig({ hostSystemVoiceURI: e.target.value })
-                }
-                className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[10.5px] text-amber-200 focus:outline-none"
-              >
-                <option value="">★ Tự động Tiếng Việt</option>
-                {systemVoices.map((v) => (
-                  <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.lang.toLowerCase().includes('vi') ? '🇻🇳 ' : ''}
-                    {v.name} ({v.lang})
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
+          )}
 
           <div className="grid grid-cols-3 gap-1.5">
             <div className="p-1 rounded bg-stone-900/90 border border-stone-800">

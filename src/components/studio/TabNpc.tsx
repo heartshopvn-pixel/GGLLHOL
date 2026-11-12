@@ -435,7 +435,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
                 type="text"
                 value={studentCommentText}
                 onChange={(e) => setStudentCommentText(e.target.value)}
-                placeholder="Nhập comment cho NPC (đáp án, 1nam, 1nu, vào lớp, chat)..."
+                placeholder="Nhập comment cho NPC (đáp án, /nam, /nu, vào lớp, chat)..."
                 className="flex-1 bg-stone-950 border border-stone-700 focus:border-emerald-400 rounded-lg px-2.5 py-1 text-xs text-stone-100 focus:outline-none"
               />
               <button
@@ -468,19 +468,19 @@ export const TabNpc: React.FC<TabNpcProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => handleSendStudentComment('1nam')}
+                onClick={() => handleSendStudentComment('/nam')}
                 className="px-1.5 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-[10px] font-bold text-sky-200 cursor-pointer"
                 title="Đổi giới tính nhân vật sang Học Sinh Nam"
               >
-                1nam (Đổi Nam)
+                /nam (Đổi Nam)
               </button>
               <button
                 type="button"
-                onClick={() => handleSendStudentComment('1nu')}
+                onClick={() => handleSendStudentComment('/nu')}
                 className="px-1.5 py-0.5 rounded bg-pink-500/20 hover:bg-pink-500/35 border border-pink-400/50 text-[10px] font-bold text-pink-200 cursor-pointer"
                 title="Đổi giới tính nhân vật sang Học Sinh Nữ"
               >
-                1nu (Đổi Nữ)
+                /nu (Đổi Nữ)
               </button>
               <button
                 type="button"
