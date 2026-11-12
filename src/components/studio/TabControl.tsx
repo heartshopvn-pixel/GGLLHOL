@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -16,6 +16,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Search,
   Send,
   Shuffle,
   SkipForward,
@@ -49,7 +50,6 @@ import {
   DEFAULT_QUIZ_DECKS,
   ENGLISH_QUIZ_QUESTIONS,
   formatEnglishQuizTxt,
-  parseEnglishQuizTxt,
 } from '../../config/constants';
 import {
   QUIZ_DECK_SCHEMA_VERSION,
@@ -58,6 +58,10 @@ import {
   getQuizLevelRewardInfo,
   normalizeQuizDeckFileName,
 } from '../../config/vocabDecks';
+import {
+  parseLargeQuizTxtChunked,
+  prepareEnqueuedQuestions,
+} from '../../utils/quizDeckEngine';
 import { Flower10BadgeIcon, GoldTrophyIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
 import {
   TeacherLiveVoiceOptions,
@@ -330,6 +334,8 @@ export const TabControl: React.FC<TabControlProps> = ({
   const [showBoardSizeSliders, setShowBoardSizeSliders] = useState(true);
   const [showTeacherFlowScript, setShowTeacherFlowScript] = useState(false);
   const [quizImportFeedback, setQuizImportFeedback] = useState<string | null>(null);
+  const [isParsingQuizTxt, setIsParsingQuizTxt] = useState(false);
+  const [queueSearchQuery, setQueueSearchQuery] = useState('');
   const [selectedGuideIdx, setSelectedGuideIdx] = useState<number>(0);
 
   const activeQuizList =
@@ -337,10 +343,19 @@ export const TabControl: React.FC<TabControlProps> = ({
       ? config.customQuizQuestions
       : ENGLISH_QUIZ_QUESTIONS;
 
-  const quizDecks = ensureTieredQuizDecksLoaded(
-    Array.isArray(config.quizDecks) && config.quizDecks.length > 0
-      ? config.quizDecks
-      : DEFAULT_QUIZ_DECKS
+  const quizDecks = useMemo(
+    () =>
+      ensureTieredQuizDecksLoaded(
+        Array.isArray(config.quizDecks) && config.quizDecks.length > 0
+          ? config.quizDecks
+          : DEFAULT_QUIZ_DECKS
+      ),
+    [config.quizDecks]
+  );
+
+  const totalLibraryQuestions = useMemo(
+    () => quizDecks.reduce((acc, d) => acc + (d.questions?.length || 0), 0),
+    [quizDecks]
   );
 
   const selectedDeckId =
@@ -349,65 +364,62 @@ export const TabControl: React.FC<TabControlProps> = ({
       : quizDecks[0]?.id || 'deck-tienganh-de';
   const selectedDeck = quizDecks.find((d) => d.id === selectedDeckId) || quizDecks[0];
 
-  // Gán sao may mắn ngẫu nhiên theo tỉ lệ % (Câu hỏi bình thường = 0 sao, 1 sao = x2đ, 2 sao = x3đ, 3 sao = x4đ)
-  const assignLuckyStarsWithRatios = (items: EnglishQuizItem[]): EnglishQuizItem[] => {
-    const r1 = Math.max(0, Math.min(100, config.luckyStarRatio1 ?? 15));
-    const r2 = Math.max(0, Math.min(100, config.luckyStarRatio2 ?? 10));
-    const r3 = Math.max(0, Math.min(100, config.luckyStarRatio3 ?? 5));
-
-    return items.map((item) => {
-      if (typeof item.luckyStars === 'number') return item;
-      const rnd = Math.random() * 100;
-      let stars: 0 | 1 | 2 | 3 = 0;
-      if (rnd < r3) {
-        stars = 3;
-      } else if (rnd < r3 + r2) {
-        stars = 2;
-      } else if (rnd < r3 + r2 + r1) {
-        stars = 1;
-      } else {
-        stars = 0;
+  const visibleQueueEntries = useMemo(() => {
+    const limit = config.quizQueueLimitDisplay ?? 10;
+    const query = queueSearchQuery.trim().toLowerCase();
+    const out: Array<{ q: EnglishQuizItem; idx: number }> = [];
+    if (!query) {
+      const end = Math.min(activeQuizList.length, limit);
+      for (let i = 0; i < end; i++) {
+        out.push({ q: activeQuizList[i], idx: i });
       }
-      return { ...item, luckyStars: stars };
-    });
-  };
-
-  // Xáo trộn mảng Fisher-Yates
-  const shuffleQuestions = (items: EnglishQuizItem[]): EnglishQuizItem[] => {
-    const arr = [...items];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return out;
     }
-    return arr;
-  };
+    for (let i = 0; i < activeQuizList.length && out.length < limit; i++) {
+      const item = activeQuizList[i];
+      if (
+        item &&
+        (item.en.toLowerCase().includes(query) ||
+          item.vi.toLowerCase().includes(query) ||
+          String(i + 1) === query)
+      ) {
+        out.push({ q: item, idx: i });
+      }
+    }
+    return out;
+  }, [activeQuizList, config.quizQueueLimitDisplay, queueSearchQuery]);
 
-  // Nạp đề vào hàng chờ: mode = 'append' (tiếp) | 'replace' (đè) | 'prepend' (đầu)
+  // Nạp đề vào hàng chờ cực nhanh (Single-pass O(N)): mode = 'append' (tiếp) | 'replace' (đè) | 'prepend' (đầu)
   const handleLoadDeckToQueue = (mode: 'append' | 'replace' | 'prepend') => {
     if (!selectedDeck || !selectedDeck.questions.length) {
       setQuizImportFeedback('⚠️ Bộ đề được chọn không có câu hỏi nào!');
       return;
     }
-    let toLoad: EnglishQuizItem[] = selectedDeck.questions.map((q) => ({
-      ...q,
-      id: `en-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    const toLoad = prepareEnqueuedQuestions(selectedDeck.questions, {
       deckName: selectedDeck.name,
-    }));
-    if (config.shuffleBeforeEnqueue) {
-      toLoad = shuffleQuestions(toLoad);
-    }
-    toLoad = assignLuckyStarsWithRatios(toLoad);
+      quizLevel: selectedDeck.level,
+      shuffle: config.shuffleBeforeEnqueue ?? false,
+      ratio1: config.luckyStarRatio1 ?? 15,
+      ratio2: config.luckyStarRatio2 ?? 10,
+      ratio3: config.luckyStarRatio3 ?? 5,
+    });
 
     let nextQueue: EnglishQuizItem[] = [];
     if (mode === 'replace') {
       nextQueue = toLoad;
-      setQuizImportFeedback(`✅ Đã nạp đè ${toLoad.length} câu từ "${selectedDeck.name}"!`);
+      setQuizImportFeedback(
+        `✅ Đã nạp đè ${toLoad.length.toLocaleString('vi-VN')} câu từ "${selectedDeck.name}"!`
+      );
     } else if (mode === 'prepend') {
       nextQueue = [...toLoad, ...activeQuizList];
-      setQuizImportFeedback(`✅ Đã nạp ${toLoad.length} câu lên đầu hàng chờ!`);
+      setQuizImportFeedback(
+        `✅ Đã nạp ${toLoad.length.toLocaleString('vi-VN')} câu lên đầu hàng chờ!`
+      );
     } else {
       nextQueue = [...activeQuizList, ...toLoad];
-      setQuizImportFeedback(`✅ Đã nạp tiếp ${toLoad.length} câu vào đuôi hàng chờ!`);
+      setQuizImportFeedback(
+        `✅ Đã nạp tiếp ${toLoad.length.toLocaleString('vi-VN')} câu vào đuôi hàng chờ!`
+      );
     }
     onUpdateConfig({ customQuizQuestions: nextQueue });
   };
@@ -450,69 +462,97 @@ export const TabControl: React.FC<TabControlProps> = ({
     setQuizImportFeedback('🗑️ Đã xóa sạch hàng chờ câu hỏi!');
   };
 
-  // Nạp file .txt: trùng tên (tienganh-de / tienganh-thuong / tienganh-kho / tienganh-OMG hoặc tên đã có) -> ghi đè; khác tên -> tạo bộ đề riêng biệt mới
-  const handleUploadNewDeckFile = (file: File | undefined) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const rawText = typeof reader.result === 'string' ? reader.result : '';
-      const parsed = parseEnglishQuizTxt(rawText);
-      if (parsed.length === 0) {
-        setQuizImportFeedback('⚠️ File .txt chưa đúng định dạng (Nghĩa Việt | Tiếng Anh)');
+  // Nạp 1 hoặc nhiều file .txt cùng lúc theo từng chunk bất đồng bộ (hỗ trợ mỗi file hàng nghìn - hàng chục nghìn câu không đơ UI)
+  const handleUploadNewDeckFiles = async (fileList: FileList | null | undefined) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    setIsParsingQuizTxt(true);
+    setQuizImportFeedback(
+      `⏳ Đang đọc ${files.length} file bộ đề dung lượng lớn...`
+    );
+
+    try {
+      let workingDecks = [...quizDecks];
+      let lastTargetDeckId = selectedDeckId;
+      const summaryParts: string[] = [];
+
+      for (let fIdx = 0; fIdx < files.length; fIdx++) {
+        const file = files[fIdx];
+        const rawText = await file.text();
+        const { deckName, deckKey, level } = normalizeQuizDeckFileName(file.name);
+        const parsed = await parseLargeQuizTxtChunked(rawText, {
+          idPrefix: `txt-${Date.now()}-${fIdx}`,
+          deckName,
+          quizLevel: level,
+          chunkLines: 4000,
+          onProgress: (count) => {
+            if (count >= 4000) {
+              setQuizImportFeedback(
+                `⏳ Đang nạp "${deckName}": ${count.toLocaleString('vi-VN')} câu...`
+              );
+            }
+          },
+        });
+
+        if (parsed.length === 0) {
+          summaryParts.push(`"${file.name}": 0 câu hợp lệ`);
+          continue;
+        }
+
+        const existingIdx = workingDecks.findIndex(
+          (d) => normalizeQuizDeckFileName(d.name).deckKey === deckKey
+        );
+
+        if (existingIdx >= 0) {
+          const targetDeck = workingDecks[existingIdx];
+          const updatedDeck = {
+            ...targetDeck,
+            name: deckName,
+            level,
+            questions: parsed,
+          };
+          workingDecks = workingDecks.map((d, idx) =>
+            idx === existingIdx ? updatedDeck : d
+          );
+          lastTargetDeckId = targetDeck.id;
+          const rewardSpec = getQuizLevelRewardInfo(deckName);
+          summaryParts.push(
+            `♻️ Ghi đè "${deckName}" (${parsed.length.toLocaleString('vi-VN')} câu • ${rewardSpec.label})`
+          );
+        } else {
+          const newDeckId = `deck-${Date.now()}-${fIdx}`;
+          const newDeck = {
+            id: newDeckId,
+            name: deckName,
+            level,
+            questions: parsed,
+          };
+          workingDecks = [...workingDecks, newDeck];
+          lastTargetDeckId = newDeckId;
+          const rewardSpec = getQuizLevelRewardInfo(deckName);
+          summaryParts.push(
+            `📁 Thêm mới "${deckName}" (${parsed.length.toLocaleString('vi-VN')} câu • ${rewardSpec.label})`
+          );
+        }
+      }
+
+      const validUploaded = summaryParts.some((s) => s.startsWith('♻️') || s.startsWith('📁'));
+      if (!validUploaded) {
+        setQuizImportFeedback(
+          '⚠️ File .txt chưa đúng định dạng (Nghĩa Việt | Tiếng Anh)'
+        );
         return;
       }
-      const { deckName, deckKey, level } = normalizeQuizDeckFileName(file.name);
-      const taggedQuestions = parsed.map((q) => ({
-        ...q,
-        deckName,
-        quizLevel: level,
-      }));
 
-      const existingIdx = quizDecks.findIndex(
-        (d) => normalizeQuizDeckFileName(d.name).deckKey === deckKey
-      );
-
-      if (existingIdx >= 0) {
-        const targetDeck = quizDecks[existingIdx];
-        const updatedDeck = {
-          ...targetDeck,
-          name: deckName,
-          level,
-          questions: taggedQuestions,
-        };
-        const nextDecks = quizDecks.map((d, idx) =>
-          idx === existingIdx ? updatedDeck : d
-        );
-        const rewardSpec = getQuizLevelRewardInfo(deckName);
-        onUpdateConfig({
-          quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
-          quizDecks: nextDecks,
-          activeQuizDeckId: targetDeck.id,
-        });
-        setQuizImportFeedback(
-          `♻️ Đã ghi đè bộ đề "${deckName}" (${parsed.length} câu • Level ${rewardSpec.label}: ${rewardSpec.base}/${rewardSpec.top1}/${rewardSpec.top2}/${rewardSpec.top3})!`
-        );
-      } else {
-        const newDeckId = `deck-${Date.now()}`;
-        const newDeck = {
-          id: newDeckId,
-          name: deckName,
-          level,
-          questions: taggedQuestions,
-        };
-        const nextDecks = [...quizDecks, newDeck];
-        const rewardSpec = getQuizLevelRewardInfo(deckName);
-        onUpdateConfig({
-          quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
-          quizDecks: nextDecks,
-          activeQuizDeckId: newDeckId,
-        });
-        setQuizImportFeedback(
-          `📁 Đã thêm bộ đề mới "${deckName}" (${parsed.length} câu • Level ${rewardSpec.label}: ${rewardSpec.base}/${rewardSpec.top1}/${rewardSpec.top2}/${rewardSpec.top3})!`
-        );
-      }
-    };
-    reader.readAsText(file, 'utf-8');
+      onUpdateConfig({
+        quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
+        quizDecks: workingDecks,
+        activeQuizDeckId: lastTargetDeckId,
+      });
+      setQuizImportFeedback(summaryParts.join(' • '));
+    } finally {
+      setIsParsingQuizTxt(false);
+    }
   };
 
   // Xóa bộ đề đang chọn khỏi danh sách (nút ✕)
@@ -1168,12 +1208,22 @@ export const TabControl: React.FC<TabControlProps> = ({
 
             {/* QUẢN LÝ BỘ ĐỀ & HÀNG CHỜ CÂU HỎI TIẾNG ANH (THẺ CỐ ĐỊNH KÍCH THƯỚC) */}
             <div className="p-2.5 rounded-xl bg-stone-950 border border-cyan-500/35 space-y-2 text-[10.5px]">
-              {/* Hàng 1: Dòng chữ đếm số hàng chờ + Nút chọn số lượng show (5/10/20/50) + Nút Xóa */}
-              <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-stone-800">
+              {/* Hàng 1: Dòng chữ đếm số hàng chờ + tổng kho đề + Nút chọn số lượng show (5/10/20/50) + Nút Xóa */}
+              <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-stone-800 flex-wrap">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <BookOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                   <span className="font-bold text-stone-200">
-                    Hàng chờ: <strong className="text-cyan-300 font-mono text-xs">{activeQuizList.length}</strong> câu
+                    Hàng chờ:{' '}
+                    <strong className="text-cyan-300 font-mono text-xs">
+                      {activeQuizList.length.toLocaleString('vi-VN')}
+                    </strong>{' '}
+                    câu
+                  </span>
+                  <span
+                    className="px-1.5 py-0.5 rounded bg-stone-900 border border-stone-700/80 text-[9px] font-mono text-emerald-300 shrink-0"
+                    title="Tổng số câu hỏi trong toàn bộ các bộ đề (lưu trữ tốc độ cao trên IndexedDB)"
+                  >
+                    Kho: {totalLibraryQuestions.toLocaleString('vi-VN')}
                   </span>
                 </div>
 
@@ -1206,9 +1256,34 @@ export const TabControl: React.FC<TabControlProps> = ({
                 </div>
               </div>
 
+              {/* Ô tìm nhanh trong hàng chờ lớn (chỉ render đúng số câu giới hạn ra DOM, không lag dù hàng chờ 10.000 câu) */}
+              {activeQuizList.length > 15 && (
+                <div className="relative flex items-center">
+                  <Search className="w-3 h-3 text-stone-400 absolute left-2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={queueSearchQuery}
+                    onChange={(e) => setQueueSearchQuery(e.target.value)}
+                    placeholder={`Tìm nhanh trong ${activeQuizList.length.toLocaleString('vi-VN')} câu hàng chờ...`}
+                    aria-label="Tìm câu hỏi trong hàng chờ"
+                    className="w-full pl-6 pr-6 py-1 rounded bg-stone-900 border border-stone-800 text-[10px] text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-cyan-500/60"
+                  />
+                  {queueSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setQueueSearchQuery('')}
+                      aria-label="Xóa từ khóa tìm kiếm hàng chờ"
+                      className="absolute right-1.5 text-stone-400 hover:text-stone-200 text-[10px] cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Hàng 2: List hàng chờ câu hỏi - CỐ ĐỊNH KÍCH THƯỚC (h-44 overflow-y-auto) */}
               <div className="h-44 overflow-y-auto space-y-1 pr-1 border border-stone-900 rounded-lg p-1 bg-stone-900/40">
-                {activeQuizList.slice(0, config.quizQueueLimitDisplay ?? 10).map((q, idx) => {
+                {visibleQueueEntries.map(({ q, idx }) => {
                   const isCurrent = idx === (classBoardState?.questionIndex ?? 0);
                   const stars = q.luckyStars || 0;
                   return (
@@ -1221,7 +1296,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                       }`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-[9.5px] font-mono text-stone-400 w-5 text-right shrink-0">
+                        <span className="text-[9.5px] font-mono text-stone-400 w-7 text-right shrink-0">
                           #{idx + 1}
                         </span>
                         {isCurrent && (
@@ -1303,31 +1378,43 @@ export const TabControl: React.FC<TabControlProps> = ({
                   <select
                     value={selectedDeckId}
                     onChange={(e) => onUpdateConfig({ activeQuizDeckId: e.target.value })}
-                    title={selectedDeck ? `${selectedDeck.name} (${selectedDeck.questions.length} câu)` : ''}
+                    aria-label="Chọn bộ đề Tiếng Anh"
+                    title={
+                      selectedDeck
+                        ? `${selectedDeck.name} (${selectedDeck.questions.length.toLocaleString('vi-VN')} câu)`
+                        : ''
+                    }
                     className="w-0 min-w-0 flex-1 px-1.5 py-1 rounded bg-stone-900 border border-stone-700 text-[10px] font-bold text-cyan-200 focus:outline-none truncate"
                   >
                     {quizDecks.map((d) => {
                       const spec = getQuizLevelRewardInfo(d.name);
                       return (
                         <option key={d.id} value={d.id}>
-                          📄 {d.name} ({d.questions.length} câu • {spec.label})
+                          📄 {d.name} ({d.questions.length.toLocaleString('vi-VN')} câu • {spec.label})
                         </option>
                       );
                     })}
                   </select>
 
                   <label
-                    title="Tải đề .txt lên (trùng tên tienganh-de / thuong / kho / OMG hoặc đề đã có sẽ ghi đè; khác tên sẽ tạo bộ đề riêng)"
-                    className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 border border-cyan-500/45 text-[10px] font-bold text-cyan-100 flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap transition"
+                    title="Tải 1 hoặc nhiều đề .txt lên cùng lúc (hỗ trợ hàng chục nghìn câu/đề; trùng tên tienganh-de / thuong / kho / OMG sẽ ghi đè)"
+                    className={`px-2 py-1 rounded border text-[10px] font-bold flex items-center gap-1 shrink-0 whitespace-nowrap transition ${
+                      isParsingQuizTxt
+                        ? 'bg-cyan-950 border-cyan-400 text-cyan-200 cursor-wait animate-pulse'
+                        : 'bg-stone-800 hover:bg-stone-700 border-cyan-500/45 text-cyan-100 cursor-pointer'
+                    }`}
                   >
                     <FileUp className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>+Tải .txt</span>
+                    <span>{isParsingQuizTxt ? 'Đang nạp...' : '+Tải .txt'}</span>
                     <input
                       type="file"
+                      multiple
                       accept=".txt,text/plain"
+                      aria-label="Tải lên file bộ đề txt"
+                      disabled={isParsingQuizTxt}
                       className="hidden"
                       onChange={(e) => {
-                        handleUploadNewDeckFile(e.target.files?.[0]);
+                        void handleUploadNewDeckFiles(e.target.files);
                         e.target.value = '';
                       }}
                     />
@@ -1346,7 +1433,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                   Quy ước tên file: <span className="text-emerald-300 font-mono">tienganh-de</span> (5/10/8/7) •{' '}
                   <span className="text-sky-300 font-mono">tienganh-thuong</span> (7/12/10/9) •{' '}
                   <span className="text-amber-300 font-mono">tienganh-kho</span> (9/15/13/12) •{' '}
-                  <span className="text-rose-300 font-mono">tienganh-OMG</span> (12/20/18/16). Trùng tên ghi đè, khác tên tạo bộ đề mới.
+                  <span className="text-rose-300 font-mono">tienganh-OMG</span> (12/20/18/16). Chọn nhiều file cùng lúc được; trùng tên ghi đè, khác tên tạo bộ đề mới.
                 </div>
 
                 {/* Nút bật/tắt xáo trộn + 3 Nút Nạp Đề Tiêu Đề Ngắn Gọn */}
@@ -1367,17 +1454,16 @@ export const TabControl: React.FC<TabControlProps> = ({
                       onClick={() => {
                         const tiered10 = build15MinuteTieredRoundQuestions(config);
                         onUpdateConfig({
-                          quizDecks,
                           customQuizQuestions: tiered10,
                         });
                         setQuizImportFeedback(
-                          '🎯 Đã trích ngẫu nhiên 10 câu kiểm tra 15 phút (6 câu Dễ + 3 câu Thường + 1 câu Khó)!'
+                          '🎯 Đã trích ngẫu nhiên 10 câu kiểm tra 15 phút (3 câu Dễ + 4 câu Thường + 3 câu Khó)!'
                         );
                       }}
-                      title="Trích ngẫu nhiên 10 câu kiểm tra 15 phút: 6 câu đầu Dễ (tienganh-de) + 3 câu kế Thường (tienganh-thuong) + 1 câu cuối Khó (tienganh-kho)"
+                      title="Trích ngẫu nhiên 10 câu kiểm tra 15 phút (O(k) tức thì): 3 câu đầu Dễ (tienganh-de) + 4 câu kế Thường (tienganh-thuong) + 3 câu cuối Khó (tienganh-kho)"
                       className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
                     >
-                      🎯 Trích 10 câu (6+3+1)
+                      🎯 Trích 10 câu (3+4+3)
                     </button>
                     <button
                       type="button"

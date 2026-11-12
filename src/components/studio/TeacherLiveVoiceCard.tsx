@@ -124,7 +124,7 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
             }`}
           />
           <h2 className="text-xs font-extrabold text-sky-200 truncate">
-            👨‍🏫 Live Text-to-Voice (Giọng Thầy Giáo)
+            👨‍🏫 Live Text-to-Voice (Giọng Thầy Cá)
           </h2>
           <span className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-400/40 text-[9px] font-bold text-sky-200 shrink-0">
             Độc lập • Song song
@@ -142,7 +142,7 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
                 ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
                 : 'bg-stone-950 border-stone-700 text-stone-400'
             }`}
-            title="Bật/tắt hiện bong bóng thoại của Thầy Tùng trên lớp khi phát giọng"
+            title="Bật/tắt hiện bong bóng thoại của Thầy Cá trên lớp khi phát giọng"
           >
             <MessageSquare className="w-2.5 h-2.5" />
             <span>{showBubble ? 'Bong bóng: Bật' : 'Bong bóng: Ẩn'}</span>
@@ -204,10 +204,10 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10.5px] text-sky-200 font-semibold focus:outline-none"
             >
               <option value="google_stream">
-                🎙️ Google Warm (Trầm ấm • Không Fallback)
+                🎙️ Google Warm (Phát song song 100% mọi luồng • Không Fallback)
               </option>
               <option value="web_speech">
-                🇻🇳 Web Speech Tiếng Việt (Nội bộ • Không Fallback)
+                🇻🇳 Web Speech Tiếng Việt (Song song với Google Warm • Không Fallback)
               </option>
             </select>
 

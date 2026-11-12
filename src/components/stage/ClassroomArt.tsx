@@ -15,6 +15,7 @@ import {
 import { useProcessedSingleCutout } from '../../services/spriteProcessor';
 import {
   DeskCatModel,
+  DeskTrophyModel,
   PcGamingDeskModel,
   RunningPigModel,
   SnackBagModel,
@@ -56,6 +57,10 @@ interface DeskItemProps {
   leftCatDropAt: number;
   rightCatCount: number;
   rightCatDropAt: number;
+  leftHasTrophy: boolean;
+  leftTrophyDropAt: number;
+  rightHasTrophy: boolean;
+  rightTrophyDropAt: number;
   leftHasSnack: boolean;
   leftSnackDropAt: number;
   rightHasSnack: boolean;
@@ -82,6 +87,10 @@ const DeskItem = React.memo<DeskItemProps>(
     leftCatDropAt,
     rightCatCount,
     rightCatDropAt,
+    leftHasTrophy,
+    leftTrophyDropAt,
+    rightHasTrophy,
+    rightTrophyDropAt,
     leftHasSnack,
     leftSnackDropAt,
     rightHasSnack,
@@ -107,6 +116,10 @@ const DeskItem = React.memo<DeskItemProps>(
     const catScale = Math.max(
       0.4,
       Math.min(2.5, giftModelScales?.deskCat ?? 1)
+    );
+    const trophyScale = Math.max(
+      0.4,
+      Math.min(2.5, giftModelScales?.deskTrophy ?? 1)
     );
     const snackScale = Math.max(
       0.4,
@@ -315,6 +328,50 @@ const DeskItem = React.memo<DeskItemProps>(
             </div>
           </div>
         ))}
+
+        {/* Cúp Vàng Top 1, 2, 3 đặt ngay tại vị trí con mèo, kích thước đồng nhất và ưu tiên layer trên mèo (z-30 > z-20) */}
+        {leftHasTrophy && (
+          <div
+            key={`trophy_left_${leftTrophyDropAt || 1}`}
+            className="absolute z-30"
+            style={{
+              left: '6%',
+              top: '-6%',
+              transform: `translate(${catOffsetX}px, ${catOffsetY}px)`,
+            }}
+          >
+            <div
+              className="animate-bounce"
+              style={{ animationIterationCount: 2 }}
+            >
+              <DeskTrophyModel
+                customUrl={customAssets.deskTrophyUrl}
+                scale={trophyScale}
+              />
+            </div>
+          </div>
+        )}
+        {rightHasTrophy && (
+          <div
+            key={`trophy_right_${rightTrophyDropAt || 1}`}
+            className="absolute z-30"
+            style={{
+              right: '6%',
+              top: '-6%',
+              transform: `translate(${-catOffsetX}px, ${catOffsetY}px)`,
+            }}
+          >
+            <div
+              className="animate-bounce"
+              style={{ animationIterationCount: 2 }}
+            >
+              <DeskTrophyModel
+                customUrl={customAssets.deskTrophyUrl}
+                scale={trophyScale}
+              />
+            </div>
+          </div>
+        )}
 
         {leftHasSnack && (
           <div
@@ -901,6 +958,13 @@ const ClassroomArtInner: React.FC<ClassroomArtProps> = ({
                   : 0
               }
               rightCatDropAt={rightOccupant?.deskCatDropAt || 0}
+              leftHasTrophy={Boolean(
+                leftOccupant?.hasDeskTrophy ||
+                  (deskIdx === 0 && giftModelScales?.previewDeskTrophy)
+              )}
+              leftTrophyDropAt={leftOccupant?.deskTrophyDropAt || 0}
+              rightHasTrophy={Boolean(rightOccupant?.hasDeskTrophy)}
+              rightTrophyDropAt={rightOccupant?.deskTrophyDropAt || 0}
               leftHasSnack={Boolean(leftOccupant?.hasDeskSnack)}
               leftSnackDropAt={leftOccupant?.deskSnackDropAt || 0}
               rightHasSnack={Boolean(rightOccupant?.hasDeskSnack)}
@@ -933,7 +997,11 @@ function areDeskOccupantsEqual(
       p.slotId &&
       p.state !== 'leave_side_to_aisle' &&
       p.state !== 'leave_down_exit' &&
-      (p.hasPcGamingDesk || p.hasDeskCat || p.hasDeskSnack || p.hasDeskPig)
+      (p.hasPcGamingDesk ||
+        p.hasDeskCat ||
+        p.hasDeskTrophy ||
+        p.hasDeskSnack ||
+        p.hasDeskPig)
     ) {
       countA++;
       mapA.set(p.slotId, p);
@@ -947,7 +1015,11 @@ function areDeskOccupantsEqual(
       p.slotId &&
       p.state !== 'leave_side_to_aisle' &&
       p.state !== 'leave_down_exit' &&
-      (p.hasPcGamingDesk || p.hasDeskCat || p.hasDeskSnack || p.hasDeskPig)
+      (p.hasPcGamingDesk ||
+        p.hasDeskCat ||
+        p.hasDeskTrophy ||
+        p.hasDeskSnack ||
+        p.hasDeskPig)
     ) {
       countB++;
       const prevP = mapA.get(p.slotId);
@@ -957,6 +1029,8 @@ function areDeskOccupantsEqual(
         Boolean(prevP.hasDeskCat) !== Boolean(p.hasDeskCat) ||
         (prevP.deskCatCount || 0) !== (p.deskCatCount || 0) ||
         (prevP.deskCatDropAt || 0) !== (p.deskCatDropAt || 0) ||
+        Boolean(prevP.hasDeskTrophy) !== Boolean(p.hasDeskTrophy) ||
+        (prevP.deskTrophyDropAt || 0) !== (p.deskTrophyDropAt || 0) ||
         Boolean(prevP.hasDeskSnack) !== Boolean(p.hasDeskSnack) ||
         (prevP.deskSnackDropAt || 0) !== (p.deskSnackDropAt || 0) ||
         Boolean(prevP.hasDeskPig) !== Boolean(p.hasDeskPig) ||

@@ -27,6 +27,7 @@ import {
 } from '../../config/constants';
 import {
   DeskCatModel,
+  DeskTrophyModel,
   FallingMoneyModel,
   PcGamingDeskModel,
   RoseBouquetModel,
@@ -1450,7 +1451,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           </div>
         </div>
 
-        {/* Kích thước Toàn Nhân Vật / Học Sinh & Kích thước riêng Cô Thảo / Thầy Tùng (Tối đa 300%) */}
+        {/* Kích thước Toàn Nhân Vật / Học Sinh & Kích thước riêng Cô Thảo / Thầy Cá (Tối đa 300%) */}
         <div className="grid grid-cols-3 gap-2">
           <div className="p-2 rounded-lg bg-stone-950/80 border border-stone-800">
             <div className="flex justify-between text-[11px] text-stone-300 mb-1">
@@ -1496,7 +1497,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
 
           <div className="p-2 rounded-lg bg-stone-950/80 border border-sky-500/35">
             <div className="flex justify-between text-[11px] text-sky-200 mb-1">
-              <span>👨‍🏫 Size Thầy Tùng</span>
+              <span>👨‍🏫 Size Thầy Cá</span>
               <span className="text-sky-300 font-mono tabular-nums font-bold">
                 {Math.round((config.maleTeacherScale ?? 1) * 100)}%
               </span>
@@ -1728,7 +1729,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             <div className="p-2.5 rounded-lg bg-stone-950/90 border border-pink-500/45 space-y-2.5 shadow-sm">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-extrabold text-pink-200 flex items-center gap-1.5">
-                  <span>🎁 Kích Thước & Vị Trí Model: Hoa • Mèo • Bánh • Heo • Bàn PC Gaming</span>
+                  <span>🎁 Kích Thước & Vị Trí Model: Hoa • Mèo • Cúp • Bánh • Heo • Bàn PC Gaming</span>
                 </span>
                 <button
                   type="button"
@@ -1736,6 +1737,8 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                     patchGm({
                       roseBouquet: 1.0,
                       deskCat: 1.0,
+                      deskTrophy: 1.0,
+                      previewDeskTrophy: false,
                       snackBag: 1.0,
                       runningPig: 1.0,
                       pcGamingDesk: 1.25,
@@ -1751,7 +1754,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 </button>
               </div>
 
-              {/* 5 thanh chỉnh kích thước (Bó hoa, Con mèo, Bịch bánh, Con heo, Skin Bàn PC Gaming) */}
+              {/* Thanh chỉnh kích thước (Bó hoa, Con mèo, Cúp trên bàn, Bịch bánh, Con heo, Skin Bàn PC Gaming) */}
               <div className="grid grid-cols-2 gap-2 text-[10.5px]">
                 <div className="p-2 rounded bg-stone-900/90 border border-stone-800">
                   <div className="flex justify-between text-pink-200 mb-0.5">
@@ -1790,6 +1793,46 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                       patchGm({ deskCat: parseFloat(e.target.value) || 1 })
                     }
                     className="w-full accent-amber-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                  />
+                </div>
+
+                <div className="col-span-2 p-2 rounded bg-yellow-950/25 border border-yellow-400/45">
+                  <div className="flex items-center justify-between gap-2 text-yellow-200 mb-0.5">
+                    <span className="font-semibold">
+                      🏆 Size Cúp Trên Bàn (Top 1-2-3 • Ưu tiên trên Mèo)
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patchGm({
+                            previewDeskTrophy: !gm.previewDeskTrophy,
+                          })
+                        }
+                        className={`px-1.5 py-0.5 rounded text-[9px] font-bold border cursor-pointer transition ${
+                          gm.previewDeskTrophy
+                            ? 'bg-yellow-400 text-stone-950 border-yellow-200 shadow'
+                            : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
+                        }`}
+                        title="Hiện thử Cúp ở Bàn #1 để căn chỉnh kích thước ngay trên sân"
+                      >
+                        {gm.previewDeskTrophy ? 'Đang xem thử Bàn #1' : 'Xem thử Bàn #1'}
+                      </button>
+                      <span className="font-mono font-bold text-yellow-300">
+                        {Math.round((gm.deskTrophy ?? 1) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.4}
+                    max={2.5}
+                    step={0.05}
+                    value={gm.deskTrophy ?? 1}
+                    onChange={(e) =>
+                      patchGm({ deskTrophy: parseFloat(e.target.value) || 1 })
+                    }
+                    className="w-full accent-yellow-400 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
                   />
                 </div>
 
@@ -1890,7 +1933,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 {/* Vị trí Con Mèo trên bàn */}
                 <div className="p-2 rounded bg-amber-950/20 border border-amber-500/35 space-y-1.5">
                   <div className="flex items-center justify-between font-bold text-amber-200">
-                    <span>🐱 Vị trí Con Mèo trên bàn</span>
+                    <span>🐱🏆 Vị trí Mèo & Cúp trên bàn</span>
                     <button
                       type="button"
                       onClick={() =>
@@ -3257,7 +3300,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           <div className="pt-2 border-t border-stone-800/80 space-y-1.5">
             <div className="flex items-center justify-between text-[10.5px]">
               <span className="font-bold text-pink-300">
-                💖 Size Chatbox riêng: Cô Thảo (Hồng) &amp; Thầy Tùng (Xanh Dương)
+                💖 Size Chatbox riêng: Cô Thảo (Hồng) &amp; Thầy Cá (Xanh Dương)
               </span>
               <button
                 type="button"
@@ -3298,7 +3341,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
 
               <div className="p-2 rounded bg-sky-950/25 border border-sky-400/40">
                 <div className="flex justify-between text-sky-200 mb-0.5">
-                  <span className="font-semibold">Chatbox Thầy Tùng</span>
+                  <span className="font-semibold">Chatbox Thầy Cá</span>
                   <span className="font-mono font-bold text-sky-300">
                     {Math.round((config.supervisorBubbleScale ?? 1) * 100)}%
                   </span>
@@ -3370,6 +3413,17 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
                 ),
               },
               {
+                scaleKey: 'deskTrophy' as keyof GiftModelScalesConfig,
+                assetKey: 'deskTrophyUrl' as keyof CustomAssetsConfig,
+                label: '2b. Cúp Vàng Trên Bàn (Đạt Top 1-2-3 • Ưu tiên trên Mèo)',
+                preview: (
+                  <DeskTrophyModel
+                    customUrl={customAssets.deskTrophyUrl}
+                    scale={0.85}
+                  />
+                ),
+              },
+              {
                 scaleKey: 'snackBag' as keyof GiftModelScalesConfig,
                 assetKey: 'snackBagUrl' as keyof CustomAssetsConfig,
                 label: '3. Gói Snack Trên Bàn (Ăn Vụn - 1 Xu)',
@@ -3420,7 +3474,9 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           ).map((item) => {
             const currentScales =
               config.giftModelScales || DEFAULT_GIFT_MODEL_SCALES;
-            const scaleVal = currentScales[item.scaleKey] ?? 1;
+            const rawScaleVal = currentScales[item.scaleKey];
+            const scaleVal =
+              typeof rawScaleVal === 'number' ? rawScaleVal : 1;
             const hasCustom = Boolean(customAssets[item.assetKey]);
             return (
               <div
@@ -3619,7 +3675,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
             </div>
             <div className="text-[9.5px] text-stone-400 leading-tight">
               {config.useDefaultPngModels !== false
-                ? 'Đang dùng 6 ảnh PNG mặc định (Nam/Nữ sinh đứng & ngồi ghế, Cô Thảo, Thầy Tùng). Tắt để chuyển về model nhân vật vẽ 2D tượng trưng.'
+                ? 'Đang dùng 6 ảnh PNG mặc định (Nam/Nữ sinh đứng & ngồi ghế, Cô Thảo, Thầy Cá). Tắt để chuyển về model nhân vật vẽ 2D tượng trưng.'
                 : 'Đang dùng model nhân vật vẽ 2D tượng trưng (cử động tay chân, giơ tay phát biểu, gõ thước). Bật để dùng lại bộ ảnh PNG.'}
             </div>
           </div>
@@ -3663,7 +3719,7 @@ export const TabMapEditor: React.FC<TabMapEditorProps> = React.memo(({
           />
 
           <AssetUploadRow
-            label="4. Spritesheet Thầy Tùng (8 ô • HD 512×768/ô = 4096×768)"
+            label="4. Spritesheet Thầy Cá (8 ô • HD 512×768/ô = 4096×768)"
             hasCustom={Boolean(customAssets.seniorNoviceSpritesheetUrl)}
             onSelectFile={(f) => onUploadAsset('seniorNoviceSpritesheetUrl', f)}
             onReset={() => onResetAsset('seniorNoviceSpritesheetUrl')}

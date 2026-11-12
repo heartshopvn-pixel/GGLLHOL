@@ -85,6 +85,7 @@ import {
   SimpleExplosionFX,
   StudioBackupData,
   TempleMonkData,
+  TikTokOrderMeta,
   ZombieDamageEntry,
   ZombieEntityState,
   ZombieEventRuntimeState,
@@ -93,6 +94,24 @@ import {
   ZombieProjectileKind,
   ZombieSpikyDamageFX,
 } from '../types/game';
+import {
+  compareWinnerOrder,
+  doesCommentMatchQuizWord,
+  ExpiredQuizWindowSnapshot,
+  isLateCorrectQuizAnswerPure,
+  LATE_QUIZ_ANSWER_BUBBLE_TEXT,
+  pickDeterministicSlotIndex,
+  sortAndReRankQuizWinners,
+} from '../utils/commentOrder';
+import {
+  buildLiveSyncQueuePayload,
+  mergeIncomingLiveSyncQueue,
+  QUIZ_DECKS_IDB_KEY,
+  QUIZ_QUEUE_IDB_KEY,
+  QuizDeckRecord,
+  recordRecentAskedWord,
+  stripHeavyQuizDataForLocalStorage,
+} from '../utils/quizDeckEngine';
 import { HudBoxKey } from '../components/stage/StageHud';
 import { ZoneKey } from '../components/stage/GameStage';
 
@@ -714,7 +733,8 @@ function consumeCurrentAndGetNextQuizQueue(
   cfg: GameConfig,
   currentIdx: number,
   currentQuestion?: EnglishQuizItem | null,
-  forceNewRound15 = false
+  forceNewRound15 = false,
+  recentAskedWords?: Set<string>
 ): { nextQuizList: EnglishQuizItem[]; nextQuiz: EnglishQuizItem } {
   const currentList = getActiveQuizList(cfg);
   const safeIdx =
@@ -723,6 +743,9 @@ function consumeCurrentAndGetNextQuizQueue(
 
   const curEnLower = currentQuestion?.en?.trim().toLowerCase() || '';
   const curId = currentQuestion?.id || '';
+  if (curEnLower && recentAskedWords) {
+    recordRecentAskedWord(recentAskedWords, curEnLower);
+  }
   if (!forceNewRound15 && (curEnLower || curId)) {
     while (
       remaining.length > 0 &&
@@ -734,7 +757,11 @@ function consumeCurrentAndGetNextQuizQueue(
   }
 
   if (remaining.length === 0) {
-    remaining = build15MinuteTieredRoundQuestions(cfg, curEnLower);
+    remaining = build15MinuteTieredRoundQuestions(
+      cfg,
+      curEnLower,
+      recentAskedWords
+    );
   }
   return {
     nextQuizList: remaining,
@@ -1119,9 +1146,7 @@ export function useClassroomEngine() {
             quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
             quizDecks: mergedDecks,
             activeQuizDeckId:
-              !needsDeckSchemaReset &&
-              parsed.config.activeQuizDeckId &&
-              mergedDecks.some((d) => d.id === parsed.config.activeQuizDeckId)
+              !needsDeckSchemaReset && parsed.config.activeQuizDeckId
                 ? parsed.config.activeQuizDeckId
                 : mergedDecks[0]?.id || 'deck-tienganh-de',
             lessonStartTtsText: isOldDefaultStartText
@@ -1899,6 +1924,7 @@ export function useClassroomEngine() {
       avatarUrl?: string | null;
       isBot: boolean;
       allowTTS: boolean;
+      chatBubbleColor?: 'default' | 'red';
     }>;
     flushTimer: ReturnType<typeof setTimeout> | null;
   }>({
@@ -2073,6 +2099,7 @@ export function useClassroomEngine() {
         avatarUrl?: string | null;
         isBot: boolean;
         allowTTS: boolean;
+        chatBubbleColor?: 'default' | 'red';
       }>
     ) => {
       if (items.length === 0 || doorCrowdRef.current.length === 0) return;
@@ -2138,6 +2165,7 @@ export function useClassroomEngine() {
               hasComment: false,
               chatBubbleUntil: 0,
               chatBubbleKey: 0,
+              chatBubbleColor: undefined,
             };
           }
         }
@@ -2155,6 +2183,7 @@ export function useClassroomEngine() {
           stateTimer: 0,
           chatBubbleKey: freshDoorBubbleKey,
           chatBubbleUntil: freshDoorBubbleUntil,
+          chatBubbleColor: item.chatBubbleColor,
         };
 
         // Chỉ hiển thị bong bóng chat ngoài cửa cho Hàng Chờ, KHÔNG đọc TTS cho học sinh ngoài Hàng Chờ (chỉ đọc comment các bạn trong lớp)
@@ -2175,6 +2204,7 @@ export function useClassroomEngine() {
       avatarUrl?: string | null;
       isBot: boolean;
       allowTTS: boolean;
+      chatBubbleColor?: 'default' | 'red';
     }) => {
       if (doorCrowdRef.current.length === 0) return;
       const now = Date.now();
@@ -2788,7 +2818,12 @@ export function useClassroomEngine() {
     return () => clearInterval(expTimer);
   }, [flushStudentExpStorage]);
 
-  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists / Student EXP & Trophies) from IndexedDB & Server
+  const recentAskedWordsRef = useRef<Set<string>>(new Set());
+  const quizIdbHydratedRef = useRef(false);
+  const userModifiedQuizDecksBeforeHydrateRef = useRef(false);
+  const userModifiedQuizQueueBeforeHydrateRef = useRef(false);
+
+  // Load saved custom assets & full studio state (including large Base64 MP3s / NPC avatars / NPC lists / Student EXP & Trophies / Dedicated Quiz Decks) from IndexedDB & Server
   useEffect(() => {
     const mergeMapObject = (
       targetMap: Map<string, number>,
@@ -2870,94 +2905,149 @@ export function useClassroomEngine() {
       }
     });
 
-    idbGet<{
-      config?: Partial<GameConfig>;
-      vipSlots?: KneelSlot[];
-      normalSlots?: KneelSlot[];
-      npcNames?: string[];
-      npcPrayers?: string[];
-      npcAvatars?: string[];
-      safetyActionMode?: SafetyActionMode;
-      safetyCategories?: SafetyCategory[];
-      lotusDonors?: DonorEntry[];
-      dailyRecords?: DailyRecordEntry[];
-      studentExpMap?: Record<string, number>;
-      studentTrophyMap?: Record<string, number>;
-    }>('classroom_full_studio_state_v1').then((savedFull) => {
-      if (!savedFull) return;
-      const changedSavedExp =
-        savedFull.studentExpMap &&
-        mergeMapObject(studentExpMapRef.current, savedFull.studentExpMap);
-      const changedSavedTrophies =
-        savedFull.studentTrophyMap &&
-        mergeMapObject(studentTrophyMapRef.current, savedFull.studentTrophyMap);
-      if (changedSavedExp || changedSavedTrophies) {
-        applyExpMapToActiveStudents();
-      }
-      if (savedFull.config) {
-        const hasSyncLocalConfig = Boolean(localStorage.getItem(STORAGE_KEY));
-        setConfig((prev) => {
-          const sourceSchemaVer = hasSyncLocalConfig
-            ? Number(prev.quizDeckSchemaVersion || 0)
-            : Number(savedFull.config?.quizDeckSchemaVersion || 0);
-          const needsSchemaReset = sourceSchemaVer < QUIZ_DECK_SCHEMA_VERSION;
-          const mergedQuizDecks = ensureTieredQuizDecksLoaded(
-            hasSyncLocalConfig
+    Promise.all([
+      idbGet<{
+        config?: Partial<GameConfig>;
+        vipSlots?: KneelSlot[];
+        normalSlots?: KneelSlot[];
+        npcNames?: string[];
+        npcPrayers?: string[];
+        npcAvatars?: string[];
+        safetyActionMode?: SafetyActionMode;
+        safetyCategories?: SafetyCategory[];
+        lotusDonors?: DonorEntry[];
+        dailyRecords?: DailyRecordEntry[];
+        studentExpMap?: Record<string, number>;
+        studentTrophyMap?: Record<string, number>;
+      }>('classroom_full_studio_state_v1'),
+      idbGet<
+        | QuizDeckRecord[]
+        | {
+            schemaVersion?: number;
+            activeQuizDeckId?: string;
+            decks?: QuizDeckRecord[];
+          }
+      >(QUIZ_DECKS_IDB_KEY),
+      idbGet<EnglishQuizItem[]>(QUIZ_QUEUE_IDB_KEY),
+    ])
+      .then(([savedFull, savedQuizDecksRaw, savedQuizQueue]) => {
+        const dedicatedDecks = Array.isArray(savedQuizDecksRaw)
+          ? savedQuizDecksRaw
+          : Array.isArray(savedQuizDecksRaw?.decks)
+          ? savedQuizDecksRaw.decks
+          : undefined;
+        const dedicatedActiveDeckId =
+          !Array.isArray(savedQuizDecksRaw) &&
+          typeof savedQuizDecksRaw?.activeQuizDeckId === 'string'
+            ? savedQuizDecksRaw.activeQuizDeckId
+            : undefined;
+
+        if (!savedFull && !dedicatedDecks && !savedQuizQueue) return;
+
+        if (savedFull) {
+          const changedSavedExp =
+            savedFull.studentExpMap &&
+            mergeMapObject(studentExpMapRef.current, savedFull.studentExpMap);
+          const changedSavedTrophies =
+            savedFull.studentTrophyMap &&
+            mergeMapObject(
+              studentTrophyMapRef.current,
+              savedFull.studentTrophyMap
+            );
+          if (changedSavedExp || changedSavedTrophies) {
+            applyExpMapToActiveStudents();
+          }
+        }
+
+        if (savedFull?.config || dedicatedDecks || savedQuizQueue) {
+          const hasSyncLocalConfig = Boolean(localStorage.getItem(STORAGE_KEY));
+          setConfig((prev) => {
+            const sourceSchemaVer = hasSyncLocalConfig
+              ? Number(prev.quizDeckSchemaVersion || 0)
+              : Number(
+                  (!Array.isArray(savedQuizDecksRaw) &&
+                    savedQuizDecksRaw?.schemaVersion) ||
+                    savedFull?.config?.quizDeckSchemaVersion ||
+                    prev.quizDeckSchemaVersion ||
+                    0
+                );
+            const needsSchemaReset = sourceSchemaVer < QUIZ_DECK_SCHEMA_VERSION;
+            const candidateDecks = userModifiedQuizDecksBeforeHydrateRef.current
               ? prev.quizDecks
-              : savedFull.config?.quizDecks || prev.quizDecks,
-            needsSchemaReset
-          );
-          const nextCfg: GameConfig = {
-            ...prev,
-            ...(hasSyncLocalConfig
-              ? {
-                  bellMp3Url: prev.bellMp3Url || savedFull.config?.bellMp3Url || null,
-                  woodenFishMp3Url:
-                    prev.woodenFishMp3Url || savedFull.config?.woodenFishMp3Url || null,
-                  answerRevealMp3Url:
-                    prev.answerRevealMp3Url ||
-                    savedFull.config?.answerRevealMp3Url ||
-                    null,
-                  zombieGrowlMp3Url:
-                    prev.zombieGrowlMp3Url ||
-                    savedFull.config?.zombieGrowlMp3Url ||
-                    null,
-                  giftSoundMp3Urls:
-                    Object.keys(prev.giftSoundMp3Urls || {}).length > 0
-                      ? prev.giftSoundMp3Urls
-                      : savedFull.config?.giftSoundMp3Urls || {},
-                  bgmTracks:
-                    Array.isArray(savedFull.config?.bgmTracks) &&
-                    savedFull.config!.bgmTracks!.length > 0
-                      ? savedFull.config!.bgmTracks!
-                      : prev.bgmTracks,
-                }
-              : savedFull.config),
-            quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
-            quizDecks: mergedQuizDecks,
-            activeQuizDeckId:
-              !needsSchemaReset &&
-              prev.activeQuizDeckId &&
-              mergedQuizDecks.some((d) => d.id === prev.activeQuizDeckId)
-                ? prev.activeQuizDeckId
-                : mergedQuizDecks[0]?.id || 'deck-tienganh-de',
-            spawnPoint: LEFT_DOOR_POS,
-            exitPoint: LEFT_DOOR_POS,
+              : dedicatedDecks && dedicatedDecks.length > 0
+              ? dedicatedDecks
+              : savedFull?.config?.quizDecks &&
+                savedFull.config.quizDecks.length > 0
+              ? savedFull.config.quizDecks
+              : prev.quizDecks;
+            const mergedQuizDecks = ensureTieredQuizDecksLoaded(
+              candidateDecks,
+              needsSchemaReset
+            );
+            const preferredActiveDeckId =
+              prev.activeQuizDeckId ||
+              dedicatedActiveDeckId ||
+              savedFull?.config?.activeQuizDeckId;
+
+            const nextCfg: GameConfig = {
+              ...prev,
+              ...(hasSyncLocalConfig
+                ? {
+                    bellMp3Url:
+                      prev.bellMp3Url || savedFull?.config?.bellMp3Url || null,
+                    woodenFishMp3Url:
+                      prev.woodenFishMp3Url ||
+                      savedFull?.config?.woodenFishMp3Url ||
+                      null,
+                    answerRevealMp3Url:
+                      prev.answerRevealMp3Url ||
+                      savedFull?.config?.answerRevealMp3Url ||
+                      null,
+                    zombieGrowlMp3Url:
+                      prev.zombieGrowlMp3Url ||
+                      savedFull?.config?.zombieGrowlMp3Url ||
+                      null,
+                    giftSoundMp3Urls:
+                      Object.keys(prev.giftSoundMp3Urls || {}).length > 0
+                        ? prev.giftSoundMp3Urls
+                        : savedFull?.config?.giftSoundMp3Urls || {},
+                    bgmTracks:
+                      Array.isArray(savedFull?.config?.bgmTracks) &&
+                      savedFull!.config!.bgmTracks!.length > 0
+                        ? savedFull!.config!.bgmTracks!
+                        : prev.bgmTracks,
+                  }
+                : savedFull?.config || {}),
+              quizDeckSchemaVersion: QUIZ_DECK_SCHEMA_VERSION,
+              quizDecks: mergedQuizDecks,
+              activeQuizDeckId:
+                !needsSchemaReset &&
+                preferredActiveDeckId &&
+                mergedQuizDecks.some((d) => d.id === preferredActiveDeckId)
+                  ? preferredActiveDeckId
+                  : mergedQuizDecks[0]?.id || 'deck-tienganh-de',
+              customQuizQuestions: userModifiedQuizQueueBeforeHydrateRef.current
+                ? prev.customQuizQuestions
+                : Array.isArray(savedQuizQueue) && savedQuizQueue.length > 0
+                ? savedQuizQueue
+                : prev.customQuizQuestions,
+              spawnPoint: LEFT_DOOR_POS,
+              exitPoint: LEFT_DOOR_POS,
             npcSpeechCategories: {
-              idle: Array.isArray(savedFull.config?.npcSpeechCategories?.idle)
-                ? savedFull.config!.npcSpeechCategories!.idle
+              idle: Array.isArray(savedFull?.config?.npcSpeechCategories?.idle)
+                ? savedFull!.config!.npcSpeechCategories!.idle
                 : prev.npcSpeechCategories?.idle ?? DEFAULT_NPC_SPEECH_CATEGORIES.idle,
-              question: Array.isArray(savedFull.config?.npcSpeechCategories?.question)
-                ? savedFull.config!.npcSpeechCategories!.question
+              question: Array.isArray(savedFull?.config?.npcSpeechCategories?.question)
+                ? savedFull!.config!.npcSpeechCategories!.question
                 : prev.npcSpeechCategories?.question ?? DEFAULT_NPC_SPEECH_CATEGORIES.question,
-              reply: Array.isArray(savedFull.config?.npcSpeechCategories?.reply)
-                ? savedFull.config!.npcSpeechCategories!.reply
+              reply: Array.isArray(savedFull?.config?.npcSpeechCategories?.reply)
+                ? savedFull!.config!.npcSpeechCategories!.reply
                 : prev.npcSpeechCategories?.reply ?? DEFAULT_NPC_SPEECH_CATEGORIES.reply,
             },
             giftModelScales: {
               ...DEFAULT_GIFT_MODEL_SCALES,
               ...(prev.giftModelScales || {}),
-              ...(savedFull.config?.giftModelScales || {}),
+              ...(savedFull?.config?.giftModelScales || {}),
               maxDeskCats: 1,
             },
             zombieProjectileScales: {
@@ -2965,18 +3055,18 @@ export function useClassroomEngine() {
               ...(prev.zombieProjectileScales || {}),
               ...(hasSyncLocalConfig
                 ? {}
-                : savedFull.config?.zombieProjectileScales || {}),
+                : savedFull?.config?.zombieProjectileScales || {}),
             },
             grid: {
               ...prev.grid,
-              ...(hasSyncLocalConfig ? {} : savedFull.config?.grid || {}),
+              ...(hasSyncLocalConfig ? {} : savedFull?.config?.grid || {}),
             },
             hudLayout: {
               ...prev.hudLayout,
-              ...(hasSyncLocalConfig ? {} : savedFull.config?.hudLayout || {}),
+              ...(hasSyncLocalConfig ? {} : savedFull?.config?.hudLayout || {}),
               dailyRecordTitle:
                 (!hasSyncLocalConfig &&
-                  savedFull.config?.hudLayout?.dailyRecordTitle &&
+                  savedFull?.config?.hudLayout?.dailyRecordTitle &&
                   savedFull.config.hudLayout.dailyRecordTitle !==
                     'Kỷ lục hôm nay') ||
                 prev.hudLayout.dailyRecordTitle !== 'Kỷ lục hôm nay'
@@ -3034,6 +3124,7 @@ export function useClassroomEngine() {
           return nextCfg;
         });
       }
+      if (!savedFull) return;
       if (Array.isArray(savedFull.npcNames) && savedFull.npcNames.length > 0) {
         setNpcNames(savedFull.npcNames);
       }
@@ -3082,7 +3173,10 @@ export function useClassroomEngine() {
           lastPraisedRecordTop1Ref.current = sliced[0].username.trim().toLowerCase();
         }
       }
-    });
+      })
+      .finally(() => {
+        quizIdbHydratedRef.current = true;
+      });
   }, [applyExpMapToActiveStudents]);
 
   // Đồng bộ ngay tên và avatar của NPC đang ở cửa lớp (doorCrowd), trong lớp (pilgrims isBot) và trong hàng chờ (waitingPoolRef isBot) khi danh sách npcNames / npcAvatars thay đổi
@@ -3177,12 +3271,39 @@ export function useClassroomEngine() {
     }
   }, [npcNames, npcAvatars]);
 
-  // Save full studio state (config, desk positions, NPC lists, safety settings, scoreboard) to both IndexedDB & localStorage
+  // Lưu riêng biệt kho đề (quizDecks hàng chục nghìn câu) vào IndexedDB bằng Structured Clone chỉ khi quizDecks thay đổi
+  useEffect(() => {
+    if (!quizIdbHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      if (Array.isArray(config.quizDecks) && config.quizDecks.length > 0) {
+        void idbSet(QUIZ_DECKS_IDB_KEY, {
+          schemaVersion: config.quizDeckSchemaVersion || QUIZ_DECK_SCHEMA_VERSION,
+          activeQuizDeckId: config.activeQuizDeckId,
+          decks: config.quizDecks,
+        });
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [config.quizDecks, config.activeQuizDeckId, config.quizDeckSchemaVersion]);
+
+  // Lưu riêng biệt hàng chờ câu hỏi đầy đủ (customQuizQuestions) vào IndexedDB chỉ khi hàng chờ thay đổi
+  useEffect(() => {
+    if (!quizIdbHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      if (Array.isArray(config.customQuizQuestions)) {
+        void idbSet(QUIZ_QUEUE_IDB_KEY, config.customQuizQuestions);
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [config.customQuizQuestions]);
+
+  // Save lightweight studio state (tách rời kho đề lớn khỏi JSON.stringify để không bao giờ khựng luồng chính hay tràn 5MB localStorage)
   useEffect(() => {
     const cleanVip = vipSlots.map((s) => ({ ...s, occupiedById: null }));
     const cleanNorm = normalSlots.map((s) => ({ ...s, occupiedById: null }));
+    const strippedConfig = stripHeavyQuizDataForLocalStorage(config);
     const fullPayload = {
-      config,
+      config: strippedConfig,
       vipSlots: cleanVip,
       normalSlots: cleanNorm,
       npcNames,
@@ -3196,34 +3317,37 @@ export function useClassroomEngine() {
       studentTrophyMap: serializeStudentExpMap(studentTrophyMapRef.current),
     };
 
-    // 1. Lưu đầy đủ 100% (kể cả MP3 Base64 & Avatar Base64 dung lượng lớn) vào IndexedDB
+    // 1. Lưu cấu hình + MP3 Base64 & Avatar Base64 vào IndexedDB (kho đề đã nằm riêng ở QUIZ_DECKS_IDB_KEY)
     void idbSet('classroom_full_studio_state_v1', fullPayload);
 
-    // 2. Lưu vào localStorage để khởi tạo đồng bộ tức thì khi F5 (nếu vượt quá 5MB do MP3 Base64 thì tự động lược bỏ chuỗi audio data: trong bản localStorage)
+    // 2. Lưu bản gọn vào localStorage (< 80KB) để khởi tạo tức thì khi F5 mà không bao giờ bị QuotaExceededError
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(fullPayload));
     } catch {
       try {
         const lightConfig: GameConfig = {
-          ...config,
+          ...strippedConfig,
           bellMp3Url:
-            config.bellMp3Url && config.bellMp3Url.length > 10000
+            strippedConfig.bellMp3Url && strippedConfig.bellMp3Url.length > 10000
               ? null
-              : config.bellMp3Url,
+              : strippedConfig.bellMp3Url,
           woodenFishMp3Url:
-            config.woodenFishMp3Url && config.woodenFishMp3Url.length > 10000
+            strippedConfig.woodenFishMp3Url &&
+            strippedConfig.woodenFishMp3Url.length > 10000
               ? null
-              : config.woodenFishMp3Url,
+              : strippedConfig.woodenFishMp3Url,
           answerRevealMp3Url:
-            config.answerRevealMp3Url && config.answerRevealMp3Url.length > 10000
+            strippedConfig.answerRevealMp3Url &&
+            strippedConfig.answerRevealMp3Url.length > 10000
               ? null
-              : config.answerRevealMp3Url,
+              : strippedConfig.answerRevealMp3Url,
           zombieGrowlMp3Url:
-            config.zombieGrowlMp3Url && config.zombieGrowlMp3Url.length > 10000
+            strippedConfig.zombieGrowlMp3Url &&
+            strippedConfig.zombieGrowlMp3Url.length > 10000
               ? null
-              : config.zombieGrowlMp3Url,
+              : strippedConfig.zombieGrowlMp3Url,
           giftSoundMp3Urls: {},
-          bgmTracks: (config.bgmTracks || []).map((t) =>
+          bgmTracks: (strippedConfig.bgmTracks || []).map((t) =>
             t.url && t.url.length > 10000 ? { ...t, url: '' } : t
           ),
         };
@@ -3982,7 +4106,19 @@ export function useClassroomEngine() {
           chosenSlot = vipSlotsRef.current.find((s) => s.id === botInVip.slotId);
           const evictedList = pilgrimsRef.current.map((p) =>
             p.id === botInVip.id
-              ? { ...p, slotId: null, state: 'leave_side_to_aisle' as const, stateTimer: 0 }
+              ? {
+                  ...p,
+                  slotId: null,
+                  hasDeskCat: false,
+                  deskCatCount: 0,
+                  hasDeskTrophy: false,
+                  deskTrophyDropAt: 0,
+                  hasDeskPig: false,
+                  hasDeskSnack: false,
+                  hasPcGamingDesk: false,
+                  state: 'leave_side_to_aisle' as const,
+                  stateTimer: 0,
+                }
               : p
           );
           pilgrimsRef.current = evictedList;
@@ -4287,6 +4423,10 @@ export function useClassroomEngine() {
     entries.forEach((entry) => activateGiftPilgrimRef.current(entry));
   }, []);
 
+  const lastExpiredQuizWindowRef = useRef<ExpiredQuizWindowSnapshot | null>(
+    null
+  );
+
   // Kiểm tra xem bình luận hiện tại có trùng với đáp án đúng trong thời gian đang hỏi bài hay không
   const isCommentMatchingActiveQuizAnswer = useCallback(
     (rawComment: string): boolean => {
@@ -4307,23 +4447,46 @@ export function useClassroomEngine() {
         quizList[0];
       if (!quizItem) return false;
 
-      const cleanText = (rawComment || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!cleanText) return false;
-
-      const targetWord = quizItem.en.toLowerCase().trim();
-      const words = cleanText.split(' ');
-      return (
-        words.includes(targetWord) ||
-        cleanText === targetWord ||
-        (targetWord === 'fridge' && words.includes('refrigerator'))
-      );
+      return doesCommentMatchQuizWord(rawComment, quizItem.en);
     },
     [getActiveQuizList]
   );
+
+  // Kiểm tra xem bình luận của người chơi có phải đáp án ĐÚNG nhưng gửi MUỘN (sau khi hết cả thời gian hỏi + 2s bù trễ) nên bị tính là sai hay không
+  const isLateCorrectQuizAnswer = useCallback(
+    (rawComment: string, lowerUser: string, isBot: boolean): boolean => {
+      const cfg = configRef.current;
+      const bState = classBoardStateRef.current;
+      const activeEngine =
+        bState.engine || cfg.hudLayout.classBoardEngine || 'english_quiz';
+      const currentWinnerLowers: string[] = [];
+      (bState.winners || []).forEach((w) => {
+        if (w?.username) currentWinnerLowers.push(w.username);
+      });
+      (bState.classWinners || []).forEach((w) => {
+        if (w?.username) currentWinnerLowers.push(w.username);
+      });
+      (bState.outsideWinners || []).forEach((w) => {
+        if (w?.username) currentWinnerLowers.push(w.username);
+      });
+
+      return isLateCorrectQuizAnswerPure({
+        rawComment,
+        lowerUser,
+        isBot,
+        showClassBoardBox: cfg.hudLayout.showClassBoardBox,
+        activeEngine,
+        isZombieActive: zombieEventStateRef.current.isActive,
+        boardPhase: bState.phase,
+        currentQuestionEn: bState.currentQuestion?.en,
+        currentWinnerLowers,
+        lastExpiredWindow: lastExpiredQuizWindowRef.current,
+      });
+    },
+    []
+  );
+
+  const quizAnswerArrivalSeqRef = useRef<number>(0);
 
   // Kiểm tra câu trả lời Tiết Tiếng Anh trên Bảng Lớp khi có học sinh bình luận
   const checkEnglishQuizAnswer = useCallback(
@@ -4331,7 +4494,8 @@ export function useClassroomEngine() {
       username: string,
       rawComment: string,
       isBot: boolean,
-      avatarUrl?: string | null
+      avatarUrl?: string | null,
+      orderMeta?: TikTokOrderMeta
     ): boolean => {
       const cfg = configRef.current;
       if (cfg.hudLayout.showClassBoardBox === false) return false;
@@ -4350,29 +4514,31 @@ export function useClassroomEngine() {
         quizList[0];
       if (!quizItem) return false;
 
-      const cleanText = (rawComment || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!cleanText) return false;
-
-      const targetWord = quizItem.en.toLowerCase().trim();
-      const words = cleanText.split(' ');
-      const isMatch =
-        words.includes(targetWord) ||
-        cleanText === targetWord ||
-        (targetWord === 'fridge' && words.includes('refrigerator'));
-
-      if (!isMatch) return false;
+      if (!doesCommentMatchQuizWord(rawComment, quizItem.en)) return false;
 
       const hideAnswerBubble = cfg.filterCorrectAnswerBubble !== false;
+      const nowWallMs = Date.now();
+      const localArrivalSeq =
+        orderMeta?.arrivalSeq ?? ++quizAnswerArrivalSeqRef.current;
 
       const lowerUser = username.trim().toLowerCase();
-      if (
-        bState.winners.some((w) => w.username.trim().toLowerCase() === lowerUser)
-      ) {
-        return true;
+      const existingWinner = bState.winners.find(
+        (w) => w.username.trim().toLowerCase() === lowerUser
+      );
+      if (existingWinner) {
+        const candidateProbe: ClassBoardQuizWinner = {
+          username: username.trim(),
+          elapsedSec: existingWinner.elapsedSec,
+          isBot,
+          tiktokMsgId: orderMeta?.tiktokMsgId,
+          tiktokCreateTimeMs: orderMeta?.tiktokCreateTimeMs,
+          serverSeq: orderMeta?.serverSeq,
+          arrivalSeq: localArrivalSeq,
+          orderTimestampMs: orderMeta?.orderTimestampMs ?? nowWallMs,
+        };
+        if (compareWinnerOrder(candidateProbe, existingWinner) >= 0) {
+          return true;
+        }
       }
 
       let existingInClass = pilgrimsRef.current.find(
@@ -4391,11 +4557,17 @@ export function useClassroomEngine() {
           ? existingInClass.punishmentMultiplier
           : 1;
 
-      const rawElapsedSec =
-        Math.round(((bState.totalDurationMs - bState.timeLeftMs) / 1000) * 10) /
-        10;
+      const askingStartedAtMs =
+        bState.phaseEndAt && bState.phaseEndAt > 0 && bState.totalDurationMs
+          ? bState.phaseEndAt - bState.totalDurationMs
+          : 0;
+      const preciseElapsedMs =
+        askingStartedAtMs > 0
+          ? Math.max(0, nowWallMs - askingStartedAtMs)
+          : Math.max(0, bState.totalDurationMs - bState.timeLeftMs);
+      const rawElapsedSec = Math.round((preciseElapsedMs / 1000) * 10) / 10;
       const elapsedSec = isBot
-        ? Math.max(5.1, rawElapsedSec)
+        ? Math.max(6.2, rawElapsedSec)
         : Math.max(0.3, rawElapsedSec);
 
       const prevClassCount = (
@@ -4487,8 +4659,11 @@ export function useClassroomEngine() {
           const allFreeSlots = [...freeVipSlots, ...freeNormSlots];
 
           if (allFreeSlots.length > 0) {
-            const chosenSlot =
-              allFreeSlots[Math.floor(Math.random() * allFreeSlots.length)];
+            const slotIdx = pickDeterministicSlotIndex(
+              `${lowerUser}:${bState.roundSeq || 1}:${bState.questionIndex || 0}`,
+              allFreeSlots.length
+            );
+            const chosenSlot = allFreeSlots[slotIdx];
             pool.delete(lowerUser);
             existingInWaitingQueue = undefined;
             setQueueCount(pool.size);
@@ -4618,17 +4793,6 @@ export function useClassroomEngine() {
         : configRef.current.doorCrowdPos || LEFT_DOOR_POS;
       addGrandEventPoints(1, 1, flowerOrigin);
 
-      pushToast(
-        `🏆 ${username} (${
-          isSeated
-            ? punishmentMult > 1
-              ? `Đứng phạt x${punishmentMult}`
-              : 'Trong lớp'
-            : 'Học ké'
-        }) trả lời ĐÚNG "${quizItem.en}" (+${rewardPoints}đ • ${elapsedSec.toFixed(1)}s)!`,
-        groupRank === 1 || punishmentMult > 1
-      );
-
       const winnerEntry: ClassBoardQuizWinner = {
         username,
         elapsedSec,
@@ -4647,91 +4811,88 @@ export function useClassroomEngine() {
           ],
         pilgrimId: existingInClass?.id,
         isBot,
+        tiktokMsgId: orderMeta?.tiktokMsgId,
+        tiktokCreateTimeMs: orderMeta?.tiktokCreateTimeMs,
+        serverSeq: orderMeta?.serverSeq,
+        arrivalSeq: localArrivalSeq,
+        orderTimestampMs: orderMeta?.orderTimestampMs ?? nowWallMs,
       };
 
-      setClassBoardState((prev) => {
-        if (
-          prev.winners.some((w) => w.username.trim().toLowerCase() === lowerUser)
-        ) {
-          return prev;
-        }
-        const nextWinners = [...prev.winners, winnerEntry];
-        const nextClassWinners = nextWinners
-          .filter((w) => w.isSeated !== false)
-          .map((w, idx) => {
-            const wLower = w.username.trim().toLowerCase();
+      const liveBoard = classBoardStateRef.current;
+      const reRanked = sortAndReRankQuizWinners(
+        [...(liveBoard.winners || []), winnerEntry],
+        {
+          currentQuestion: liveBoard.currentQuestion || quizItem,
+          getRankPoints: getQuizRankPoints,
+          getPunishmentMultiplier: (wLower) => {
             const punishedMatch = pilgrimsRef.current.find(
               (p) =>
                 p.username.trim().toLowerCase() === wLower &&
                 p.isPunishedInCurrentRound &&
                 p.punishmentMultiplier
             );
-            const mult = punishedMatch?.punishmentMultiplier || 1;
-            const rawStars = prev.currentQuestion?.luckyStars || 0;
-            const luckyMult = rawStars > 0 ? rawStars + 1 : 1;
-            const calcPts =
-              getQuizRankPoints(idx + 1, prev.currentQuestion || quizItem) *
-              mult *
-              luckyMult;
-            return {
-              ...w,
-              points: calcPts,
-              exp: calcPts,
-            };
-          });
-        const nextOutsideWinners = nextWinners
-          .filter((w) => w.isSeated === false)
-          .map((w, idx) => {
-            const rawStars = prev.currentQuestion?.luckyStars || 0;
-            const luckyMult = rawStars > 0 ? rawStars + 1 : 1;
-            const calcPts =
-              getQuizRankPoints(idx + 1, prev.currentQuestion || quizItem) *
-              luckyMult;
-            return {
-              ...w,
-              points: calcPts,
-              exp: calcPts,
-            };
-          });
-
-        const liveBoard = classBoardStateRef.current;
-        const liveTimeLeft =
-          liveBoard.phaseEndAt && liveBoard.isRunning
-            ? Math.max(0, liveBoard.phaseEndAt - Date.now())
-            : liveBoard.timeLeftMs;
-        const liveElapsed =
-          liveBoard.phaseEndAt &&
-          liveBoard.totalDurationMs &&
-          liveBoard.isRunning
-            ? Math.max(0, liveBoard.totalDurationMs - liveTimeLeft)
-            : liveBoard.elapsedPhaseMs;
-
-        const nextState: ClassBoardRuntimeState = {
-          ...prev,
-          lessonStepNumber: liveBoard.lessonStepNumber,
-          idleChatTriggered: liveBoard.idleChatTriggered,
-          activeFlowToken: liveBoard.activeFlowToken,
-          ttsFinishedForPhase: liveBoard.ttsFinishedForPhase,
-          timeLeftMs: liveTimeLeft,
-          elapsedPhaseMs: liveElapsed,
-          phaseEndAt: liveBoard.phaseEndAt,
-          winners: nextWinners,
-          classWinners: nextClassWinners,
-          outsideWinners: nextOutsideWinners,
-        };
-        classBoardStateRef.current = nextState;
-        const isPureLiveTabNow =
-          typeof window !== 'undefined' &&
-          (new URLSearchParams(window.location.search).get('view') === 'live' ||
-            new URLSearchParams(window.location.search).get('mode') === 'live' ||
-            new URLSearchParams(window.location.search).get('obs') === '1');
-        const isSlaveTabNow =
-          peerCountsRef.current.obsPeers > 0 && !isPureLiveTabNow;
-        if (!isBot || !isSlaveTabNow) {
-          syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+            return punishedMatch?.punishmentMultiplier || 1;
+          },
         }
-        return nextState;
-      });
+      );
+
+      const groupWinnersAfter = isSeated
+        ? reRanked.classWinners
+        : reRanked.outsideWinners;
+      const canonicalIdx = groupWinnersAfter.findIndex(
+        (w) => w.username.trim().toLowerCase() === lowerUser
+      );
+      if (canonicalIdx >= 0) {
+        groupRank = canonicalIdx + 1;
+        rewardPoints =
+          groupWinnersAfter[canonicalIdx].points ?? rewardPoints;
+      }
+
+      pushToast(
+        `🏆 ${username} (${
+          isSeated
+            ? punishmentMult > 1
+              ? `Đứng phạt x${punishmentMult}`
+              : 'Trong lớp'
+            : 'Học ké'
+        }) trả lời ĐÚNG "${quizItem.en}" (+${rewardPoints}đ • ${elapsedSec.toFixed(1)}s)!`,
+        groupRank === 1 || punishmentMult > 1
+      );
+
+      const liveTimeLeft =
+        liveBoard.phaseEndAt && liveBoard.isRunning
+          ? Math.max(0, liveBoard.phaseEndAt - Date.now())
+          : liveBoard.timeLeftMs;
+      const liveElapsed =
+        liveBoard.phaseEndAt &&
+        liveBoard.totalDurationMs &&
+        liveBoard.isRunning
+          ? Math.max(0, liveBoard.totalDurationMs - liveTimeLeft)
+          : liveBoard.elapsedPhaseMs;
+
+      const nextState: ClassBoardRuntimeState = {
+        ...liveBoard,
+        timeLeftMs: liveTimeLeft,
+        elapsedPhaseMs: liveElapsed,
+        winners: reRanked.winners,
+        classWinners: reRanked.classWinners,
+        outsideWinners: reRanked.outsideWinners,
+      };
+      classBoardStateRef.current = nextState;
+      setClassBoardState(nextState);
+
+      const isPureLiveTabNow =
+        typeof window !== 'undefined' &&
+        (new URLSearchParams(window.location.search).get('view') === 'live' ||
+          new URLSearchParams(window.location.search).get('mode') === 'live' ||
+          new URLSearchParams(window.location.search).get('obs') === '1');
+      const isSlaveTabNow =
+        peerCountsRef.current.obsPeers > 0 && !isPureLiveTabNow;
+      // Single Authority: Chỉ Tab Master (Tab Live khi mở song song, hoặc Tab Admin khi chạy đơn) phát gói chốt thứ tự bảng điểm
+      if (!isSlaveTabNow) {
+        syncService.sendCommand('SYNC_CLASS_BOARD_STATE', { state: nextState });
+      }
+
 
       return true;
     },
@@ -4848,7 +5009,7 @@ export function useClassroomEngine() {
       // Phát sound tương ứng khi bắt đầu thực hiện hành động quà tặng này
       soundEngine.playGiftEventSound(giftId, cfg);
 
-      // Nếu thuộc nhóm quà đi bộ lên tặng hoa (rose: Cô Thảo, icecream: Thầy Tùng)
+      // Nếu thuộc nhóm quà đi bộ lên tặng hoa (rose: Cô Thảo, icecream: Thầy Cá)
       if (giftId === 'rose' || giftId === 'icecream') {
         const isForTeacher = giftId === 'rose';
         const targetRole: 'abbot' | 'senior_novice' = isForTeacher
@@ -5921,7 +6082,7 @@ export function useClassroomEngine() {
       const teacherEvPos = cfg.zombieTeacherPos || { x: 392, y: 444 };
       const supervisorEvPos = cfg.zombieSupervisorPos || { x: 148, y: 498 };
 
-      // Đặt vị trí của Cô Thảo và Thầy Tùng khi Event Zombie kích hoạt theo cấu hình Dev
+      // Đặt vị trí của Cô Thảo và Thầy Cá khi Event Zombie kích hoạt theo cấu hình Dev
       setMonks((prevMonks) => {
         const nextMonks = prevMonks.map((m) => {
           if (m.role === 'abbot') {
@@ -5940,7 +6101,7 @@ export function useClassroomEngine() {
           if (m.role === 'senior_novice') {
             return {
               ...m,
-              name: 'Thầy Tùng',
+              name: 'Thầy Cá',
               x: supervisorEvPos.x,
               y: supervisorEvPos.y,
               targetX: supervisorEvPos.x,
@@ -6827,6 +6988,7 @@ export function useClassroomEngine() {
         isSimulatedTest?: boolean;
         bypassWaitingQueue?: boolean;
         allowDoorCrowdBubbleForBot?: boolean;
+        orderMeta?: TikTokOrderMeta;
       },
       extraOpts?: {
         forceAdmitFromQueue?: boolean;
@@ -6947,9 +7109,17 @@ export function useClassroomEngine() {
           safeName,
           safeComment,
           opts.isBot,
-          opts.avatarUrl
+          opts.avatarUrl,
+          opts.orderMeta
         );
       }
+
+      const isLateCorrectAnswer =
+        !answeredQuizRight &&
+        !isAdmittingFromQueue &&
+        opts.coins <= 0 &&
+        Boolean(safeComment.trim()) &&
+        isLateCorrectQuizAnswer(safeComment, lowerUser, Boolean(opts.isBot));
 
       const queuedNowForActivity = waitingPoolRef.current.get(lowerUser);
       if (queuedNowForActivity && !isAdmittingFromQueue && safeComment.trim()) {
@@ -6959,14 +7129,15 @@ export function useClassroomEngine() {
       const isAlreadyInQueue = Boolean(queuedNowForActivity);
 
       // Nếu là bình luận thường (coins <= 0, không phải forceAdmitFromQueue):
-      // Bắt buộc phải có trong Lớp, hoặc có trong Hàng Chờ, hoặc gõ "vào lớp", hoặc vừa trả lời đúng câu hỏi!
+      // Bắt buộc phải có trong Lớp, hoặc có trong Hàng Chờ, hoặc gõ "vào lớp", hoặc vừa trả lời đúng câu hỏi, hoặc vừa trả lời đúng nhưng bị trễ giờ!
       if (
         opts.coins <= 0 &&
         !bypassWaitingQueue &&
         !existingInClassNow &&
         !isAlreadyInQueue &&
         !isJoinCmd &&
-        !answeredQuizRight
+        !answeredQuizRight &&
+        !isLateCorrectAnswer
       ) {
         return false;
       }
@@ -7012,6 +7183,31 @@ export function useClassroomEngine() {
 
       if (existing) {
         if (safeComment.trim()) {
+          // Nếu người chơi comment đúng đáp án nhưng đã hết thời gian trả lời (kể cả 2s bù trễ) nên bị tính sai:
+          // thay thế nội dung bong bóng chat thành "Không kịp giờ rồi" chữ màu đỏ để tránh gây hiểu lầm!
+          if (isLateCorrectAnswer) {
+            const nowLateMs = Date.now();
+            const lateBubbleKey = issueChatBubbleKey();
+            const nextPilgrimsLate = pilgrimsRef.current.map((p) =>
+              p.id === existing.id
+                ? {
+                    ...p,
+                    gender: genderCmd || p.gender,
+                    prayer: LATE_QUIZ_ANSWER_BUBBLE_TEXT,
+                    hasComment: true,
+                    prayTimer: 0,
+                    chatBubbleKey: lateBubbleKey,
+                    chatBubbleColor: 'red' as const,
+                    chatBubbleUntil:
+                      nowLateMs + (cfg.chatBubbleDurationSec || 12) * 1000,
+                  }
+                : p
+            );
+            pilgrimsRef.current = nextPilgrimsLate;
+            setPilgrims(nextPilgrimsLate);
+            return false;
+          }
+
           // Nếu đang bật lọc câu trả lời và bình luận trùng đáp án đúng trong thời gian hỏi bài:
           // chấm điểm bình thường ở trên nhưng KHÔNG hiện bong bóng chat và KHÔNG đọc TTS lộ đáp án!
           if (hideCorrectAnswerBubble) {
@@ -7040,6 +7236,7 @@ export function useClassroomEngine() {
                   hasComment: true,
                   prayTimer: 0,
                   chatBubbleKey: commentBubbleKey,
+                  chatBubbleColor: undefined,
                   chatBubbleUntil:
                     nowCommentMs + (cfg.chatBubbleDurationSec || 12) * 1000,
                 }
@@ -7088,6 +7285,56 @@ export function useClassroomEngine() {
               isBot: existing.isBot,
             });
           }
+        }
+        return false;
+      }
+
+      // Nếu học sinh vừa bị chấm sai (đang bước ra khỏi lớp) hoặc đang ở ngoài lớp / hàng chờ mà gửi đáp án đúng bị muộn:
+      // hiển thị ngay bong bóng "Không kịp giờ rồi" chữ màu đỏ và không tự ý xếp vào ghế trống khi chưa gõ "vào lớp"!
+      if (isLateCorrectAnswer) {
+        const leavingInClass = pilgrimsRef.current.find(
+          (p) =>
+            p.username.trim().toLowerCase() === lowerUser &&
+            (p.state === 'leave_side_to_aisle' || p.state === 'leave_down_exit')
+        );
+        if (leavingInClass) {
+          const nowLeavingLateMs = Date.now();
+          const leavingLateBubbleKey = issueChatBubbleKey();
+          const nextLeavingPilgrims = pilgrimsRef.current.map((p) =>
+            p.id === leavingInClass.id
+              ? {
+                  ...p,
+                  gender: genderCmd || p.gender,
+                  prayer: LATE_QUIZ_ANSWER_BUBBLE_TEXT,
+                  hasComment: true,
+                  chatBubbleKey: leavingLateBubbleKey,
+                  chatBubbleColor: 'red' as const,
+                  chatBubbleUntil:
+                    nowLeavingLateMs + (cfg.chatBubbleDurationSec || 12) * 1000,
+                }
+              : p
+          );
+          pilgrimsRef.current = nextLeavingPilgrims;
+          setPilgrims(nextLeavingPilgrims);
+          return false;
+        }
+
+        if (doorCrowdRef.current.length > 0) {
+          const resolvedDoorGender = resolveUserGender(
+            safeName,
+            genderCmd || waitingPoolRef.current.get(lowerUser)?.gender || opts.gender
+          );
+          enqueueDoorCrowdChat({
+            username: safeName,
+            lowerUser,
+            comment: LATE_QUIZ_ANSWER_BUBBLE_TEXT,
+            gender: resolvedDoorGender,
+            avatarUrl:
+              opts.avatarUrl || waitingPoolRef.current.get(lowerUser)?.avatarUrl,
+            isBot: false,
+            allowTTS: false,
+            chatBubbleColor: 'red',
+          });
         }
         return false;
       }
@@ -7184,6 +7431,13 @@ export function useClassroomEngine() {
               ? {
                   ...p,
                   slotId: null,
+                  hasDeskCat: false,
+                  deskCatCount: 0,
+                  hasDeskTrophy: false,
+                  deskTrophyDropAt: 0,
+                  hasDeskPig: false,
+                  hasDeskSnack: false,
+                  hasPcGamingDesk: false,
                   speed: 220,
                   state: 'leave_side_to_aisle' as const,
                   stateTimer: 0,
@@ -7401,11 +7655,14 @@ export function useClassroomEngine() {
     [
       checkEnglishQuizAnswer,
       customWords,
+      enqueueDoorCrowdChat,
       enqueueStudentToWaitingQueue,
       executeGiftPilgrimEntry,
       isCommentMatchingActiveQuizAnswer,
+      isLateCorrectQuizAnswer,
       launchPaperPlaneAtStudent,
       pushToast,
+      resolveUserGender,
       safetyActionMode,
       safetyCategories,
     ]
@@ -7425,12 +7682,12 @@ export function useClassroomEngine() {
       lastMs = nowMs;
       const cfg = configRef.current;
 
-      // 1. Cập nhật Cô Thảo & Thầy Tùng (chỉ setMonks khi thực sự có di chuyển hoặc đổi trạng thái để tránh re-render 60FPS khi đứng yên)
+      // 1. Cập nhật Cô Thảo & Thầy Cá (chỉ setMonks khi thực sự có di chuyển hoặc đổi trạng thái để tránh re-render 60FPS khi đứng yên)
       setMonks((prevMonks) => {
         let hasMonkVisualChange = false;
         const nowMonkMs = Date.now();
         const nextMonks: TempleMonkData[] = prevMonks.map((m): TempleMonkData => {
-          const expectedName = m.role === 'abbot' ? 'Cô Thảo' : 'Thầy Tùng';
+          const expectedName = m.role === 'abbot' ? 'Cô Thảo' : 'Thầy Cá';
           const zone =
             m.role === 'abbot'
               ? cfg.monkZone
@@ -7452,7 +7709,7 @@ export function useClassroomEngine() {
             hasMonkVisualChange = true;
           }
 
-          // Chế độ điều khiển thủ công bằng phím WASD cho Cô Thảo ('abbot') hoặc Thầy Tùng ('senior_novice')
+          // Chế độ điều khiển thủ công bằng phím WASD cho Cô Thảo ('abbot') hoặc Thầy Cá ('senior_novice')
           if (
             (m.role === 'abbot' && controlledNpcRoleRef.current === 'abbot') ||
             (m.role === 'senior_novice' &&
@@ -7507,7 +7764,7 @@ export function useClassroomEngine() {
             };
           }
 
-          // Khi Sự kiện Zombie đang diễn ra -> Khóa vị trí đứng của Cô Thảo và Thầy Tùng tại tọa độ quy định trong Dev-Event
+          // Khi Sự kiện Zombie đang diễn ra -> Khóa vị trí đứng của Cô Thảo và Thầy Cá tại tọa độ quy định trong Dev-Event
           if (
             zombieEventStateRef.current.isActive &&
             zombieEventStateRef.current.phase !== 'idle'
@@ -7570,7 +7827,7 @@ export function useClassroomEngine() {
             moveAxis = 'idle';
             if (pauseTimer <= 0) {
               pauseTimer = 0;
-              // Chọn điểm đến tiếp theo nằm gọn trong vùng an toàn của Cô Thảo / Thầy Tùng
+              // Chọn điểm đến tiếp theo nằm gọn trong vùng an toàn của Cô Thảo / Thầy Cá
               const safeSpanX = Math.max(0, safeMaxX - safeMinX);
               const safeSpanY = Math.max(0, safeMaxY - safeMinY);
               targetX =
@@ -8423,6 +8680,10 @@ export function useClassroomEngine() {
               p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
                 ? 0
                 : p.chatBubbleUntil,
+            chatBubbleColor:
+              p.chatBubbleUntil && nowEpoch >= p.chatBubbleUntil
+                ? undefined
+                : p.chatBubbleColor,
             scoreCardUntil:
               p.scoreCardUntil && nowEpoch >= p.scoreCardUntil
                 ? 0
@@ -8490,6 +8751,7 @@ export function useClassroomEngine() {
                   prayer: '',
                   chatBubbleUntil: 0,
                   chatBubbleKey: 0,
+                  chatBubbleColor: undefined,
                   hasComment: false,
                 }
               : d
@@ -9335,6 +9597,8 @@ export function useClassroomEngine() {
           answeredCurrentQuestion: false,
           hasDeskCat: false,
           deskCatCount: 0,
+          hasDeskTrophy: false,
+          deskTrophyDropAt: 0,
           hasDeskPig: false,
           hasDeskSnack: false,
           hasPcGamingDesk: false,
@@ -9394,6 +9658,8 @@ export function useClassroomEngine() {
           answeredCurrentQuestion: false,
           hasDeskCat: false,
           deskCatCount: 0,
+          hasDeskTrophy: false,
+          deskTrophyDropAt: 0,
           hasDeskPig: false,
           hasDeskSnack: false,
           hasPcGamingDesk: false,
@@ -9425,6 +9691,8 @@ export function useClassroomEngine() {
         chatBubbleUntil: 0,
         hasDeskCat: false,
         deskCatCount: 0,
+        hasDeskTrophy: false,
+        deskTrophyDropAt: 0,
         hasDeskPig: false,
         hasDeskSnack: false,
         hasPcGamingDesk: false,
@@ -9723,8 +9991,8 @@ export function useClassroomEngine() {
       // Xáo trộn thứ tự NPC (trong lớp + hàng chờ) để mỗi câu hỏi thứ tự phát biểu khác nhau
       const shuffledBots = [...allParticipants].sort(() => Math.random() - 0.5);
       const count = shuffledBots.length;
-      // Chỉ cho NPC bắt đầu trả lời sau > 5s (từ 5.2s đến gần hết giờ hỏi bài) để không cướp Top tốc độ của người chơi thật
-      const minStartMs = 5200;
+      // Chỉ cho NPC bắt đầu trả lời sau > 6.5s (và luôn xếp hạng sau người chơi thật trong sortAndReRankQuizWinners) để không bao giờ cướp Top tốc độ của người xem Live
+      const minStartMs = 6500;
       const maxWindowEndMs = Math.max(
         minStartMs + 1500,
         Math.min(11500, askDurMs - 600)
@@ -10238,6 +10506,7 @@ export function useClassroomEngine() {
         return false;
       }
       executedRoundSideEffectsRef.current.askingRoundKey = roundKey;
+      lastExpiredQuizWindowRef.current = null;
 
       const cfg = configRef.current;
       const activeSeatedCount = pilgrimsRef.current.filter(
@@ -10296,6 +10565,36 @@ export function useClassroomEngine() {
             : 0
         ];
       const baseCorrectPoints = getQuizRankPoints(4, currentQuizQuestion);
+
+      // Ghi nhận cửa sổ câu hỏi vừa hết giờ (sau cả 2s bù trễ) để nhận diện comment đáp án đúng nhưng bị muộn giờ
+      if (currentQuizQuestion?.en) {
+        const expiredWinnerSet = new Set<string>();
+        cWinners.forEach((cw) => {
+          if (cw?.username) {
+            expiredWinnerSet.add(cw.username.trim().toLowerCase());
+          }
+        });
+        oWinners.forEach((ow) => {
+          if (ow?.username) {
+            expiredWinnerSet.add(ow.username.trim().toLowerCase());
+          }
+        });
+        for (const p of pilgrimsRef.current) {
+          if (p.answeredCurrentQuestion && p.username) {
+            expiredWinnerSet.add(p.username.trim().toLowerCase());
+          }
+        }
+        for (const [k, q] of waitingPoolRef.current.entries()) {
+          if (q.answeredCorrectInRound) {
+            expiredWinnerSet.add(k);
+          }
+        }
+        lastExpiredQuizWindowRef.current = {
+          en: currentQuizQuestion.en,
+          winnerLowerSet: expiredWinnerSet,
+          expiredAtMs: Date.now(),
+        };
+      }
 
       // 1. Cộng điểm & EXP (= Điểm) câu trả lời đúng cho học sinh trong Hàng Chờ (outsideWinners) ngay khi vào Luồng 4
       const rewardedQueueKeys = new Set<string>();
@@ -10472,6 +10771,8 @@ export function useClassroomEngine() {
           pendingGiftCoins: 0,
           hasDeskCat: false,
           deskCatCount: 0,
+          hasDeskTrophy: false,
+          deskTrophyDropAt: 0,
           hasDeskPig: false,
           hasDeskSnack: false,
           hasPcGamingDesk: false,
@@ -10571,9 +10872,9 @@ export function useClassroomEngine() {
 
     const lineSpacing = Math.max(24, cfg.punishmentLineSpacing || 52);
     const scaleByRank: Record<1 | 2 | 3, number> = {
-      1: 2.0, // 200% cho Top 1
-      2: 1.5, // 150% cho Top 2
-      3: 1.0, // 100% cho Top 3
+      1: 1.0, // Đồng nhất kích thước Cúp cho cả Top 1, 2, 3
+      2: 1.0,
+      3: 1.0,
     };
     const trophiesByRank: Record<1 | 2 | 3, number> = {
       1: 3, // Top 1 +3 Cúp Vàng
@@ -10620,7 +10921,7 @@ export function useClassroomEngine() {
 
     // Sau khi Cúp Vàng bay tới tay (~1.05s):
     // 1) Cộng Cúp Vàng vào tổng cúp sở hữu học sinh + bảng Kỷ lục cúp vàng trong ngày
-    // 2) Gắn Cúp Vàng 200% / 150% / 100% lên tay & hiện Floating Text +3 / +2 / +1 kèm icon Cúp Vàng!
+    // 2) Đặt Cúp Vàng đồng nhất kích thước lên mặt bàn (tại vị trí con mèo) & hiện Floating Text +3 / +2 / +1 kèm icon Cúp Vàng!
     window.setTimeout(() => {
       const isPureLiveTabNow =
         typeof window !== 'undefined' &&
@@ -10682,10 +10983,16 @@ export function useClassroomEngine() {
             ? { ...p, goldTrophies: latestTotalTrophies }
             : p;
         }
+        const isInClass =
+          Boolean(p.slotId) &&
+          p.state !== 'leave_side_to_aisle' &&
+          p.state !== 'leave_down_exit';
         return {
           ...p,
           winnerMilkTeaScale: undefined,
           winnerTrophyScale: scaleByRank[r],
+          hasDeskTrophy: isInClass ? true : false,
+          deskTrophyDropAt: isInClass ? nowLand : 0,
           goldTrophies: latestTotalTrophies,
           floatingTrophyCount: trophiesByRank[r],
           floatingTrophyUntil: nowLand + 3400,
@@ -11048,8 +11355,21 @@ export function useClassroomEngine() {
       // CHUYỂN TỪ LUỒNG 2 & 3 (asking) -> LUỒNG 4 (answer_flash - Đọc câu trả lời & CỘNG ĐIỂM CHO HỌC SINH)
       // ============================================================================
       if (prev.phase === 'asking') {
-        const cWinners = prev.classWinners || [];
-        const oWinners = prev.outsideWinners || [];
+        const finalRanked = sortAndReRankQuizWinners(prev.winners || [], {
+          currentQuestion: prev.currentQuestion || curQuiz,
+          getRankPoints: getQuizRankPoints,
+          getPunishmentMultiplier: (wLower) => {
+            const punishedMatch = pilgrimsRef.current.find(
+              (p) =>
+                p.username.trim().toLowerCase() === wLower &&
+                p.isPunishedInCurrentRound &&
+                p.punishmentMultiplier
+            );
+            return punishedMatch?.punishmentMultiplier || 1;
+          },
+        });
+        const cWinners = finalRanked.classWinners;
+        const oWinners = finalRanked.outsideWinners;
 
         ensureAnswerFlashPhaseSideEffects(
           prev.roundSeq || 1,
@@ -11092,6 +11412,9 @@ export function useClassroomEngine() {
         const fallbackDur4 = (enqueued4 ? 14000 : 1200) + postTtsWaitMs4;
         const answerFlashState: ClassBoardRuntimeState = {
           ...prev,
+          winners: finalRanked.winners,
+          classWinners: cWinners,
+          outsideWinners: oWinners,
           phase: 'answer_flash',
           lessonStepNumber: 4,
           activeFlowToken: flowToken4,
@@ -11122,11 +11445,16 @@ export function useClassroomEngine() {
       if (prev.phase === 'answer_flash') {
         const cWinners = prev.classWinners || [];
         const oWinners = prev.outsideWinners || [];
+        const overallWinners = prev.winners || [];
 
         const classRightCount = cWinners.length;
         const outsideRightCount = oWinners.length;
+        // [Top1] vinh danh đúng người trả lời nhanh nhất toàn phòng Live theo thứ tự chuẩn máy chủ TikTok (dù đang trong lớp hay ngoài hàng chờ)
         const fastestRawName =
-          cWinners[0]?.username || oWinners[0]?.username || '';
+          overallWinners[0]?.username ||
+          cWinners[0]?.username ||
+          oWinners[0]?.username ||
+          '';
         const fastestWinner = fastestRawName || 'chưa có bạn nào';
         const fastestLower = fastestRawName.trim().toLowerCase();
 
@@ -11212,7 +11540,11 @@ export function useClassroomEngine() {
             /\[TổngĐúng\]/gi,
             String(classRightCount + outsideRightCount)
           )
-          .replace(/\[Top1Lớp\]|\[Top1\]|\{fastestName\}/gi, fastestWinner)
+          .replace(
+            /\[Top1Lớp\]/gi,
+            cWinners[0]?.username || fastestWinner
+          )
+          .replace(/\[Top1\]|\{fastestName\}/gi, fastestWinner)
           .replace(
             /\[Top1HọcKé\]/gi,
             oWinners[0]?.username || fastestWinner
@@ -11253,7 +11585,7 @@ export function useClassroomEngine() {
 
         const fallbackDur5 = enqueued5 ? 24000 : 3800;
 
-        // Khóa camera vào bạn trả lời nhanh nhất TRONG LỚP trong 2s ngay khi mới vào Luồng 5
+        // Khóa camera vào bạn trả lời nhanh nhất (hoặc nhanh nhất trong lớp) trong 2s ngay khi mới vào Luồng 5
         if (flow5CameraLockTimerRef.current !== null) {
           window.clearTimeout(flow5CameraLockTimerRef.current);
           flow5CameraLockTimerRef.current = null;
@@ -11263,13 +11595,24 @@ export function useClassroomEngine() {
         const fastestClassLower = (cWinners[0]?.username || '')
           .trim()
           .toLowerCase();
-        if (fastestClassLower && !zombieEventStateRef.current.isActive) {
-          const fastestClassTarget = pilgrimsRef.current.find(
-            (p) =>
-              p.state !== 'leave_side_to_aisle' &&
-              p.state !== 'leave_down_exit' &&
-              p.username.trim().toLowerCase() === fastestClassLower
-          );
+        if ((fastestLower || fastestClassLower) && !zombieEventStateRef.current.isActive) {
+          const fastestClassTarget =
+            (fastestLower
+              ? pilgrimsRef.current.find(
+                  (p) =>
+                    p.state !== 'leave_side_to_aisle' &&
+                    p.state !== 'leave_down_exit' &&
+                    p.username.trim().toLowerCase() === fastestLower
+                )
+              : undefined) ||
+            (fastestClassLower
+              ? pilgrimsRef.current.find(
+                  (p) =>
+                    p.state !== 'leave_side_to_aisle' &&
+                    p.state !== 'leave_down_exit' &&
+                    p.username.trim().toLowerCase() === fastestClassLower
+                )
+              : undefined);
           if (fastestClassTarget) {
             const nowCam = Date.now();
             const zoomDurationMs = 2000;
@@ -11511,6 +11854,8 @@ export function useClassroomEngine() {
               state: 'walk_to_punishment_spot' as const,
               stateTimer: 0,
               podiumRank: rank,
+              hasDeskTrophy: Boolean(p.slotId),
+              deskTrophyDropAt: p.deskTrophyDropAt || Date.now(),
               winnerMilkTeaScale: undefined,
               winnerTrophyScale: undefined,
               isPunishedInCurrentRound: false,
@@ -11869,6 +12214,8 @@ export function useClassroomEngine() {
             Boolean(p.podiumRank) ||
             p.state === 'stand_punishment' ||
             p.state === 'walk_to_punishment_spot';
+          const earnedOrHadDeskTrophy =
+            Boolean(p.slotId) && Boolean(p.hasDeskTrophy || p.podiumRank);
           return {
             ...p,
             currentScoreDisplay: 0,
@@ -11879,6 +12226,10 @@ export function useClassroomEngine() {
             quizResultStatus: null,
             quizResultUntil: 0,
             quizEarnedPoints: 0,
+            hasDeskTrophy: earnedOrHadDeskTrophy,
+            deskTrophyDropAt: earnedOrHadDeskTrophy
+              ? p.deskTrophyDropAt || Date.now()
+              : 0,
             podiumRank: undefined,
             winnerMilkTeaScale: undefined,
             winnerTrophyScale: undefined,
@@ -11902,7 +12253,8 @@ export function useClassroomEngine() {
             cfg,
             prev.questionIndex,
             prev.currentQuestion,
-            true
+            true,
+            recentAskedWordsRef.current
           );
         const nextRoundSeq = (prev.roundSeq || 1) + 1;
         configRef.current = {
@@ -11966,7 +12318,7 @@ export function useClassroomEngine() {
         setClassBoardState(newRoundStartState);
         syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
           state: newRoundStartState,
-          customQuizQuestions: newRoundQuizList,
+          ...buildLiveSyncQueuePayload(newRoundQuizList),
           lessonTtsItems: startTtsItemsNew,
         });
         return;
@@ -12287,7 +12639,9 @@ export function useClassroomEngine() {
       const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
         cfg,
         prev.questionIndex,
-        prev.currentQuestion
+        prev.currentQuestion,
+        false,
+        recentAskedWordsRef.current
       );
       const nextIdx = 0;
       const nextRoundSeq = (prev.roundSeq || 1) + 1;
@@ -12340,7 +12694,7 @@ export function useClassroomEngine() {
         setClassBoardState(pausedForEventState);
         syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
           state: pausedForEventState,
-          customQuizQuestions: nextQuizList,
+          ...buildLiveSyncQueuePayload(nextQuizList),
         });
         startZombieEventFlowNow(true);
         return;
@@ -12384,7 +12738,7 @@ export function useClassroomEngine() {
       setClassBoardState(nextPrepState);
       syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
         state: nextPrepState,
-        customQuizQuestions: nextQuizList,
+        ...buildLiveSyncQueuePayload(nextQuizList),
         lessonTtsItems: nextPrepTtsItems,
       });
     }, 100);
@@ -12750,7 +13104,7 @@ export function useClassroomEngine() {
           return;
         }
 
-        // Bắt đầu Luồng 4: Cô Thảo nói (giọng nữ chính mượt mà) + chatbox + khóa camera vào Cô Thảo
+        // Bắt đầu Luồng 4: Thầy Cá nói (giọng Nam Google Warm) + chatbox xanh dương + khóa camera vào Thầy Cá
         const supervisorLine = (
           cfg.zombieFlow4SupervisorDialog ||
           'Các em hãy thả tim liên tục để đẩy lùi zombie !'
@@ -12761,22 +13115,30 @@ export function useClassroomEngine() {
         );
         const bubbleUntil4 = Date.now() + Math.max(6500, minDur4Ms + 2500);
         setMonks((prevM) => {
-          const nextM = prevM.map((m) =>
-            m.role === 'abbot'
-              ? {
-                  ...m,
-                  chatText: supervisorLine,
-                  chatBubbleUntil: bubbleUntil4,
-                }
-              : m
-          );
+          const nextM = prevM.map((m) => {
+            if (m.role === 'senior_novice') {
+              return {
+                ...m,
+                chatText: supervisorLine,
+                chatBubbleUntil: bubbleUntil4,
+              };
+            }
+            if (m.role === 'abbot') {
+              return {
+                ...m,
+                chatText: undefined,
+                chatBubbleUntil: undefined,
+              };
+            }
+            return m;
+          });
           monksRef.current = nextM;
           return nextM;
         });
 
         setCameraFocus({
           pilgrimId: null,
-          focusRole: 'abbot',
+          focusRole: 'senior_novice',
           customZoom: cfg.cameraZoomScale || 2.4,
           reason: 'special_gift',
           startedAt: Date.now(),
@@ -12793,10 +13155,10 @@ export function useClassroomEngine() {
                   {
                     text: supervisorLine,
                     lang: 'vi',
-                    speakerRole: 'abbot',
+                    speakerRole: 'senior_novice',
                     lessonFlowToken: flowToken4,
                     lessonStepLabel:
-                      'Sự kiện Zombie - Luồng 4: Cô giáo kêu gọi',
+                      'Sự kiện Zombie - Luồng 4: Thầy Cá kêu gọi',
                   },
                 ],
                 cfg
@@ -14038,6 +14400,13 @@ export function useClassroomEngine() {
     const unsubPeers = syncService.onPeerCountChange(setPeerCounts);
 
     const unsubTikTok = syncService.onTikTokEvent((ev) => {
+      const orderMeta: TikTokOrderMeta = {
+        tiktokMsgId: ev.tiktokMsgId,
+        tiktokCreateTimeMs: ev.tiktokCreateTimeMs,
+        serverSeq: ev.serverSeq,
+        arrivalSeq: ev.arrivalSeq,
+        orderTimestampMs: ev.orderTimestampMs,
+      };
       if (ev.type === 'chat') {
         spawnOrPromotePilgrim({
           username: ev.username || 'Học Sinh',
@@ -14046,6 +14415,7 @@ export function useClassroomEngine() {
           coins: 0,
           isBot: false,
           avatarUrl: ev.avatarUrl || ev.profilePictureUrl || null,
+          orderMeta,
         });
       } else if (ev.type === 'gift') {
         spawnOrPromotePilgrim({
@@ -14057,6 +14427,7 @@ export function useClassroomEngine() {
           isBot: false,
           avatarUrl: ev.avatarUrl || ev.profilePictureUrl || null,
           giftName: ev.giftName || 'Hoa Điểm 10',
+          orderMeta,
         });
       } else if (ev.type === 'like') {
         handleTriggerLike(ev.likeCount || 5, ev.username || 'Học Sinh', false);
@@ -14079,6 +14450,7 @@ export function useClassroomEngine() {
             comboCount: p.comboCount,
             giftName: p.giftName,
             bypassWaitingQueue: Boolean(p.bypassWaitingQueue),
+            orderMeta: p.orderMeta,
           });
           break;
         case 'TRIGGER_PAPER_PLANE': {
@@ -14138,6 +14510,13 @@ export function useClassroomEngine() {
             prev.map((st) => ({
               ...st,
               slotId: null,
+              hasDeskCat: false,
+              deskCatCount: 0,
+              hasDeskTrophy: false,
+              deskTrophyDropAt: 0,
+              hasDeskPig: false,
+              hasDeskSnack: false,
+              hasPcGamingDesk: false,
               state: 'leave_side_to_aisle',
               stateTimer: 0,
             }))
@@ -14399,14 +14778,18 @@ export function useClassroomEngine() {
               break;
             }
 
-            if (Array.isArray(p.customQuizQuestions)) {
+            const mergedQueue = mergeIncomingLiveSyncQueue(
+              configRef.current.customQuizQuestions,
+              p
+            );
+            if (mergedQueue) {
               configRef.current = {
                 ...configRef.current,
-                customQuizQuestions: p.customQuizQuestions,
+                customQuizQuestions: mergedQueue,
               };
               setConfig((prevCfg) => ({
                 ...prevCfg,
-                customQuizQuestions: p.customQuizQuestions,
+                customQuizQuestions: mergedQueue,
               }));
             }
 
@@ -14414,33 +14797,41 @@ export function useClassroomEngine() {
             const isSameRound =
               incRound === curRound &&
               (incoming.questionIndex ?? 0) === (current.questionIndex ?? 0);
-            const mergedWinnersMap = new Map<string, ClassBoardQuizWinner>();
+            const combinedRawWinners: ClassBoardQuizWinner[] = [];
             if (isSameRound && Array.isArray(current.winners)) {
-              current.winners.forEach((w) => {
-                if (w?.username) {
-                  mergedWinnersMap.set(w.username.trim().toLowerCase(), w);
-                }
-              });
+              combinedRawWinners.push(...current.winners);
             }
             if (Array.isArray(incoming.winners)) {
-              incoming.winners.forEach((w) => {
-                if (w?.username) {
-                  const k = w.username.trim().toLowerCase();
-                  if (!mergedWinnersMap.has(k)) {
-                    mergedWinnersMap.set(k, w);
-                  }
-                }
-              });
+              combinedRawWinners.push(...incoming.winners);
             }
-            const mergedWinners = Array.from(mergedWinnersMap.values());
+            const reRankedSync = sortAndReRankQuizWinners(combinedRawWinners, {
+              currentQuestion: incoming.currentQuestion || current.currentQuestion,
+              getRankPoints: getQuizRankPoints,
+              getPunishmentMultiplier: (wLower) => {
+                const punishedMatch = pilgrimsRef.current.find(
+                  (st) =>
+                    st.username.trim().toLowerCase() === wLower &&
+                    st.isPunishedInCurrentRound &&
+                    st.punishmentMultiplier
+                );
+                return punishedMatch?.punishmentMultiplier || 1;
+              },
+            });
+            const mergedWinners = reRankedSync.winners;
             const mergedClassWinners =
               mergedWinners.length > 0
-                ? mergedWinners.filter((w) => w.isSeated !== false)
+                ? reRankedSync.classWinners
                 : incoming.classWinners || [];
             const mergedOutsideWinners =
               mergedWinners.length > 0
-                ? mergedWinners.filter((w) => w.isSeated === false)
+                ? reRankedSync.outsideWinners
                 : incoming.outsideWinners || [];
+            const mergedWinnersMap = new Map<string, ClassBoardQuizWinner>();
+            mergedWinners.forEach((w) => {
+              if (w?.username) {
+                mergedWinnersMap.set(w.username.trim().toLowerCase(), w);
+              }
+            });
 
             // Đánh dấu học sinh trong lớp hoặc hàng chờ tương ứng với danh sách trả lời đúng được đồng bộ sang
             if (mergedWinners.length > 0 && incoming.phase === 'asking') {
@@ -14490,6 +14881,8 @@ export function useClassroomEngine() {
                   Boolean(st.podiumRank) ||
                   st.state === 'stand_punishment' ||
                   st.state === 'walk_to_punishment_spot';
+                const earnedOrHadTrophySync =
+                  Boolean(st.slotId) && Boolean(st.hasDeskTrophy || st.podiumRank);
                 return {
                   ...st,
                   currentScoreDisplay: 0,
@@ -14500,6 +14893,10 @@ export function useClassroomEngine() {
                   quizResultStatus: null,
                   quizResultUntil: 0,
                   quizEarnedPoints: 0,
+                  hasDeskTrophy: earnedOrHadTrophySync,
+                  deskTrophyDropAt: earnedOrHadTrophySync
+                    ? st.deskTrophyDropAt || Date.now()
+                    : 0,
                   podiumRank: undefined,
                   winnerMilkTeaScale: undefined,
                   winnerTrophyScale: undefined,
@@ -14603,6 +15000,8 @@ export function useClassroomEngine() {
                     state: 'walk_to_punishment_spot' as const,
                     stateTimer: 0,
                     podiumRank: rank,
+                    hasDeskTrophy: Boolean(st.slotId),
+                    deskTrophyDropAt: st.deskTrophyDropAt || Date.now(),
                     winnerMilkTeaScale: undefined,
                     winnerTrophyScale: undefined,
                     isPunishedInCurrentRound: false,
@@ -14776,7 +15175,7 @@ export function useClassroomEngine() {
                     if (m.role === 'senior_novice') {
                       return {
                         ...m,
-                        name: 'Thầy Tùng',
+                        name: 'Thầy Cá',
                         x: supervisorEvPosSync.x,
                         y: supervisorEvPosSync.y,
                         targetX: supervisorEvPosSync.x,
@@ -14925,21 +15324,29 @@ export function useClassroomEngine() {
                 const bubbleUntil4 =
                   Date.now() + Math.max(6500, minDur4Ms + 2500);
                 setMonks((prevM) => {
-                  const nextM = prevM.map((m) =>
-                    m.role === 'abbot'
-                      ? {
-                          ...m,
-                          chatText: supervisorLine,
-                          chatBubbleUntil: bubbleUntil4,
-                        }
-                      : m
-                  );
+                  const nextM = prevM.map((m) => {
+                    if (m.role === 'senior_novice') {
+                      return {
+                        ...m,
+                        chatText: supervisorLine,
+                        chatBubbleUntil: bubbleUntil4,
+                      };
+                    }
+                    if (m.role === 'abbot') {
+                      return {
+                        ...m,
+                        chatText: undefined,
+                        chatBubbleUntil: undefined,
+                      };
+                    }
+                    return m;
+                  });
                   monksRef.current = nextM;
                   return nextM;
                 });
                 setCameraFocus({
                   pilgrimId: null,
-                  focusRole: 'abbot',
+                  focusRole: 'senior_novice',
                   customZoom: cfgSync.cameraZoomScale || 2.4,
                   reason: 'special_gift',
                   startedAt: Date.now(),
@@ -15088,8 +15495,11 @@ export function useClassroomEngine() {
               new URLSearchParams(window.location.search).get('mode') === 'live' ||
               new URLSearchParams(window.location.search).get('obs') === '1');
           if (!isPureLiveTab) {
+            const lightweightPatch = stripHeavyQuizDataForLocalStorage(
+              configRef.current
+            );
             syncService.sendCommand('UPDATE_CONFIG', {
-              patch: configRef.current,
+              patch: lightweightPatch,
             });
             syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
               state: classBoardStateRef.current,
@@ -15314,9 +15724,45 @@ export function useClassroomEngine() {
 
   // Các hàm điều khiển cho Dev Studio
   const handleUpdateConfig = useCallback((patch: Partial<GameConfig>) => {
+    if (!quizIdbHydratedRef.current) {
+      if (patch.quizDecks !== undefined) {
+        userModifiedQuizDecksBeforeHydrateRef.current = true;
+      }
+      if (patch.customQuizQuestions !== undefined) {
+        userModifiedQuizQueueBeforeHydrateRef.current = true;
+      }
+    }
+    if (patch.quizDecks !== undefined && Array.isArray(patch.quizDecks)) {
+      void idbSet(QUIZ_DECKS_IDB_KEY, {
+        schemaVersion:
+          patch.quizDeckSchemaVersion ||
+          configRef.current.quizDeckSchemaVersion ||
+          QUIZ_DECK_SCHEMA_VERSION,
+        activeQuizDeckId:
+          patch.activeQuizDeckId ?? configRef.current.activeQuizDeckId,
+        decks: patch.quizDecks,
+      });
+    }
+    if (
+      patch.customQuizQuestions !== undefined &&
+      Array.isArray(patch.customQuizQuestions)
+    ) {
+      void idbSet(QUIZ_QUEUE_IDB_KEY, patch.customQuizQuestions);
+    }
     setConfig((prev) => {
       const next = { ...prev, ...patch };
-      syncService.sendCommand('UPDATE_CONFIG', { patch });
+      configRef.current = next;
+      const syncPatch: Partial<GameConfig> = { ...patch };
+      if (
+        Array.isArray(syncPatch.customQuizQuestions) &&
+        syncPatch.customQuizQuestions.length > 50
+      ) {
+        syncPatch.customQuizQuestions = syncPatch.customQuizQuestions.slice(
+          0,
+          50
+        );
+      }
+      syncService.sendCommand('UPDATE_CONFIG', { patch: syncPatch });
       return next;
     });
 
@@ -15636,7 +16082,11 @@ export function useClassroomEngine() {
 
     const cfg = configRef.current;
     const prev = classBoardStateRef.current;
-    const quizList = build15MinuteTieredRoundQuestions(cfg);
+    const quizList = build15MinuteTieredRoundQuestions(
+      cfg,
+      undefined,
+      recentAskedWordsRef.current
+    );
     const safeIdx = 0;
     const curQuiz = quizList[0];
 
@@ -15747,7 +16197,7 @@ export function useClassroomEngine() {
       syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
         state: nextState,
         lessonTtsItems: startTtsItems,
-        customQuizQuestions: quizList,
+        ...buildLiveSyncQueuePayload(quizList),
         force: true,
       });
     }
@@ -15839,7 +16289,9 @@ export function useClassroomEngine() {
     const { nextQuizList, nextQuiz } = consumeCurrentAndGetNextQuizQueue(
       cfg,
       prev.questionIndex,
-      prev.currentQuestion
+      prev.currentQuestion,
+      false,
+      recentAskedWordsRef.current
     );
     const nextIdx = 0;
     const nextRoundQuestionIdx =
@@ -15916,7 +16368,7 @@ export function useClassroomEngine() {
     if (peerCountsRef.current.obsPeers === 0 || isPureLiveTab) {
       syncService.sendCommand('SYNC_CLASS_BOARD_STATE', {
         state: nextState,
-        customQuizQuestions: nextQuizList,
+        ...buildLiveSyncQueuePayload(nextQuizList),
         force: true,
       });
     }
@@ -15976,6 +16428,10 @@ export function useClassroomEngine() {
           : names[Math.floor(Math.random() * names.length)]);
       const comment = formatShortQuizAnswer(curQuiz.en);
 
+      const simOrderMeta: TikTokOrderMeta = {
+        orderTimestampMs: Date.now(),
+        arrivalSeq: ++quizAnswerArrivalSeqRef.current,
+      };
       spawnOrPromotePilgrim({
         username: randomUser,
         prayer: comment,
@@ -15983,6 +16439,7 @@ export function useClassroomEngine() {
         coins: 0,
         isBot: false,
         isSimulatedTest: true,
+        orderMeta: simOrderMeta,
       });
       syncService.sendCommand('SPAWN_PILGRIM', {
         username: randomUser,
@@ -15990,6 +16447,7 @@ export function useClassroomEngine() {
         isVip: false,
         coins: 0,
         isBot: false,
+        orderMeta: simOrderMeta,
       });
     },
     [getActiveQuizList, spawnOrPromotePilgrim]
@@ -16153,7 +16611,19 @@ export function useClassroomEngine() {
         setPilgrims((prev) =>
           prev.map((p) =>
             p.slotId && removeIds.has(p.slotId)
-              ? { ...p, slotId: null, state: 'leave_side_to_aisle', stateTimer: 0 }
+              ? {
+                  ...p,
+                  slotId: null,
+                  hasDeskCat: false,
+                  deskCatCount: 0,
+                  hasDeskTrophy: false,
+                  deskTrophyDropAt: 0,
+                  hasDeskPig: false,
+                  hasDeskSnack: false,
+                  hasPcGamingDesk: false,
+                  state: 'leave_side_to_aisle',
+                  stateTimer: 0,
+                }
               : p
           )
         );
@@ -16187,7 +16657,19 @@ export function useClassroomEngine() {
         setPilgrims((prev) =>
           prev.map((p) =>
             p.slotId && removeIds.has(p.slotId)
-              ? { ...p, slotId: null, state: 'leave_side_to_aisle', stateTimer: 0 }
+              ? {
+                  ...p,
+                  slotId: null,
+                  hasDeskCat: false,
+                  deskCatCount: 0,
+                  hasDeskTrophy: false,
+                  deskTrophyDropAt: 0,
+                  hasDeskPig: false,
+                  hasDeskSnack: false,
+                  hasPcGamingDesk: false,
+                  state: 'leave_side_to_aisle',
+                  stateTimer: 0,
+                }
               : p
           )
         );
@@ -16244,7 +16726,19 @@ export function useClassroomEngine() {
     setPilgrims((prev) =>
       prev.map((p) =>
         p.slotId && removeSlotIds.has(p.slotId)
-          ? { ...p, slotId: null, state: 'leave_side_to_aisle', stateTimer: 0 }
+          ? {
+              ...p,
+              slotId: null,
+              hasDeskCat: false,
+              deskCatCount: 0,
+              hasDeskTrophy: false,
+              deskTrophyDropAt: 0,
+              hasDeskPig: false,
+              hasDeskSnack: false,
+              hasPcGamingDesk: false,
+              state: 'leave_side_to_aisle',
+              stateTimer: 0,
+            }
           : p
       )
     );
@@ -16705,6 +17199,13 @@ export function useClassroomEngine() {
       prev.map((p) => ({
         ...p,
         slotId: null,
+        hasDeskCat: false,
+        deskCatCount: 0,
+        hasDeskTrophy: false,
+        deskTrophyDropAt: 0,
+        hasDeskPig: false,
+        hasDeskSnack: false,
+        hasPcGamingDesk: false,
         state: 'leave_side_to_aisle',
         stateTimer: 0,
       }))
@@ -17322,7 +17823,7 @@ export function useClassroomEngine() {
   );
 
   const handlePushFullSyncToLive = useCallback(() => {
-    const patchToSend = { ...configRef.current };
+    const patchToSend = stripHeavyQuizDataForLocalStorage(configRef.current);
     if (classBoardStateRef.current.isRunning) {
       delete patchToSend.customQuizQuestions;
     }

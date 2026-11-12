@@ -205,7 +205,7 @@ export const HostLiveTtsCard: React.FC<HostLiveTtsCardProps> = ({
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10px] text-cyan-200 font-semibold focus:outline-none"
             >
               <option value="abbot">💬 Cô Thảo</option>
-              <option value="senior_novice">💬 Thầy Tùng</option>
+              <option value="senior_novice">💬 Thầy Cá</option>
               <option value="none">🔇 Ẩn bong bóng</option>
             </select>
           </div>

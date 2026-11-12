@@ -51,7 +51,7 @@ const PHASE_LABEL_MAP: Record<string, string> = {
   z_flow_1_intro: 'Luồng 1: Giới thiệu sự kiện trên bảng',
   z_flow_2_spawn: 'Luồng 2: Triệu hồi Zombie & Gầm gừ -> Đi vào lớp',
   z_flow_3_teacher: 'Luồng 3: Cô Thảo kêu cứu + khóa camera',
-  z_flow_4_supervisor: 'Luồng 4: Thầy Tùng hô hào thả tim đẩy lùi Zombie',
+  z_flow_4_supervisor: 'Luồng 4: Thầy Cá hô hào thả tim đẩy lùi Zombie',
   z_flow_5_combat: 'Luồng 5: Chiến đấu đẩy lùi Zombie!',
   z_flow_5b_dying: 'Pha Hạ Gục: Zombie ngã ngang & tan biến',
   z_flow_6_celebration: 'Luồng 6: Tổng kết Top 1-2-3 & Thưởng Matcha Latte',
@@ -399,14 +399,14 @@ export const TabEvent: React.FC<TabEventProps> = ({
         </div>
       </section>
 
-      {/* 2. THÔNG SỐ CẤP & HP ĐỘC LẬP + SET VỊ TRÍ ZOMBIE, CÔ THẢO VÀ THẦY TÙNG KHI EVENT KÍCH HOẠT */}
+      {/* 2. THÔNG SỐ CẤP & HP ĐỘC LẬP + SET VỊ TRÍ ZOMBIE, CÔ THẢO VÀ THẦY CÁ KHI EVENT KÍCH HOẠT */}
       <section className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 space-y-2.5">
         <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-2">
           <div className="flex items-center gap-1.5 min-w-0">
             <MapPin className="w-4 h-4 text-lime-400 shrink-0" />
             <div className="min-w-0">
               <h3 className="text-xs font-extrabold text-lime-300 truncate">
-                Set Cấp, HP Zombie (Độc Lập) & Vị Trí Zombie, Cô Thảo, Thầy Tùng
+                Set Cấp, HP Zombie (Độc Lập) & Vị Trí Zombie, Cô Thảo, Thầy Cá
               </h3>
               <p className="text-[10px] text-stone-400 truncate">
                 2 chỉ số Cấp và HP set hoàn toàn độc lập do Dev chỉnh
@@ -621,7 +621,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           </div>
         </div>
 
-        {/* Vị trí Cô Thảo và Thầy Tùng khi Event kích hoạt */}
+        {/* Vị trí Cô Thảo và Thầy Cá khi Event kích hoạt */}
         <div className="grid grid-cols-2 gap-2">
           <div className="p-2 rounded-lg bg-stone-950/90 border border-pink-500/35 space-y-1.5">
             <div className="flex items-center justify-between">
@@ -687,7 +687,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           <div className="p-2 rounded-lg bg-stone-950/90 border border-sky-500/35 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[10.5px] font-bold text-sky-300">
-                👨‍🏫 Vị trí Thầy Tùng (Khi Event)
+                👨‍🏫 Vị trí Thầy Cá (Khi Event)
               </span>
               <button
                 type="button"
@@ -1269,7 +1269,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           </div>
         </div>
 
-        {/* LUỒNG 3 & LUỒNG 4: Lời thoại + Chatbox Cô Thảo & Thầy Tùng */}
+        {/* LUỒNG 3 & LUỒNG 4: Lời thoại + Chatbox Cô Thảo & Thầy Cá */}
         <div className="grid grid-cols-1 gap-2">
           <div className="p-2.5 rounded-lg bg-stone-950/90 border border-pink-500/30 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
@@ -1312,7 +1312,7 @@ export const TabEvent: React.FC<TabEventProps> = ({
           <div className="p-2.5 rounded-lg bg-stone-950/90 border border-sky-500/30 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-extrabold text-sky-300">
-                Luồng 4: Lời thoại + Chatbox Cô Thảo kêu gọi (Giọng Nữ Chính)
+                Luồng 4: Lời thoại + Chatbox Thầy Cá kêu gọi (Giọng Nam Google Warm + Zoom Cam)
               </span>
               <div className="flex items-center gap-1">
                 <span className="text-[10px] text-stone-400">T.gian tối thiểu:</span>

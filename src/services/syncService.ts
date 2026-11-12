@@ -1,20 +1,23 @@
-import { SyncPacket } from '../types/game';
+import { SyncPacket, TikTokOrderMeta } from '../types/game';
+import { extractTikTokOrderMeta } from '../utils/commentOrder';
 
 export type WsConnectionStatus = 'simulated' | 'connecting' | 'connected' | 'error';
 
 type SyncListener = (packet: SyncPacket) => void;
-type TikTokEventListener = (event: {
-  type: 'chat' | 'gift' | 'like' | 'follow';
-  username: string;
-  avatarUrl?: string | null;
-  profilePictureUrl?: string | null;
-  comment?: string;
-  giftName?: string;
-  coins?: number;
-  repeatCount?: number;
-  comboCount?: number;
-  likeCount?: number;
-}) => void;
+type TikTokEventListener = (
+  event: {
+    type: 'chat' | 'gift' | 'like' | 'follow';
+    username: string;
+    avatarUrl?: string | null;
+    profilePictureUrl?: string | null;
+    comment?: string;
+    giftName?: string;
+    coins?: number;
+    repeatCount?: number;
+    comboCount?: number;
+    likeCount?: number;
+  } & TikTokOrderMeta
+) => void;
 type StatusListener = (status: WsConnectionStatus) => void;
 type PeerCountListener = (counts: { totalPeers: number; obsPeers: number }) => void;
 
@@ -148,6 +151,7 @@ class LiveSyncService {
   private reconnectWsTimer: ReturnType<typeof setTimeout> | null = null;
   private localSseFallback: EventSource | null = null;
   private recentTikTokEventKeys = new Map<string, number>();
+  private cloudRelayConnected = false;
   private tiktokLogs: string[] = [];
   private tiktokLogListeners = new Set<(logs: string[]) => void>();
   private roomInfoListeners = new Set<
@@ -181,25 +185,35 @@ class LiveSyncService {
     return () => this.roomInfoListeners.delete(fn);
   }
 
-  private emitDeduplicatedTikTokEvent(ev: {
-    type: 'chat' | 'gift' | 'like' | 'follow';
-    username: string;
-    avatarUrl?: string | null;
-    profilePictureUrl?: string | null;
-    comment?: string;
-    giftName?: string;
-    coins?: number;
-    repeatCount?: number;
-    comboCount?: number;
-    likeCount?: number;
-  }) {
+  private clientTikTokArrivalSeq = 0;
+
+  private emitDeduplicatedTikTokEvent(
+    ev: {
+      type: 'chat' | 'gift' | 'like' | 'follow';
+      username: string;
+      avatarUrl?: string | null;
+      profilePictureUrl?: string | null;
+      comment?: string;
+      giftName?: string;
+      coins?: number;
+      repeatCount?: number;
+      comboCount?: number;
+      likeCount?: number;
+    } & TikTokOrderMeta
+  ) {
     const now = Date.now();
     for (const [k, t] of this.recentTikTokEventKeys.entries()) {
-      if (now - t > 450) this.recentTikTokEventKeys.delete(k);
+      const ttl = k.includes(':msg:') ? 6000 : 450;
+      if (now - t > ttl) this.recentTikTokEventKeys.delete(k);
     }
-    const dedupKey = `${ev.type}:${ev.username}:${ev.comment || ev.giftName || ev.likeCount || ''}`;
+
+    // Nếu có tiktokMsgId gốc từ máy chủ TikTok: khử trùng lặp chính xác tuyệt đối theo msgId (tránh nhân đôi khi vừa mở WS vừa mở SSE, đồng thời không bao giờ nuốt nhầm 2 bình luận khác nhau)
+    const dedupKey = ev.tiktokMsgId
+      ? `${ev.type}:msg:${ev.tiktokMsgId}`
+      : `${ev.type}:${ev.username}:${ev.comment || ev.giftName || ev.likeCount || ''}`;
+    const dedupWindowMs = ev.tiktokMsgId ? 5000 : 350;
     const prevAt = this.recentTikTokEventKeys.get(dedupKey);
-    if (prevAt && now - prevAt < 350) {
+    if (prevAt && now - prevAt < dedupWindowMs) {
       return;
     }
     this.recentTikTokEventKeys.set(dedupKey, now);
@@ -250,11 +264,20 @@ class LiveSyncService {
             this.dispatchIncomingSync(data as SyncPacket);
           } else if (data.type === 'TIKTOK_LIVE_STATUS') {
             if (data.status === 'connected') {
+              this.cloudRelayConnected = true;
               this.setStatus('connected');
             } else if (data.status === 'connecting') {
-              this.setStatus('connecting');
+              if (!this.cloudRelayConnected) {
+                this.setStatus('connecting');
+              }
             } else if (data.status === 'error') {
+              this.cloudRelayConnected = false;
               this.setStatus('error');
+            } else if (data.status === 'idle') {
+              this.cloudRelayConnected = false;
+              if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                this.setStatus('simulated');
+              }
             }
             this.lastRoomInfo = {
               username: data.username || this.lastRoomInfo.username,
@@ -266,6 +289,7 @@ class LiveSyncService {
               this.appendTikTokLog(`📡 ${data.message}`);
             }
           } else if (data.type === 'TIKTOK_LIVE_EVENT' && data.event) {
+            this.cloudRelayConnected = true;
             if (this.status !== 'connected') {
               this.setStatus('connected');
             }
@@ -687,6 +711,13 @@ class LiveSyncService {
       return;
     }
 
+    if (raw.type === 'batch' && Array.isArray(raw.events)) {
+      for (const item of raw.events) {
+        this.handleRawTikTokPayload(item);
+      }
+      return;
+    }
+
     // Format 1: Custom Node.js server.js bridge ({ type: 'chat' | 'gift' | 'like' | 'follow', ... })
     if (
       raw.type === 'chat' ||
@@ -696,8 +727,10 @@ class LiveSyncService {
       raw.type === 'follow'
     ) {
       const normalizedType = raw.type === 'comment' ? 'chat' : raw.type;
+      const orderMeta = extractTikTokOrderMeta(raw, ++this.clientTikTokArrivalSeq);
       const normalized = {
         ...raw,
+        ...orderMeta,
         type: normalizedType,
         username: this.extractUsername(raw),
         avatarUrl: this.extractAvatar(raw) || this.extractAvatar(raw.raw),
@@ -733,6 +766,7 @@ class LiveSyncService {
         d.gift?.diamondCount ??
         1;
       const repeatCount = d.repeatCount ?? d.comboCount ?? 1;
+      const orderMeta = extractTikTokOrderMeta(raw, ++this.clientTikTokArrivalSeq);
 
       this.emitDeduplicatedTikTokEvent({
         type: rawEv,
@@ -750,6 +784,7 @@ class LiveSyncService {
           1,
           Number(d.likeCount ?? d.count ?? d.unmergedLikeCount ?? 1)
         ),
+        ...orderMeta,
       });
     }
   }
@@ -796,7 +831,9 @@ class LiveSyncService {
         this.ws.onclose = null;
         this.ws.close();
       }
-      this.setStatus('connecting');
+      if (!this.cloudRelayConnected) {
+        this.setStatus('connecting');
+      }
       const socket = new WebSocket(this.lastWsUrl);
       this.ws = socket;
 
@@ -846,7 +883,7 @@ class LiveSyncService {
           return;
         }
         this.startLocalHttpSseFallback(this.lastWsUrl);
-        if (this.status !== 'connected') {
+        if (!this.cloudRelayConnected && this.status !== 'connected') {
           this.setStatus('simulated');
         }
         if (this.shouldReconnectWs && this.lastWsUrl) {
@@ -865,7 +902,9 @@ class LiveSyncService {
       };
     } catch {
       this.startLocalHttpSseFallback(this.lastWsUrl);
-      this.setStatus('error');
+      if (!this.cloudRelayConnected) {
+        this.setStatus('error');
+      }
     }
   }
 }

@@ -2190,7 +2190,7 @@ export const GameStage: React.FC<GameStageProps> = ({
           );
         })}
 
-        {/* Layer 4A: Vùng giới hạn di chuyển của Cô Thảo & Thầy Tùng */}
+        {/* Layer 4A: Vùng giới hạn di chuyển của Cô Thảo & Thầy Cá */}
         {config.showZoneBounds && (
           <div className="absolute inset-0 z-40 pointer-events-none">
             <EditableZoneRect
@@ -2206,7 +2206,7 @@ export const GameStage: React.FC<GameStageProps> = ({
             <EditableZoneRect
               zoneKey="supervisor"
               bounds={config.supervisorZone || SUPERVISOR_ZONE_BOUNDS}
-              label="Vùng Di Chuyển Thầy Tùng (Kéo 4 cạnh)"
+              label="Vùng Di Chuyển Thầy Cá (Kéo 4 cạnh)"
               borderClass="border-sky-400"
               bgClass="bg-sky-500/15"
               textClass="text-sky-200"
@@ -2562,7 +2562,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                 );
               })()}
 
-              {/* Tâm điểm Triệu Hồi Zombie (Ngoài cửa lớp), Vị Trí Zombie Đứng, Vị Trí Cô Thảo & Thầy Tùng khi Event */}
+              {/* Tâm điểm Triệu Hồi Zombie (Ngoài cửa lớp), Vị Trí Zombie Đứng, Vị Trí Cô Thảo & Thầy Cá khi Event */}
               {(() => {
                 const zSpawn = config.zombieSpawnPos || { x: 42, y: 520 };
                 const zStand = config.zombieStandPos || { x: 270, y: 486 };
@@ -2636,14 +2636,14 @@ export const GameStage: React.FC<GameStageProps> = ({
                         e.stopPropagation();
                         setDraggingNode({ kind: 'zombieSupervisor', index: 0 });
                       }}
-                      title="Kéo để đặt Vị Trí Thầy Tùng khi Event Zombie kích hoạt"
+                      title="Kéo để đặt Vị Trí Thầy Cá khi Event Zombie kích hoạt"
                       className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 px-2 py-0.5 rounded-full bg-sky-500/95 hover:bg-sky-400 text-white border-2 border-yellow-200 shadow-lg text-[8.5px] font-extrabold font-mono whitespace-nowrap cursor-grab active:cursor-grabbing select-none"
                       style={{
                         left: `${zSupervisor.x}px`,
                         top: `${zSupervisor.y}px`,
                       }}
                     >
-                      👨‍🏫 Vị Trí Thầy Tùng (Event)
+                      👨‍🏫 Vị Trí Thầy Cá (Event)
                     </div>
                   </>
                 );

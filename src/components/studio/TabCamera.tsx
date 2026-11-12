@@ -71,7 +71,7 @@ export const TabCamera: React.FC<TabCameraProps> = ({
       : activeFocusRole === 'abbot'
       ? '👩‍🏫 Cô Thảo (Sự kiện)'
       : activeFocusRole === 'senior_novice'
-      ? '👨‍🏫 Thầy Tùng (Sự kiện)'
+      ? '👨‍🏫 Thầy Cá (Sự kiện)'
       : null;
 
   const activeStagePilgrims = pilgrims.filter(

@@ -235,35 +235,112 @@ async function startServer() {
     });
   };
 
-  // Receive TikTok Live events forwarded from user's local server.js (bypasses browser HTTPS -> ws://localhost Mixed Content blocks)
-  app.post('/api/tiktok-webhook', (req: Request, res: Response) => {
-    const body = req.body || {};
-    if (body.type === 'status') {
+  let serverTikTokSeq = 0;
+
+  const parseServerInt64Str = (val: any): string | undefined => {
+    if (val === null || val === undefined) return undefined;
+    if (typeof val === 'bigint') return val > 0n ? val.toString(10) : undefined;
+    if (typeof val === 'number') {
+      return Number.isFinite(val) && val > 0 ? Math.trunc(val).toString(10) : undefined;
+    }
+    if (typeof val === 'string') {
+      const s = val.trim();
+      if (/^\d+$/.test(s)) {
+        const stripped = s.replace(/^0+/, '');
+        return stripped || undefined;
+      }
+      return undefined;
+    }
+    if (typeof val === 'object' && typeof val.low === 'number' && typeof val.high === 'number') {
+      const low = BigInt(val.low >>> 0);
+      const high = val.unsigned === false ? BigInt(val.high | 0) : BigInt(val.high >>> 0);
+      const combined = (high << 32n) | low;
+      return combined > 0n ? combined.toString(10) : undefined;
+    }
+    return undefined;
+  };
+
+  const normalizeServerCreateTimeMs = (val: any): number | undefined => {
+    const str = parseServerInt64Str(val);
+    if (!str) return undefined;
+    const n = Number(str);
+    if (!Number.isFinite(n) || n <= 0) return undefined;
+    if (n >= 1_000_000_000 && n < 100_000_000_000) return Math.trunc(n * 1000);
+    if (n >= 100_000_000_000 && n < 100_000_000_000_000) return Math.trunc(n);
+    if (n >= 100_000_000_000_000 && n < 100_000_000_000_000_000) return Math.trunc(n / 1000);
+    return undefined;
+  };
+
+  const extractServerTikTokOrderFields = (data: any) => {
+    const seq = ++serverTikTokSeq;
+    const nowMs = Date.now();
+    const tiktokMsgId = parseServerInt64Str(
+      data?.tiktokMsgId ??
+        data?.common?.msgId ??
+        data?.msgId ??
+        data?.messageId ??
+        data?.common?.messageId
+    );
+    const tiktokCreateTimeMs = normalizeServerCreateTimeMs(
+      data?.tiktokCreateTimeMs ??
+        data?.common?.createTime ??
+        data?.createTime ??
+        data?.timestamp
+    );
+    const incomingSeq = Number(data?.serverSeq);
+    return {
+      tiktokMsgId,
+      tiktokCreateTimeMs,
+      serverSeq: Number.isFinite(incomingSeq) && incomingSeq > 0 ? Math.trunc(incomingSeq) : seq,
+      serverReceivedAtMs:
+        Number.isFinite(Number(data?.serverReceivedAtMs)) && Number(data?.serverReceivedAtMs) > 0
+          ? Math.trunc(Number(data.serverReceivedAtMs))
+          : nowMs,
+    };
+  };
+
+  const forwardWebhookSingleItem = (item: any) => {
+    if (!item || typeof item !== 'object') return;
+    if (item.type === 'status') {
       broadcastSSE({
         type: 'TIKTOK_LIVE_STATUS',
-        status: body.status || 'connected',
-        username: body.username || '',
-        roomId: body.roomId || '',
-        message: body.message || '',
+        status: item.status || 'connected',
+        username: item.username || '',
+        roomId: item.roomId || '',
+        message: item.message || '',
       });
-      res.json({ ok: true });
       return;
     }
     if (
-      body.type === 'chat' ||
-      body.type === 'comment' ||
-      body.type === 'gift' ||
-      body.type === 'like' ||
-      body.type === 'follow'
+      item.type === 'chat' ||
+      item.type === 'comment' ||
+      item.type === 'gift' ||
+      item.type === 'like' ||
+      item.type === 'follow'
     ) {
+      const orderFields = extractServerTikTokOrderFields(item);
       broadcastSSE({
         type: 'TIKTOK_LIVE_EVENT',
         event: {
-          ...body,
-          type: body.type === 'comment' ? 'chat' : body.type,
+          ...item,
+          ...orderFields,
+          type: item.type === 'comment' ? 'chat' : item.type,
         },
       });
     }
+  };
+
+  // Receive TikTok Live events (single or sequential FIFO batch) forwarded from user's local server.js
+  app.post('/api/tiktok-webhook', (req: Request, res: Response) => {
+    const body = req.body || {};
+    if (body.type === 'batch' && Array.isArray(body.events)) {
+      for (const ev of body.events) {
+        forwardWebhookSingleItem(ev);
+      }
+      res.json({ ok: true, count: body.events.length });
+      return;
+    }
+    forwardWebhookSingleItem(body);
     res.json({ ok: true });
   });
 
@@ -417,10 +494,13 @@ async function startServer() {
         const comment = extractTikTokComment(data);
         if (!comment) return;
         const avatarUrl = extractTikTokAvatar(data);
-        console.log(`💬 [TIKTOK CHAT] ${username}: ${comment}`);
+        const orderFields = extractServerTikTokOrderFields(data);
+        console.log(
+          `💬 [TIKTOK CHAT #${orderFields.serverSeq}${orderFields.tiktokMsgId ? ` msg:${orderFields.tiktokMsgId}` : ''}] ${username}: ${comment}`
+        );
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
-          event: { type: 'chat', username, avatarUrl, comment },
+          event: { type: 'chat', username, avatarUrl, comment, ...orderFields },
         });
       };
 
@@ -456,10 +536,19 @@ async function startServer() {
           'Quà tặng';
         const coins = Math.max(1, diamondCount * repeatCount);
         const avatarUrl = extractTikTokAvatar(data);
+        const orderFields = extractServerTikTokOrderFields(data);
         console.log(`🎁 [TIKTOK GIFT] ${username} tặng ${giftName} x${repeatCount} (${coins} xu)`);
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
-          event: { type: 'gift', username, avatarUrl, giftName, coins, repeatCount },
+          event: {
+            type: 'gift',
+            username,
+            avatarUrl,
+            giftName,
+            coins,
+            repeatCount,
+            ...orderFields,
+          },
         });
       };
 
@@ -470,20 +559,22 @@ async function startServer() {
           Number(data?.likeCount ?? data?.count ?? data?.unmergedLikeCount ?? 1) || 1
         );
         const avatarUrl = extractTikTokAvatar(data);
+        const orderFields = extractServerTikTokOrderFields(data);
         console.log(`❤️ [TIKTOK LIKE] ${username} thả ${likeCount} tim`);
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
-          event: { type: 'like', username, avatarUrl, likeCount },
+          event: { type: 'like', username, avatarUrl, likeCount, ...orderFields },
         });
       };
 
       const onFollow = (data: any) => {
         const username = extractTikTokUsername(data);
         const avatarUrl = extractTikTokAvatar(data);
+        const orderFields = extractServerTikTokOrderFields(data);
         console.log(`➕ [TIKTOK FOLLOW] ${username} đã follow`);
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
-          event: { type: 'follow', username, avatarUrl },
+          event: { type: 'follow', username, avatarUrl, ...orderFields },
         });
       };
 

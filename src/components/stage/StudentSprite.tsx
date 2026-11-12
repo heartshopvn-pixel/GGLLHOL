@@ -18,6 +18,7 @@ import {
   PilgrimData,
   PilgrimFrameIndex,
 } from '../../types/game';
+import { LATE_QUIZ_ANSWER_BUBBLE_TEXT } from '../../utils/commentOrder';
 import {
   Flower10BadgeIcon,
   GoldTrophyIcon,
@@ -423,10 +424,14 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
     Math.min(500, Math.round(chatBubbleMaxChars || 80))
   );
   const rawPrayer = (pilgrim.prayer || '').trim();
-  const displayPrayer =
-    rawPrayer.length > safeMaxBubbleChars
-      ? `${rawPrayer.slice(0, safeMaxBubbleChars)}…`
-      : rawPrayer;
+  const isLateErrorBubble =
+    pilgrim.chatBubbleColor === 'red' &&
+    rawPrayer === LATE_QUIZ_ANSWER_BUBBLE_TEXT;
+  const displayPrayer = isLateErrorBubble
+    ? rawPrayer
+    : rawPrayer.length > safeMaxBubbleChars
+    ? `${rawPrayer.slice(0, safeMaxBubbleChars)}…`
+    : rawPrayer;
 
   const safeBubbleFontSize = Math.max(
     7,
@@ -602,11 +607,17 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                 maxWidth: `${safeBubbleMaxW}px`,
                 minWidth: `${Math.min(72, safeBubbleMaxW)}px`,
               }}
-              className={`relative px-2.5 py-1.5 rounded-xl bg-[#fffdf7]/95 text-slate-950 font-semibold leading-snug text-center break-words ${
+              className={`relative px-2.5 py-1.5 rounded-xl bg-[#fffdf7]/95 ${
+                isLateErrorBubble
+                  ? 'text-red-600 font-bold'
+                  : 'text-slate-950 font-semibold'
+              } leading-snug text-center break-words ${
                 isPerformingGiftAction
                   ? 'border-2 border-yellow-400 ring-2 ring-amber-300/90 shadow-[0_0_16px_rgba(250,204,21,0.95)] z-50'
                   : isSpeakingBubble
                   ? 'border-2 border-pink-400 shadow-[0_0_16px_rgba(244,114,182,0.85)] z-50 scale-105'
+                  : isLateErrorBubble
+                  ? 'border border-red-400/90 shadow-md'
                   : pilgrim.isVip
                   ? 'border border-amber-400/90 shadow-lg'
                   : 'border border-sky-400/80 shadow-md'
@@ -629,6 +640,8 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
                     ? 'border-yellow-400'
                     : isSpeakingBubble
                     ? 'border-pink-400'
+                    : isLateErrorBubble
+                    ? 'border-red-400/90'
                     : pilgrim.isVip
                     ? 'border-amber-400/90'
                     : 'border-sky-400/80'
@@ -1632,6 +1645,7 @@ function areStudentSpritePropsEqual(
     a.prayer !== b.prayer ||
     a.chatBubbleUntil !== b.chatBubbleUntil ||
     a.chatBubbleKey !== b.chatBubbleKey ||
+    a.chatBubbleColor !== b.chatBubbleColor ||
     a.quizResultStatus !== b.quizResultStatus ||
     a.quizResultUntil !== b.quizResultUntil ||
     a.scoreCardUntil !== b.scoreCardUntil ||

@@ -5,6 +5,10 @@ import {
   QuizDurationCategory,
   QuizQuestionDurationByLevel,
 } from '../types/game';
+import {
+  normalizeQuizDecksFast,
+  sampleQuestionsFast,
+} from '../utils/quizDeckEngine';
 
 export const QUIZ_DECK_SCHEMA_VERSION = 2;
 
@@ -492,81 +496,24 @@ export function ensureTieredQuizDecksLoaded(
   level?: QuizDifficultyLevel;
   questions: EnglishQuizItem[];
 }> {
-  if (forceReset || !Array.isArray(existingDecks) || existingDecks.length === 0) {
-    return BUILT_IN_TIERED_QUIZ_DECKS.map((d) => ({
-      ...d,
-      questions: [...d.questions],
-    }));
-  }
-
-  const validDecks = existingDecks
-    .filter((d) => d && Array.isArray(d.questions) && d.questions.length > 0)
-    .map((d) => {
-      const norm = normalizeQuizDeckFileName(d.name);
-      const resolvedLevel = d.level || norm.level;
-      return {
-        ...d,
-        name: norm.deckName,
-        level: resolvedLevel,
-        questions: d.questions.map((q) => ({
-          ...q,
-          deckName: norm.deckName,
-          quizLevel: q.quizLevel || resolvedLevel,
-        })),
-      };
-    });
-
-  if (validDecks.length === 0) {
-    return BUILT_IN_TIERED_QUIZ_DECKS.map((d) => ({
-      ...d,
-      questions: [...d.questions],
-    }));
-  }
-
-  return validDecks;
-}
-
-function sampleRandomQuestions(
-  pool: EnglishQuizItem[],
-  count: number,
-  usedEnLower: Set<string>,
-  deckLabel: string,
-  quizLevel: QuizDifficultyLevel
-): EnglishQuizItem[] {
-  const available = pool.filter(
-    (q) => q && q.en && !usedEnLower.has(q.en.trim().toLowerCase())
+  return normalizeQuizDecksFast(
+    existingDecks,
+    BUILT_IN_TIERED_QUIZ_DECKS,
+    normalizeQuizDeckFileName,
+    forceReset
   );
-  const source = available.length >= count ? available : pool;
-  const copy = [...source];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = copy[i];
-    copy[i] = copy[j];
-    copy[j] = tmp;
-  }
-
-  const picked: EnglishQuizItem[] = [];
-  for (let i = 0; i < count && copy.length > 0; i++) {
-    const item = copy[i % copy.length];
-    usedEnLower.add(item.en.trim().toLowerCase());
-    picked.push({
-      ...item,
-      deckName: deckLabel,
-      quizLevel,
-    });
-  }
-  return picked;
 }
 
 /**
- * Xây dựng bộ đề thi 15 phút (10 câu) theo phân bố độ khó tăng dần:
- * - Câu 1..6 (6 câu đầu): Level Dễ (tienganh-de)
- * - Câu 7..9 (3 câu tiếp theo): Level Thường (tienganh-thuong)
- * - Câu 10 (1 câu cuối): Level Khó (tienganh-kho)
+ * Xây dựng bộ đề thi 15 phút (10 câu) theo phân bố độ khó tăng dần với độ phức tạp O(k) (Zero-Clone):
+ * - Câu 1..3 (3 câu đầu): Level Dễ (tienganh-de)
+ * - Câu 4..7 (4 câu tiếp theo): Level Thường (tienganh-thuong)
+ * - Câu 8..10 (3 câu cuối): Level Khó (tienganh-kho)
  */
 export function build15MinuteTieredRoundQuestions(
   cfg?: GameConfig,
-  excludeEnLower?: string
+  excludeEnLower?: string,
+  recentUsedEnLower?: ReadonlySet<string>
 ): EnglishQuizItem[] {
   const decks = ensureTieredQuizDecksLoaded(cfg?.quizDecks);
 
@@ -605,26 +552,29 @@ export function build15MinuteTieredRoundQuestions(
     usedEnLower.add(excludeEnLower.trim().toLowerCase());
   }
 
-  const tier1 = sampleRandomQuestions(
+  const tier1 = sampleQuestionsFast(
     poolEasy,
-    6,
-    usedEnLower,
-    deckEasy?.name || 'tienganh-de',
-    'easy'
-  );
-  const tier2 = sampleRandomQuestions(
-    poolNormal,
     3,
     usedEnLower,
-    deckNormal?.name || 'tienganh-thuong',
-    'normal'
+    deckEasy?.name || 'tienganh-de',
+    'easy',
+    recentUsedEnLower
   );
-  const tier3 = sampleRandomQuestions(
+  const tier2 = sampleQuestionsFast(
+    poolNormal,
+    4,
+    usedEnLower,
+    deckNormal?.name || 'tienganh-thuong',
+    'normal',
+    recentUsedEnLower
+  );
+  const tier3 = sampleQuestionsFast(
     poolHard,
-    1,
+    3,
     usedEnLower,
     deckHard?.name || 'tienganh-kho',
-    'hard'
+    'hard',
+    recentUsedEnLower
   );
 
   const combined = [...tier1, ...tier2, ...tier3];

@@ -347,7 +347,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10.5px] font-bold text-amber-200 focus:outline-none"
             >
               <option value="abbot">👩‍🏫 Cô Thảo (WASD)</option>
-              <option value="senior_novice">👨‍🏫 Thầy Tùng (WASD)</option>
+              <option value="senior_novice">👨‍🏫 Thầy Cá (WASD)</option>
               <option value="student">🎒 NPC Học Sinh (Chỉ Comment)</option>
             </select>
 
@@ -373,7 +373,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
           </div>
         </div>
 
-        {/* Chế độ điều khiển Cô Thảo hoặc Thầy Tùng (WASD) */}
+        {/* Chế độ điều khiển Cô Thảo hoặc Thầy Cá (WASD) */}
         {activeTargetRole !== 'student' ? (
           <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800/80">
             <span className="text-[10.5px] text-stone-400 leading-snug">
@@ -381,11 +381,11 @@ export const TabNpc: React.FC<TabNpcProps> = ({
                 ? `Nhấn W / A / S / D (hoặc mũi tên) để di chuyển ${
                     controlledNpcRole === 'abbot'
                       ? 'Cô Thảo'
-                      : 'Thầy Tùng'
+                      : 'Thầy Cá'
                   }.`
                 : activeTargetRole === 'abbot'
                 ? 'Tự động: Cô Thảo đi trong vùng GV, ưu tiên đứng bên phải lâu hơn.'
-                : 'Tự động: Thầy Tùng đi tuần tra ngẫu nhiên trong vùng Giám Thị.'}
+                : 'Tự động: Thầy Cá đi tuần tra ngẫu nhiên trong vùng Giám Thị.'}
             </span>
 
             {isControllingStaff && (

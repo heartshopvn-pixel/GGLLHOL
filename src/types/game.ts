@@ -27,6 +27,8 @@ export type ClassroomGiftEventId =
 export interface GiftModelScalesConfig {
   roseBouquet: number;
   deskCat: number;
+  deskTrophy?: number;
+  previewDeskTrophy?: boolean;
   snackBag: number;
   pcGamingDesk: number;
   runningPig: number;
@@ -317,6 +319,14 @@ export interface EnglishQuizItem {
   quizLevel?: QuizDifficultyLevel;
 }
 
+export interface TikTokOrderMeta {
+  tiktokMsgId?: string;
+  tiktokCreateTimeMs?: number;
+  serverSeq?: number;
+  arrivalSeq?: number;
+  orderTimestampMs?: number;
+}
+
 export interface ClassBoardQuizWinner {
   username: string;
   elapsedSec: number;
@@ -327,6 +337,11 @@ export interface ClassBoardQuizWinner {
   avatarColor?: string;
   pilgrimId?: number;
   isBot?: boolean;
+  tiktokMsgId?: string;
+  tiktokCreateTimeMs?: number;
+  serverSeq?: number;
+  arrivalSeq?: number;
+  orderTimestampMs?: number;
 }
 
 export type AnswerRevealSfxPreset =
@@ -509,6 +524,7 @@ export interface CustomAssetsConfig {
   // 6 Model hình ảnh sự kiện Quà Tặng Lớp Học (vẽ sẵn + cho phép upload thay thế)
   roseBouquetUrl?: string | null;
   deskCatUrl?: string | null;
+  deskTrophyUrl?: string | null;
   snackBagUrl?: string | null;
   pcGamingDeskUrl?: string | null;
   runningPigUrl?: string | null;
@@ -903,6 +919,7 @@ export interface PilgrimData {
   lotusBurstKey?: number;
   chatBubbleUntil?: number;
   chatBubbleKey?: number;
+  chatBubbleColor?: 'default' | 'red';
   woodenFishRippleUntil?: number;
   hasSatOnce?: boolean;
   pendingGiftCoins?: number;
@@ -923,6 +940,8 @@ export interface PilgrimData {
   hasDeskCat?: boolean;
   deskCatCount?: number;
   deskCatDropAt?: number;
+  hasDeskTrophy?: boolean;
+  deskTrophyDropAt?: number;
   hasDeskPig?: boolean;
   deskPigDropAt?: number;
   hasDeskSnack?: boolean;

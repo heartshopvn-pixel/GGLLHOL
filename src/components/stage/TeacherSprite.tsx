@@ -560,7 +560,7 @@ function areTeacherSpritePropsEqual(
     return false;
   }
 
-  // Khi Cô Thảo hoặc Thầy Tùng đang đứng yên (moveAxis === 'idle'): bỏ qua hoàn toàn việc re-render do animTime / pauseTimer tăng!
+  // Khi Cô Thảo hoặc Thầy Cá đang đứng yên (moveAxis === 'idle'): bỏ qua hoàn toàn việc re-render do animTime / pauseTimer tăng!
   if (b.moveAxis === 'idle') {
     return true;
   }

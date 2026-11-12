@@ -192,6 +192,7 @@ class TempleSoundService {
   private teacherLiveTokenSeq = 0;
   private teacherLiveActive = false;
   private teacherLiveCurrentText = '';
+  private teacherLiveCtx: AudioContext | null = null;
   private teacherLiveSourceNode: AudioBufferSourceNode | null = null;
   private teacherLiveGainNode: GainNode | null = null;
   private teacherLiveFallbackAudio: HTMLAudioElement | null = null;
@@ -248,6 +249,9 @@ class TempleSoundService {
           if (this.ctx && this.ctx.state === 'suspended') {
             void this.ctx.resume();
           }
+          if (this.teacherLiveCtx && this.teacherLiveCtx.state === 'suspended') {
+            void this.teacherLiveCtx.resume();
+          }
           if (this.bgmAudio && this.bgmAudio.paused && this.latestConfig?.bgmEnabled && !this.localTabMuted) {
             void this.bgmAudio.play().catch(() => {});
           }
@@ -270,10 +274,29 @@ class TempleSoundService {
       this.ctx = new AudioCtx();
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      void this.ctx.resume();
     }
   }
 
+  private initTeacherLiveCtx(): AudioContext | null {
+    if (!this.teacherLiveCtx) {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return null;
+      try {
+        // Kênh AudioContext 24kHz riêng biệt hoàn toàn cho Live Text-to-Voice để không bao giờ gây khựng kênh luồng chính
+        this.teacherLiveCtx = new AudioCtx({ sampleRate: 24000 });
+      } catch {
+        this.teacherLiveCtx = new AudioCtx();
+      }
+    }
+    if (this.teacherLiveCtx.state === 'suspended') {
+      void this.teacherLiveCtx.resume();
+    }
+    return this.teacherLiveCtx;
+  }
 
   private audioBlobCache = new Map<string, string>();
   private audioBlobMetaCache = new Map<
@@ -286,7 +309,7 @@ class TempleSoundService {
     }
   >();
   private inFlightPrefetches = new Map<string, Promise<string | null>>();
-  private readonly MAX_BLOB_CACHE = 45;
+  private readonly MAX_BLOB_CACHE = 90;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
 
   private ttsDiagnostic: TtsVoiceDiagnosticSnapshot = {
@@ -461,7 +484,11 @@ class TempleSoundService {
             const oldestKey = this.audioBlobCache.keys().next().value;
             if (oldestKey) {
               const oldBlobUrl = this.audioBlobCache.get(oldestKey);
-              if (oldBlobUrl && this.currentAudio?.src !== oldBlobUrl) {
+              if (
+                oldBlobUrl &&
+                this.currentAudio?.src !== oldBlobUrl &&
+                this.teacherLiveFallbackAudio?.src !== oldBlobUrl
+              ) {
                 try {
                   URL.revokeObjectURL(oldBlobUrl);
                 } catch {
@@ -505,7 +532,7 @@ class TempleSoundService {
   private buildEffectiveItemConfig(
     config: GameConfig,
     isHostLive?: boolean,
-    _speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
+    speakerRole?: 'abbot' | 'senior_novice' | 'junior_novice' | 'none'
   ): GameConfig {
     if (isHostLive) {
       const resolvedHostEngine = this.normalizeEngineChoice(
@@ -522,6 +549,21 @@ class TempleSoundService {
         ttsPitch: config.hostTtsPitch ?? config.ttsPitch ?? 0.88,
         ttsVolume: config.hostTtsVolume ?? config.ttsVolume ?? 1.0,
         ttsReverb: 0,
+      };
+    }
+
+    // Thoại của Thầy Cá (senior_novice, ví dụ Luồng 4 Sự Kiện Zombie): bắt buộc dùng giọng Nam Google Warm trầm ấm
+    if (speakerRole === 'senior_novice') {
+      return {
+        ...config,
+        ttsEngine: 'google_stream',
+        nodeVoice: 'google-vi-warm',
+        ttsRate: config.teacherLiveRate ?? config.ttsRate ?? 1.05,
+        ttsPitch: Math.max(
+          0.68,
+          Math.min(0.86, config.teacherLivePitch ?? 0.84)
+        ),
+        ttsVolume: config.ttsVolume ?? 1.0,
       };
     }
 
@@ -556,7 +598,7 @@ class TempleSoundService {
 
   private prefetchNextQueueItems(config: GameConfig) {
     if (this.localTabMuted || this.remoteSlaveMode) return;
-    if (this.inFlightPrefetches.size >= 2) return;
+    if (this.inFlightPrefetches.size >= 4) return;
     const nextItem = this.ttsQueue[0];
     if (!nextItem) return;
     const streamUrl = this.buildStreamUrlForEngine(
@@ -818,7 +860,8 @@ class TempleSoundService {
     }
 
     // Cập nhật tức thì âm lượng Giọng Thầy Giáo độc lập nếu đang phát song song
-    if (this.teacherLiveGainNode && this.ctx) {
+    const activeTeacherCtx = this.teacherLiveCtx || this.ctx;
+    if (this.teacherLiveGainNode && activeTeacherCtx) {
       try {
         const nextTeacherVol = Math.max(
           0,
@@ -826,7 +869,7 @@ class TempleSoundService {
         );
         this.teacherLiveGainNode.gain.setValueAtTime(
           nextTeacherVol,
-          this.ctx.currentTime
+          activeTeacherCtx.currentTime
         );
       } catch {
         // Ignore
@@ -878,12 +921,15 @@ class TempleSoundService {
       clearTimeout(this.mutedSimTimer);
       this.mutedSimTimer = null;
     }
+    const hadFlowUtterance = Boolean(this.currentUtterance);
     if (this.currentUtterance) {
       this.currentUtterance.onend = null;
       this.currentUtterance.onerror = null;
       this.currentUtterance = null;
     }
     if (
+      hadFlowUtterance &&
+      !this.teacherLiveUtterance &&
       'speechSynthesis' in window &&
       (window.speechSynthesis.speaking || window.speechSynthesis.pending)
     ) {
@@ -928,7 +974,8 @@ class TempleSoundService {
     volume: number,
     token: number,
     onStarted: (durationSec: number) => void,
-    onEnded: () => void
+    onEnded: () => void,
+    maleWarmOptions?: { desiredRate: number; desiredPitch: number }
   ): Promise<boolean> {
     try {
       this.initCtx();
@@ -954,16 +1001,46 @@ class TempleSoundService {
 
       this.stopCurrentTtsBufferSourceOnly();
       const source = this.ctx.createBufferSource();
-      source.buffer = decoded;
-      source.playbackRate.value = Math.max(0.5, Math.min(2.0, effectiveRate || 1));
+      let playbackRateForSource = Math.max(0.5, Math.min(2.0, effectiveRate || 1));
+      let bufferToPlay = decoded;
+      let warmthFilter: BiquadFilterNode | null = null;
+      let clarityFilter: BiquadFilterNode | null = null;
+
+      if (maleWarmOptions) {
+        const pitch = Math.max(0.68, Math.min(0.9, maleWarmOptions.desiredPitch));
+        const rate = Math.max(0.6, Math.min(2.0, maleWarmOptions.desiredRate));
+        const tempo = rate / pitch;
+        bufferToPlay = this.wsolaTimeStretchAudioBuffer(this.ctx, decoded, tempo);
+        playbackRateForSource = pitch;
+
+        warmthFilter = this.ctx.createBiquadFilter();
+        warmthFilter.type = 'lowshelf';
+        warmthFilter.frequency.setValueAtTime(175, this.ctx.currentTime);
+        warmthFilter.gain.setValueAtTime(2.5, this.ctx.currentTime);
+
+        clarityFilter = this.ctx.createBiquadFilter();
+        clarityFilter.type = 'peaking';
+        clarityFilter.frequency.setValueAtTime(2700, this.ctx.currentTime);
+        clarityFilter.Q.setValueAtTime(1.1, this.ctx.currentTime);
+        clarityFilter.gain.setValueAtTime(1.8, this.ctx.currentTime);
+      }
+
+      source.buffer = bufferToPlay;
+      source.playbackRate.value = playbackRateForSource;
 
       const gain = this.ctx.createGain();
       gain.gain.value = Math.max(0, Math.min(2.0, volume ?? 1));
-      source.connect(gain);
+      if (warmthFilter && clarityFilter) {
+        source.connect(warmthFilter);
+        warmthFilter.connect(clarityFilter);
+        clarityFilter.connect(gain);
+      } else {
+        source.connect(gain);
+      }
       gain.connect(this.ctx.destination);
 
       this.currentTtsBufferSource = source;
-      onStarted(decoded.duration);
+      onStarted(bufferToPlay.duration / Math.max(0.4, playbackRateForSource));
 
       source.onended = () => {
         if (this.currentTtsBufferSource === source) {
@@ -971,6 +1048,8 @@ class TempleSoundService {
         }
         try {
           source.disconnect();
+          warmthFilter?.disconnect();
+          clarityFilter?.disconnect();
           gain.disconnect();
         } catch {
           // Ignore
@@ -2216,7 +2295,7 @@ class TempleSoundService {
       this.teacherLiveUtterance.onend = null;
       this.teacherLiveUtterance.onerror = null;
       this.teacherLiveUtterance = null;
-      if ('speechSynthesis' in window) {
+      if (!this.currentUtterance && 'speechSynthesis' in window) {
         try {
           window.speechSynthesis.cancel();
         } catch {
@@ -2265,11 +2344,11 @@ class TempleSoundService {
       }
     }
 
-    let winSize = Math.round(sr * 0.03);
+    let winSize = Math.round(sr * 0.028);
     if (winSize % 2 !== 0) winSize += 1;
     const hopOut = winSize >> 1; // 50% overlap -> tổng hàm cửa sổ Hann luôn bằng 1.0 tuyệt đối
     const hopInNominal = hopOut * safeTempo;
-    const searchRadius = Math.round(sr * 0.009);
+    const searchRadius = Math.round(sr * 0.0055);
 
     const outLen = Math.max(winSize + hopOut, Math.ceil(inLen / safeTempo) + winSize);
     const output = new Float32Array(outLen);
@@ -2299,8 +2378,8 @@ class TempleSoundService {
         const minCand = Math.max(0, targetInPos - searchRadius);
         const maxCand = Math.min(inLen - winSize - 1, targetInPos + searchRadius);
         let bestScore = -1e30;
-        const stepCand = sr >= 40000 ? 4 : 2;
-        const stepCorr = sr >= 40000 ? 3 : 2;
+        const stepCand = sr >= 40000 ? 6 : 4;
+        const stepCorr = sr >= 40000 ? 6 : 4;
 
         for (let cand = minCand; cand <= maxCand; cand += stepCand) {
           let dot = 0;
@@ -2337,8 +2416,8 @@ class TempleSoundService {
   /**
    * Phát Live Text-to-Voice (Giọng Thầy Giáo) trên kênh âm thanh ĐỘC LẬP 100%:
    * - Chạy song song cùng lúc với tiếng Cô Thảo giảng bài, học sinh trả lời, nhạc nền và mọi SFX khác.
+   * - Tuyệt đối KHÔNG ngắt, KHÔNG cancel và KHÔNG đụng tới tiến trình phát của các luồng trong game.
    * - KHÔNG xếp vào hàng chờ giọng nói (ttsQueue), KHÔNG làm trễ luồng tiết học.
-   * - Hỗ trợ chỉnh đầy đủ Âm lượng (0% - 200%), Tốc độ đọc (0.5x - 2.0x) và Độ trầm giọng Thầy (Pitch).
    */
   public speakTeacherLiveIndependent(
     rawText: string,
@@ -2357,15 +2436,6 @@ class TempleSoundService {
 
     const chunks = this.splitLongLessonText(cleaned, 115);
     if (chunks.length === 0) return false;
-
-    // Nếu đang có câu khác phát trên kênh chính thì ngắt gọn để tuyệt đối không bao giờ bị 2 giọng đọc đè chồng lên nhau khi Live
-    if (this.isSpeaking) {
-      const interrupted = this.activeEventItem;
-      this.stopCurrentUtteranceOnly();
-      if (interrupted) {
-        this.notifyItemFinished(interrupted);
-      }
-    }
 
     const token = ++this.teacherLiveTokenSeq;
     this.stopTeacherLiveAudioNodesOnly();
@@ -2447,7 +2517,10 @@ class TempleSoundService {
         };
         utter.onend = finishWebLive;
         utter.onerror = finishWebLive;
-        window.speechSynthesis.cancel();
+        // Tuyệt đối không gọi speechSynthesis.cancel() nếu luồng game đang đọc bằng Web Speech để không bao giờ cắt tiếng luồng!
+        if (!this.currentUtterance) {
+          window.speechSynthesis.cancel();
+        }
         window.speechSynthesis.speak(utter);
         return true;
       } catch {
@@ -2456,7 +2529,7 @@ class TempleSoundService {
       }
     }
 
-    // Lựa chọn 2: Google Warm (Không fallback — lỗi mạng tự skip vế đó)
+    // Lựa chọn 2: Google Warm phát trên AudioContext 24kHz độc lập 100% (Song song mượt tuyệt đối với mọi luồng!)
     const buildGoogleWarmUrl = (chunkText: string): string => {
       const shortChunk = chunkText.slice(0, 195);
       return `/api/tts?lang=vi&voice=google-vi-warm&text=${encodeURIComponent(
@@ -2493,13 +2566,24 @@ class TempleSoundService {
       }
 
       try {
-        this.initCtx();
-        if (this.ctx) {
+        const liveCtx = this.initTeacherLiveCtx();
+        if (liveCtx) {
+          if (liveCtx.state === 'suspended') {
+            try {
+              await liveCtx.resume();
+            } catch {
+              // Ignore
+            }
+          }
           const res = await fetch(blobUrl);
           const arrBuf = await res.arrayBuffer();
           if (token !== this.teacherLiveTokenSeq) return;
 
-          const decoded = await this.ctx.decodeAudioData(arrBuf.slice(0));
+          const decoded = await liveCtx.decodeAudioData(arrBuf.slice(0));
+          if (token !== this.teacherLiveTokenSeq) return;
+
+          // Nhường 1 nhịp microtask trước khi xử lý buffer để luồng âm thanh/camera không bao giờ khựng dù chỉ 1ms
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
           if (token !== this.teacherLiveTokenSeq) return;
 
           const effectivePitch = desiredPitch;
@@ -2526,36 +2610,36 @@ class TempleSoundService {
 
           const tempo = liveRate / effectivePitch;
           const processedBuf = this.wsolaTimeStretchAudioBuffer(
-            this.ctx,
+            liveCtx,
             decoded,
             tempo
           );
 
-          const source = this.ctx.createBufferSource();
+          const source = liveCtx.createBufferSource();
           source.buffer = processedBuf;
           source.playbackRate.setValueAtTime(
             effectivePitch,
-            this.ctx.currentTime
+            liveCtx.currentTime
           );
 
-          const warmthFilter = this.ctx.createBiquadFilter();
+          const warmthFilter = liveCtx.createBiquadFilter();
           warmthFilter.type = 'lowshelf';
-          warmthFilter.frequency.setValueAtTime(175, this.ctx.currentTime);
-          warmthFilter.gain.setValueAtTime(2.5, this.ctx.currentTime);
+          warmthFilter.frequency.setValueAtTime(175, liveCtx.currentTime);
+          warmthFilter.gain.setValueAtTime(2.5, liveCtx.currentTime);
 
-          const clarityFilter = this.ctx.createBiquadFilter();
+          const clarityFilter = liveCtx.createBiquadFilter();
           clarityFilter.type = 'peaking';
-          clarityFilter.frequency.setValueAtTime(2700, this.ctx.currentTime);
-          clarityFilter.Q.setValueAtTime(1.1, this.ctx.currentTime);
-          clarityFilter.gain.setValueAtTime(1.8, this.ctx.currentTime);
+          clarityFilter.frequency.setValueAtTime(2700, liveCtx.currentTime);
+          clarityFilter.Q.setValueAtTime(1.1, liveCtx.currentTime);
+          clarityFilter.gain.setValueAtTime(1.8, liveCtx.currentTime);
 
-          const gainNode = this.ctx.createGain();
-          gainNode.gain.setValueAtTime(liveVol, this.ctx.currentTime);
+          const gainNode = liveCtx.createGain();
+          gainNode.gain.setValueAtTime(liveVol, liveCtx.currentTime);
 
           source.connect(warmthFilter);
           warmthFilter.connect(clarityFilter);
           clarityFilter.connect(gainNode);
-          gainNode.connect(this.ctx.destination);
+          gainNode.connect(liveCtx.destination);
 
           this.teacherLiveSourceNode = source;
           this.teacherLiveGainNode = gainNode;
@@ -2579,7 +2663,7 @@ class TempleSoundService {
           return;
         }
       } catch {
-        // Nếu WebAudio chưa sẵn sàng, phát trực tiếp cùng blob Google Warm qua HTMLAudioElement; lỗi thì skip
+        // Nếu WebAudio chưa sẵn sàng, phát trực tiếp cùng blob Google Warm qua HTMLAudioElement độc lập; lỗi thì skip
       }
 
       if (token !== this.teacherLiveTokenSeq) return;
@@ -3199,6 +3283,7 @@ class TempleSoundService {
       nextItem?.meta?.speakerRole
     );
 
+    const hadPrevFlowUtterance = Boolean(this.currentUtterance);
     if (this.currentUtterance) {
       this.currentUtterance.onend = null;
       this.currentUtterance.onerror = null;
@@ -3211,7 +3296,9 @@ class TempleSoundService {
       itemLang === 'en' || effectivePlaybackConfig.ttsEngine === 'web_speech';
 
     if (
+      hadPrevFlowUtterance &&
       !usesWebSpeech &&
+      !this.teacherLiveUtterance &&
       'speechSynthesis' in window &&
       (window.speechSynthesis.speaking || window.speechSynthesis.pending)
     ) {
@@ -3323,7 +3410,15 @@ class TempleSoundService {
     }
 
     // 3. Tiếng Việt — Lựa chọn 2: Google Warm (không fallback, lỗi tự skip)
-    this.playViaGoogleStream(nextText, effectivePlaybackConfig, token, finish);
+    const isMaleTeacherRole =
+      !isDharmaLine && nextItem?.meta?.speakerRole === 'senior_novice';
+    this.playViaGoogleStream(
+      nextText,
+      effectivePlaybackConfig,
+      token,
+      finish,
+      isMaleTeacherRole
+    );
   }
 
   private applyAudioPlaybackParams(
@@ -3374,7 +3469,8 @@ class TempleSoundService {
     text: string,
     config: GameConfig,
     token: number,
-    onDone: () => void
+    onDone: () => void,
+    forceMaleWarmFilter = false
   ) {
     const shortText = text.trim().slice(0, 195);
     const proxyUrl = `/api/tts?lang=vi&voice=google-vi-warm&text=${encodeURIComponent(
@@ -3481,129 +3577,186 @@ class TempleSoundService {
           return;
         }
         const meta = this.audioBlobMetaCache.get(proxyUrl);
-        const audio = new Audio();
-        audio.crossOrigin = 'anonymous';
-        activeAudio = audio;
-        this.currentAudio = audio;
-        const { effectiveRate, preservePitch } =
-          this.computeStreamPlaybackRateAndPitch('google-vi-warm', config);
+        const startViaHtmlAudio = () => {
+          const audio = new Audio();
+          audio.crossOrigin = 'anonymous';
+          activeAudio = audio;
+          this.currentAudio = audio;
+          const { effectiveRate, preservePitch } =
+            this.computeStreamPlaybackRateAndPitch('google-vi-warm', config);
 
-        const refreshPlaybackWatchdogFromDuration = () => {
-          if (
-            Number.isFinite(audio.duration) &&
-            audio.duration > 0 &&
-            audio.duration < 120
-          ) {
-            if (playbackWatchdog) clearTimeout(playbackWatchdog);
-            const exactMs =
-              Math.ceil(
-                (audio.duration / Math.max(0.5, effectiveRate)) * 1000
-              ) + 1500;
-            playbackWatchdog = setTimeout(() => {
-              if (settled || token !== this.speechTokenSeq) return;
-              settled = true;
-              clearStreamTimers();
-              cleanupAudio();
-              onDone();
-            }, Math.max(2200, exactMs));
-          }
-        };
-
-        audio.src = blobUrl;
-        this.applyAudioPlaybackParams(
-          audio,
-          effectiveRate,
-          preservePitch,
-          config.ttsVolume
-        );
-
-        audio.onloadedmetadata = () => {
-          this.applyAudioPlaybackParams(
-            audio,
-            effectiveRate,
-            preservePitch,
-            config.ttsVolume
-          );
-          refreshPlaybackWatchdogFromDuration();
-        };
-
-        audio.onplaying = () => {
-          hasStartedPlaying = true;
-          clearTimeout(lagTimeout);
-          this.applyAudioPlaybackParams(
-            audio,
-            effectiveRate,
-            preservePitch,
-            config.ttsVolume
-          );
-          refreshPlaybackWatchdogFromDuration();
-          this.prefetchNextQueueItems(this.latestConfig || config);
-
-          const isRamCache = meta?.source === 'ram-cache';
-          this.ttsDiagnostic = {
-            ...this.ttsDiagnostic,
-            configuredEngineLabel: this.getConfiguredEngineLabel(config),
-            health: 'healthy',
-            activeServerLabel: isRamCache
-              ? 'Google Warm (RAM Cache 0ms)'
-              : 'Google Warm (Trực tiếp)',
-            statusHeadline: 'Ổn định • Đang phát giọng Google Warm',
-            statusDetail: isRamCache
-              ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
-              : `Phản hồi Google Warm: ${meta?.latencyMs ?? 0}ms`,
-            lastLatencyMs: meta?.latencyMs ?? 0,
-            lastUpdatedAt: Date.now(),
+          const refreshPlaybackWatchdogFromDuration = () => {
+            if (
+              Number.isFinite(audio.duration) &&
+              audio.duration > 0 &&
+              audio.duration < 120
+            ) {
+              if (playbackWatchdog) clearTimeout(playbackWatchdog);
+              const exactMs =
+                Math.ceil(
+                  (audio.duration / Math.max(0.5, effectiveRate)) * 1000
+                ) + 1500;
+              playbackWatchdog = setTimeout(() => {
+                if (settled || token !== this.speechTokenSeq) return;
+                settled = true;
+                clearStreamTimers();
+                cleanupAudio();
+                onDone();
+              }, Math.max(2200, exactMs));
+            }
           };
-          this.emitEventQueue();
+
+          audio.src = blobUrl;
+          this.applyAudioPlaybackParams(
+            audio,
+            effectiveRate,
+            preservePitch,
+            config.ttsVolume
+          );
+
+          audio.onloadedmetadata = () => {
+            this.applyAudioPlaybackParams(
+              audio,
+              effectiveRate,
+              preservePitch,
+              config.ttsVolume
+            );
+            refreshPlaybackWatchdogFromDuration();
+          };
+
+          audio.onplaying = () => {
+            hasStartedPlaying = true;
+            clearTimeout(lagTimeout);
+            this.applyAudioPlaybackParams(
+              audio,
+              effectiveRate,
+              preservePitch,
+              config.ttsVolume
+            );
+            refreshPlaybackWatchdogFromDuration();
+            this.prefetchNextQueueItems(this.latestConfig || config);
+
+            const isRamCache = meta?.source === 'ram-cache';
+            this.ttsDiagnostic = {
+              ...this.ttsDiagnostic,
+              configuredEngineLabel: this.getConfiguredEngineLabel(config),
+              health: 'healthy',
+              activeServerLabel: isRamCache
+                ? 'Google Warm (RAM Cache 0ms)'
+                : 'Google Warm (Trực tiếp)',
+              statusHeadline: 'Ổn định • Đang phát giọng Google Warm',
+              statusDetail: isRamCache
+                ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
+                : `Phản hồi Google Warm: ${meta?.latencyMs ?? 0}ms`,
+              lastLatencyMs: meta?.latencyMs ?? 0,
+              lastUpdatedAt: Date.now(),
+            };
+            this.emitEventQueue();
+          };
+
+          audio.onended = () => {
+            if (settled || token !== this.speechTokenSeq) return;
+            settled = true;
+            clearStreamTimers();
+            cleanupAudio();
+            onDone();
+          };
+
+          audio.onerror = () => {
+            skipOnce('File âm thanh Google Warm lỗi giải mã ➔ Đã Skip');
+          };
+
+          audio.play().catch(() => {
+            cleanupAudio();
+            void this.tryPlayBlobViaWebAudio(
+              blobUrl,
+              effectiveRate,
+              config.ttsVolume,
+              token,
+              (durSec) => {
+                hasStartedPlaying = true;
+                clearTimeout(lagTimeout);
+                if (playbackWatchdog) clearTimeout(playbackWatchdog);
+                const exactMs = Math.ceil(durSec * 1000) + 1500;
+                playbackWatchdog = setTimeout(() => {
+                  if (settled || token !== this.speechTokenSeq) return;
+                  settled = true;
+                  clearStreamTimers();
+                  this.stopCurrentTtsBufferSourceOnly();
+                  onDone();
+                }, Math.max(2200, exactMs));
+                this.prefetchNextQueueItems(this.latestConfig || config);
+              },
+              () => {
+                if (settled || token !== this.speechTokenSeq) return;
+                settled = true;
+                clearStreamTimers();
+                onDone();
+              }
+            ).then((playedViaCtx) => {
+              if (!playedViaCtx && !settled && token === this.speechTokenSeq) {
+                skipOnce('Trình duyệt chặn phát âm thanh Google Warm ➔ Đã Skip');
+              }
+            });
+          });
         };
 
-        audio.onended = () => {
-          if (settled || token !== this.speechTokenSeq) return;
-          settled = true;
-          clearStreamTimers();
-          cleanupAudio();
-          onDone();
-        };
-
-        audio.onerror = () => {
-          skipOnce('File âm thanh Google Warm lỗi giải mã ➔ Đã Skip');
-        };
-
-        audio.play().catch(() => {
-          cleanupAudio();
-          // Giải mã cùng MP3 Google Warm qua WebAudio (nếu trình duyệt chặn HTMLAudioElement), thất bại thì Skip luôn!
+        if (forceMaleWarmFilter) {
           void this.tryPlayBlobViaWebAudio(
             blobUrl,
-            effectiveRate,
+            config.ttsRate || 1.05,
             config.ttsVolume,
             token,
-            (durSec) => {
+            (actualPlaySec) => {
               hasStartedPlaying = true;
               clearTimeout(lagTimeout);
               if (playbackWatchdog) clearTimeout(playbackWatchdog);
-              const exactMs =
-                Math.ceil((durSec / Math.max(0.5, effectiveRate)) * 1000) + 1500;
+              const exactMs = Math.ceil(actualPlaySec * 1000) + 1200;
               playbackWatchdog = setTimeout(() => {
                 if (settled || token !== this.speechTokenSeq) return;
                 settled = true;
                 clearStreamTimers();
                 this.stopCurrentTtsBufferSourceOnly();
                 onDone();
-              }, Math.max(2200, exactMs));
+              }, Math.max(2000, exactMs));
               this.prefetchNextQueueItems(this.latestConfig || config);
+
+              const isRamCache = meta?.source === 'ram-cache';
+              this.ttsDiagnostic = {
+                ...this.ttsDiagnostic,
+                configuredEngineLabel: 'Google Warm (Giọng Nam Thầy Cá)',
+                health: 'healthy',
+                activeServerLabel: isRamCache
+                  ? 'Google Warm Nam (RAM Cache 0ms)'
+                  : 'Google Warm Nam (Trực tiếp)',
+                statusHeadline: 'Ổn định • Đang phát giọng Nam Google Warm (Thầy Cá)',
+                statusDetail: isRamCache
+                  ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
+                  : `Phản hồi Google Warm: ${meta?.latencyMs ?? 0}ms`,
+                lastLatencyMs: meta?.latencyMs ?? 0,
+                lastUpdatedAt: Date.now(),
+              };
+              this.emitEventQueue();
             },
             () => {
               if (settled || token !== this.speechTokenSeq) return;
               settled = true;
               clearStreamTimers();
               onDone();
+            },
+            {
+              desiredRate: config.ttsRate || 1.05,
+              desiredPitch: config.ttsPitch ?? 0.84,
             }
-          ).then((playedViaCtx) => {
-            if (!playedViaCtx && !settled && token === this.speechTokenSeq) {
-              skipOnce('Trình duyệt chặn phát âm thanh Google Warm ➔ Đã Skip');
+          ).then((playedMaleCtx) => {
+            if (!playedMaleCtx && !settled && token === this.speechTokenSeq) {
+              startViaHtmlAudio();
             }
           });
-        });
+          return;
+        }
+
+        startViaHtmlAudio();
       }
     );
   }
@@ -3694,27 +3847,34 @@ class TempleSoundService {
         Math.ceil(((wordCount * 580 + 3200) / Math.max(0.5, resolvedRate)))
       )
     );
-    const safetyWatchdog = setTimeout(() => {
-      if (!settled && token === this.speechTokenSeq) {
-        this.recordTtsDiagnosticIncident(
-          {
-            type: 'disconnected',
-            fromSource: isEnglish
-              ? 'Web Speech Nước Ngoài (EN)'
-              : 'Web Speech Tiếng Việt',
-            toSource: 'Skip Quá Hạn',
-            reason: `Web Speech treo quá ${(maxExpectedMs / 1000).toFixed(1)}s ➔ Tự động Skip`,
-            textSample: text.slice(0, 48),
-          },
-          {
-            health: 'disconnected',
-            activeServerLabel: 'Web Speech (Đã tự Skip treo)',
-            statusHeadline: '⏭️ Web Speech bị treo ➔ Đã tự động Skip',
-          }
-        );
-      }
-      settleOnce();
-    }, maxExpectedMs);
+    let safetyWatchdog: ReturnType<typeof setTimeout>;
+    const armWatchdog = (ms: number) => {
+      clearTimeout(safetyWatchdog);
+      safetyWatchdog = setTimeout(() => {
+        if (!settled && token === this.speechTokenSeq) {
+          this.recordTtsDiagnosticIncident(
+            {
+              type: 'disconnected',
+              fromSource: isEnglish
+                ? 'Web Speech Nước Ngoài (EN)'
+                : 'Web Speech Tiếng Việt',
+              toSource: 'Skip Quá Hạn',
+              reason: `Web Speech treo quá ${(ms / 1000).toFixed(1)}s ➔ Tự động Skip`,
+              textSample: text.slice(0, 48),
+            },
+            {
+              health: 'disconnected',
+              activeServerLabel: 'Web Speech (Đã tự Skip treo)',
+              statusHeadline: '⏭️ Web Speech bị treo ➔ Đã tự động Skip',
+            }
+          );
+        }
+        settleOnce();
+      }, ms);
+    };
+    armWatchdog(
+      this.teacherLiveUtterance ? Math.max(28000, maxExpectedMs) : maxExpectedMs
+    );
 
     const startSpeakingUtterance = (retriedVoices = false) => {
       if (settled || token !== this.speechTokenSeq) return;
@@ -3797,6 +3957,11 @@ class TempleSoundService {
         };
         this.emitEventQueue();
 
+        utter.onstart = () => {
+          if (!settled && token === this.speechTokenSeq) {
+            armWatchdog(maxExpectedMs);
+          }
+        };
         utter.onend = settleOnce;
         utter.onerror = (ev) => {
           if (ev.error === 'interrupted' || ev.error === 'canceled') {
@@ -3815,7 +3980,8 @@ class TempleSoundService {
 
     try {
       const needCancel =
-        window.speechSynthesis.speaking || window.speechSynthesis.pending;
+        !this.teacherLiveUtterance &&
+        (window.speechSynthesis.speaking || window.speechSynthesis.pending);
       if (needCancel) {
         window.speechSynthesis.cancel();
         cancelDelayTimer = setTimeout(() => startSpeakingUtterance(false), 45);

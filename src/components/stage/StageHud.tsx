@@ -651,6 +651,16 @@ const StageHudInner: React.FC<StageHudProps> = ({
       }
     }
 
+    const winnerRankByKey = new Map<string, number>();
+    classWinners.forEach((w, idx) => {
+      if (w.username) {
+        const key = w.username.trim().toLowerCase();
+        if (!winnerRankByKey.has(key)) {
+          winnerRankByKey.set(key, idx);
+        }
+      }
+    });
+
     // Đảm bảo học sinh trong lớp vừa trả lời đúng (classWinners) có đầy đủ thông tin điểm/avatar
     for (const w of classWinners) {
       if (!w.username) continue;
@@ -665,7 +675,15 @@ const StageHudInner: React.FC<StageHudProps> = ({
       }
     }
 
-    return Array.from(map.values()).sort((a, b) => b.points - a.points);
+    return Array.from(map.values()).sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      const rA = winnerRankByKey.get(a.username.trim().toLowerCase());
+      const rB = winnerRankByKey.get(b.username.trim().toLowerCase());
+      if (rA !== undefined && rB !== undefined) return rA - rB;
+      if (rA !== undefined) return -1;
+      if (rB !== undefined) return 1;
+      return 0;
+    });
   }, [lotusDonors, pilgrims, classWinners]);
 
   // Ở Luồng 6 (Bảng Xếp Hạng Trong Lớp): giữ cố định danh sách 10 bạn đầu tiên (Rank 1 - Rank 10) kéo dài cho đến hết luồng, không load thêm trang khác

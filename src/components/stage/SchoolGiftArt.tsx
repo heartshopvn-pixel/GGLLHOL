@@ -188,6 +188,114 @@ export const RoseBouquetModel: React.FC<{
 };
 
 /**
+ * Model Cúp Vàng Danh Giá Đặt Trên Bàn Học (Khi đạt Top 1, 2, 3 — cùng kích thước đồng nhất, đặt tại vị trí con mèo)
+ */
+export const DeskTrophyModel: React.FC<{
+  customUrl?: string | null;
+  scale?: number;
+  className?: string;
+}> = ({ customUrl, scale = 1, className = 'w-7 h-7' }) => {
+  const s = Math.max(0.3, Math.min(3, scale || 1));
+  return (
+    <div
+      className={`inline-flex items-center justify-center select-none pointer-events-none ${className}`}
+      style={{ transform: `scale(${s})` }}
+    >
+      {customUrl ? (
+        <img
+          src={customUrl}
+          alt="Cúp trên bàn"
+          className="w-full h-full object-contain drop-shadow-[0_2px_4px_rgba(0,0,0,0.55)]"
+        />
+      ) : (
+        <svg viewBox="0 0 44 46" className="w-full h-full overflow-visible">
+          {/* Bóng đổ trên mặt bàn */}
+          <ellipse cx="22" cy="41.5" rx="12" ry="3.2" fill="rgba(0,0,0,0.32)" />
+          {/* Hai quai cúp vàng uốn cong 2 bên */}
+          <path
+            d="M12 11H7.5C5.8 11 4.5 12.4 4.8 14.1C5.5 18.8 8.8 22.2 13.5 22.8"
+            stroke="#FACC15"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            fill="none"
+          />
+          <path
+            d="M32 11H36.5C38.2 11 39.5 12.4 39.2 14.1C38.5 18.8 35.2 22.2 30.5 22.8"
+            stroke="#EAB308"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            fill="none"
+          />
+          {/* Đế cúp 2 tầng vững chãi */}
+          <rect
+            x="13"
+            y="36.5"
+            width="18"
+            height="5"
+            rx="2"
+            fill="#B45309"
+            stroke="#451A03"
+            strokeWidth="1.5"
+          />
+          <rect
+            x="16"
+            y="32.5"
+            width="12"
+            height="4.5"
+            rx="1.5"
+            fill="#F59E0B"
+            stroke="#78350F"
+            strokeWidth="1.3"
+          />
+          {/* Chân trụ cúp */}
+          <path
+            d="M19.5 26.5H24.5L25.5 33H18.5L19.5 26.5Z"
+            fill="#FACC15"
+            stroke="#78350F"
+            strokeWidth="1.3"
+          />
+          {/* Bầu cúp vàng ánh kim */}
+          <path
+            d="M11.5 7.5H32.5L30.8 18.5C30 23.8 26.4 27.5 22 27.5C17.6 27.5 14 23.8 13.2 18.5L11.5 7.5Z"
+            fill="#FDE047"
+            stroke="#78350F"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          {/* Miệng cúp sáng bóng */}
+          <rect
+            x="10.5"
+            y="5.5"
+            width="23"
+            height="3.5"
+            rx="1.75"
+            fill="#FEF9C3"
+            stroke="#78350F"
+            strokeWidth="1.3"
+          />
+          {/* Vệt phản quang dọc thân cúp */}
+          <path
+            d="M15.5 10.5L16.6 18.5C17 20.8 18.2 22.5 19.8 23.4"
+            stroke="#FEFCE8"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            fill="none"
+          />
+          {/* Ngôi sao vô địch chính giữa */}
+          <polygon
+            points="22,11.5 23.6,14.9 27.3,15.4 24.6,18 25.3,21.6 22,19.9 18.7,21.6 19.4,18 16.7,15.4 20.4,14.9"
+            fill="#FFFBEB"
+            stroke="#B45309"
+            strokeWidth="0.9"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </div>
+  );
+};
+
+/**
  * 2. Model Con Mèo Nằm Trên Bàn Học (Nuôi mèo)
  */
 export const DeskCatModel: React.FC<{

@@ -17,6 +17,7 @@ import {
   ZombieProjectileScalesConfig,
 } from '../types/game';
 import { BUILT_IN_TIERED_QUIZ_DECKS } from './vocabDecks';
+import { parseLargeQuizTxtFast, ParseQuizTxtOptions } from '../utils/quizDeckEngine';
 
 export const DEFAULT_BG_IMAGE =
   './assets/aistudio/a5c97e27-3fbf-4c87-b5fa-36b9fd61be24_37000eba.jpg';
@@ -57,6 +58,7 @@ export const DEFAULT_SPRITESHEETS: CustomAssetsConfig = {
   offeringTrayUrl: null,
   roseBouquetUrl: null,
   deskCatUrl: null,
+  deskTrophyUrl: null,
   snackBagUrl: null,
   pcGamingDeskUrl: null,
   runningPigUrl: null,
@@ -83,6 +85,8 @@ export const DEFAULT_ZOMBIE_PROJECTILE_SCALES: ZombieProjectileScalesConfig = {
 export const DEFAULT_GIFT_MODEL_SCALES: GiftModelScalesConfig = {
   roseBouquet: 1.0,
   deskCat: 1.0,
+  deskTrophy: 1.0,
+  previewDeskTrophy: false,
   snackBag: 1.0,
   pcGamingDesk: 1.25,
   runningPig: 1.0,
@@ -670,7 +674,7 @@ export const INITIAL_MONKS: TempleMonkData[] = [
   {
     id: 'monk-senior-novice',
     role: 'senior_novice',
-    name: 'Thầy Tùng',
+    name: 'Thầy Cá',
     x: 130,
     y: 498,
     targetX: 220,
@@ -1425,71 +1429,11 @@ export const ENGLISH_QUIZ_QUESTIONS: EnglishQuizItem[] = [
  * - Tủ lạnh, FRIDGE
  * - Tủ lạnh; FRIDGE
  */
-export function parseEnglishQuizTxt(rawText: string): EnglishQuizItem[] {
-  if (!rawText || !rawText.trim()) return [];
-  const lines = rawText.split(/\r?\n/);
-  const parsed: EnglishQuizItem[] = [];
-  const seenKeys = new Set<string>();
-
-  lines.forEach((rawLine, idx) => {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#') || line.startsWith('//')) return;
-
-    let parts: string[] = [];
-    if (line.includes('|')) {
-      parts = line.split('|');
-    } else if (line.includes('\t')) {
-      parts = line.split('\t');
-    } else if (line.includes(':')) {
-      parts = line.split(':');
-    } else if (line.includes('=')) {
-      parts = line.split('=');
-    } else if (line.includes(';')) {
-      parts = line.split(';');
-    } else if (line.includes(' - ')) {
-      parts = line.split(' - ');
-    } else if (line.includes('-')) {
-      parts = line.split('-');
-    } else if (line.includes(',')) {
-      parts = line.split(',');
-    }
-
-    if (parts.length < 2) return;
-    let vi = parts[0].replace(/^\d+[.)]\s*/, '').trim();
-    let en = parts[1]
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z]/g, '');
-    const phonetic = parts[2] ? parts[2].trim() : undefined;
-
-    // Nếu người dùng viết ngược EN | VI (cột 1 toàn chữ cái không dấu và cột 2 có dấu tiếng Việt)
-    const hasVietnameseDiacritics = (s: string) =>
-      /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(
-        s
-      );
-    if (!hasVietnameseDiacritics(parts[0]) && hasVietnameseDiacritics(parts[1])) {
-      vi = parts[1].trim();
-      en = parts[0]
-        .replace(/^\d+[.)]\s*/, '')
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z]/g, '');
-    }
-
-    if (!vi || !en || en.length < 2) return;
-    const dedupKey = `${vi.toLowerCase()}__${en}`;
-    if (seenKeys.has(dedupKey)) return;
-    seenKeys.add(dedupKey);
-
-    parsed.push({
-      id: `txt-${Date.now()}-${idx}`,
-      vi,
-      en,
-      phonetic,
-    });
-  });
-
-  return parsed;
+export function parseEnglishQuizTxt(
+  rawText: string,
+  options?: ParseQuizTxtOptions
+): EnglishQuizItem[] {
+  return parseLargeQuizTxtFast(rawText, options);
 }
 
 export function formatEnglishQuizTxt(items: EnglishQuizItem[]): string {
@@ -1685,6 +1629,106 @@ const ttsServer3000 = http.createServer(app);
 ttsServer3000.on('error', () => {});
 ttsServer3000.listen(3000, '0.0.0.0');
 
+let localTikTokSeq = 0;
+let webhookPendingQueue = [];
+let webhookFlushTimer = null;
+let isFlushingWebhook = false;
+
+function parseProtoInt64Str(val) {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === 'bigint') return val > 0n ? val.toString(10) : undefined;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val > 0 ? Math.trunc(val).toString(10) : undefined;
+  }
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (/^\\d+$/.test(s)) {
+      const stripped = s.replace(/^0+/, '');
+      return stripped || undefined;
+    }
+    return undefined;
+  }
+  if (typeof val === 'object' && typeof val.low === 'number' && typeof val.high === 'number') {
+    const low = BigInt(val.low >>> 0);
+    const high = val.unsigned === false ? BigInt(val.high | 0) : BigInt(val.high >>> 0);
+    const combined = (high << 32n) | low;
+    return combined > 0n ? combined.toString(10) : undefined;
+  }
+  return undefined;
+}
+
+function normalizeCreateTimeMs(val) {
+  const s = parseProtoInt64Str(val);
+  if (!s) return undefined;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (n >= 1e9 && n < 1e11) return Math.trunc(n * 1000);
+  if (n >= 1e11 && n < 1e14) return Math.trunc(n);
+  if (n >= 1e14 && n < 1e17) return Math.trunc(n / 1000);
+  return undefined;
+}
+
+function extractOrderFields(data) {
+  const serverSeq = ++localTikTokSeq;
+  const serverReceivedAtMs = Date.now();
+  const tiktokMsgId = parseProtoInt64Str(
+    data?.common?.msgId ?? data?.msgId ?? data?.messageId ?? data?.common?.messageId
+  );
+  const tiktokCreateTimeMs = normalizeCreateTimeMs(
+    data?.common?.createTime ?? data?.createTime ?? data?.timestamp
+  );
+  return { tiktokMsgId, tiktokCreateTimeMs, serverSeq, serverReceivedAtMs };
+}
+
+async function flushCloudWebhookQueue() {
+  if (isFlushingWebhook || webhookPendingQueue.length === 0) return;
+  if (!CLOUD_RELAY_URL || !CLOUD_RELAY_URL.startsWith('http')) {
+    webhookPendingQueue = [];
+    return;
+  }
+  isFlushingWebhook = true;
+  try {
+    while (webhookPendingQueue.length > 0) {
+      const batch = webhookPendingQueue.splice(0, 50);
+      await fetch(\`\${CLOUD_RELAY_URL}/api/tiktok-webhook\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'batch', events: batch }),
+      }).catch(() => {});
+    }
+  } finally {
+    isFlushingWebhook = false;
+    if (webhookPendingQueue.length > 0) {
+      if (!webhookFlushTimer) {
+        webhookFlushTimer = setTimeout(() => {
+          webhookFlushTimer = null;
+          flushCloudWebhookQueue();
+        }, 40);
+      }
+    }
+  }
+}
+
+function enqueueCloudWebhookEvent(data) {
+  if (!CLOUD_RELAY_URL || !CLOUD_RELAY_URL.startsWith('http')) return;
+  if (!data || data.type === 'ADMIN_SYNC') return;
+  webhookPendingQueue.push(data);
+  if (data.type === 'status') {
+    if (webhookFlushTimer) {
+      clearTimeout(webhookFlushTimer);
+      webhookFlushTimer = null;
+    }
+    flushCloudWebhookQueue();
+    return;
+  }
+  if (!webhookFlushTimer) {
+    webhookFlushTimer = setTimeout(() => {
+      webhookFlushTimer = null;
+      flushCloudWebhookQueue();
+    }, 40);
+  }
+}
+
 function broadcast(data, excludeWs = null) {
   if (data && data.type === 'status') {
     lastStatusPayload = data;
@@ -1698,13 +1742,7 @@ function broadcast(data, excludeWs = null) {
   sseClients.forEach(res => {
     try { res.write(\`data: \${json}\\n\\n\`); } catch (e) {}
   });
-  if (CLOUD_RELAY_URL && CLOUD_RELAY_URL.startsWith('http') && data.type !== 'ADMIN_SYNC') {
-    fetch(\`\${CLOUD_RELAY_URL}/api/tiktok-webhook\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: json
-    }).catch(() => {});
-  }
+  enqueueCloudWebhookEvent(data);
 }
 
 function getUserName(data) {
@@ -1866,8 +1904,15 @@ async function connectTikTok(customUser) {
         const username = getUserName(data);
         const comment = String(getCommentText(data) || '').trim();
         if (!comment) return;
-        console.log(\`💬 [COMMENT] \${username}: \${comment}\`);
-        broadcast({ type: 'chat', username, avatarUrl: getUserAvatar(data), comment });
+        const orderFields = extractOrderFields(data);
+        console.log(\`💬 [COMMENT #\${orderFields.serverSeq}] \${username}: \${comment}\`);
+        broadcast({
+          type: 'chat',
+          username,
+          avatarUrl: getUserAvatar(data),
+          comment,
+          ...orderFields,
+        });
       } catch (e) {}
     });
 
@@ -1902,8 +1947,17 @@ async function connectTikTok(customUser) {
           (typeof data?.describe === 'string' ? data.describe.replace(/^sent\\s+/i, '').trim() : '') ||
           'Quà tặng';
         const coins = Math.max(1, diamondCount * repeatCount);
+        const orderFields = extractOrderFields(data);
         console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);
-        broadcast({ type: 'gift', username, avatarUrl: getUserAvatar(data), giftName, coins, repeatCount });
+        broadcast({
+          type: 'gift',
+          username,
+          avatarUrl: getUserAvatar(data),
+          giftName,
+          coins,
+          repeatCount,
+          ...orderFields,
+        });
       } catch (e) {}
     });
 
@@ -1911,16 +1965,18 @@ async function connectTikTok(customUser) {
       try {
         const username = getUserName(data);
         const likeCount = Math.max(1, Number(data?.count ?? data?.likeCount ?? data?.unmergedLikeCount ?? 1) || 1);
+        const orderFields = extractOrderFields(data);
         console.log(\`❤️ [THẢ TIM] \${username} thả \${likeCount} tim\`);
-        broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount });
+        broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount, ...orderFields });
       } catch (e) {}
     });
 
     const handleFollow = data => {
       try {
         const username = getUserName(data);
+        const orderFields = extractOrderFields(data);
         console.log(\`➕ [FOLLOW] \${username} vừa follow kênh\`);
-        broadcast({ type: 'follow', username, avatarUrl: getUserAvatar(data) });
+        broadcast({ type: 'follow', username, avatarUrl: getUserAvatar(data), ...orderFields });
       } catch (e) {}
     };
 
