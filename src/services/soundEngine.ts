@@ -1,4 +1,8 @@
 import { CameraFocusReason, ClassroomGiftEventId, GameConfig } from '../types/game';
+import {
+  buildGoogleWarmDirectMirrorUrls,
+  resolveGoogleWarmWebSpeechFallbackPitch,
+} from '../utils/googleWarmFallback';
 
 export type TTSStatusListener = (
   statusText: string,
@@ -393,8 +397,9 @@ class TempleSoundService {
     health: 'healthy',
     configuredEngineLabel: 'Google Warm',
     activeServerLabel: 'Google Warm (Sẵn sàng)',
-    statusHeadline: 'Ổn định • Sẵn sàng phát giọng đọc (Không Fallback)',
-    statusDetail: 'Chỉ dùng giọng đã chọn • Lỗi tự động bỏ qua (Skip)',
+    statusHeadline: 'Ổn định • Sẵn sàng phát giọng Google Warm (Tự động Fallback)',
+    statusDetail:
+      'Ưu tiên Google Warm + RAM Cache 0ms • Khi nghẽn tự chuyển Mirror & Web Speech',
     lastLatencyMs: null,
     lastUpdatedAt: Date.now(),
     totalFallbacks: 0,
@@ -493,10 +498,13 @@ class TempleSoundService {
   }
 
   private buildDirectGoogleWarmStreamUrl(text: string): string {
-    const shortChunk = (text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
-    return `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(
-      shortChunk
-    )}`;
+    const mirrors = buildGoogleWarmDirectMirrorUrls(text, 180);
+    return (
+      mirrors[0]?.url ||
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(
+        (text || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+      )}`
+    );
   }
 
   private async fetchSingleAudioBlobCandidate(
@@ -580,7 +588,7 @@ class TempleSoundService {
       ) {
         fetched = await this.fetchSingleAudioBlobCandidate(
           `http://127.0.0.1:8080${url}`,
-          1800
+          950
         );
       }
 
@@ -2866,12 +2874,90 @@ class TempleSoundService {
       }
     }
 
-    // Lựa chọn 2: Google Warm phát trên AudioContext độc lập 100% (Song song mượt tuyệt đối với mọi luồng!)
+    // Lựa chọn 2: Google Warm phát trên AudioContext độc lập 100% (Song song mượt với mọi luồng + Tự động Fallback sang Mirror & Web Speech khi nghẽn!)
     const buildGoogleWarmUrl = (chunkText: string): string => {
       const shortChunk = chunkText.slice(0, 195);
       return `/api/tts?lang=vi&voice=google-vi-warm&text=${encodeURIComponent(
         shortChunk
       )}`;
+    };
+
+    const fallbackChunkViaWebSpeech = (
+      chunkText: string,
+      onChunkDone: () => void
+    ) => {
+      if (token !== this.teacherLiveTokenSeq) return;
+      if (!('speechSynthesis' in window)) {
+        onChunkDone();
+        return;
+      }
+      try {
+        const voices = window.speechSynthesis.getVoices();
+        const viVoices = voices.filter((v) =>
+          v.lang.toLowerCase().includes('vi')
+        );
+        const preferredUri = options?.voice || config.selectedSystemVoiceURI;
+        const chosen =
+          (preferredUri
+            ? voices.find((v) => v.voiceURI === preferredUri)
+            : undefined) || viVoices[0];
+
+        if (voices.length > 0 && !chosen) {
+          onChunkDone();
+          return;
+        }
+
+        const utter = new SpeechSynthesisUtterance(chunkText);
+        this.teacherLiveUtterance = utter;
+        utter.lang = 'vi-VN';
+        utter.rate = desiredRate;
+        utter.pitch = resolveGoogleWarmWebSpeechFallbackPitch(
+          desiredPitch,
+          true
+        );
+        utter.volume = Math.min(1.0, desiredVolume);
+        if (chosen) utter.voice = chosen;
+
+        let done = false;
+        const finishChunk = () => {
+          if (done || token !== this.teacherLiveTokenSeq) return;
+          done = true;
+          clearTimeout(wsWatchdog);
+          if (this.teacherLiveUtterance === utter) {
+            this.teacherLiveUtterance = null;
+          }
+          onChunkDone();
+        };
+
+        const words = chunkText.split(/\s+/).filter(Boolean).length;
+        const maxMs = Math.max(
+          4500,
+          Math.min(
+            18000,
+            Math.ceil((words * 580 + 2800) / Math.max(0.5, desiredRate))
+          )
+        );
+        let wsWatchdog = setTimeout(
+          finishChunk,
+          this.currentUtterance ? 5500 : 3200
+        );
+
+        utter.onstart = () => {
+          if (!done && token === this.teacherLiveTokenSeq) {
+            clearTimeout(wsWatchdog);
+            wsWatchdog = setTimeout(finishChunk, maxMs);
+          }
+        };
+        utter.onend = finishChunk;
+        utter.onerror = finishChunk;
+
+        if (!this.currentUtterance) {
+          window.speechSynthesis.cancel();
+        }
+        window.speechSynthesis.speak(utter);
+      } catch {
+        onChunkDone();
+      }
     };
 
     const playChunkAt = async (idx: number) => {
@@ -2886,13 +2972,13 @@ class TempleSoundService {
       if (idx + 1 < chunks.length) {
         void this.getOrFetchAudioBlobUrl(
           buildGoogleWarmUrl(chunks[idx + 1]),
-          2800
+          2600
         );
       }
 
       const blobUrl = await this.getOrFetchAudioBlobUrl(
         buildGoogleWarmUrl(chunkText),
-        3200
+        2800
       );
       if (token !== this.teacherLiveTokenSeq) return;
 
@@ -3003,40 +3089,99 @@ class TempleSoundService {
             }
           }
         } catch {
-          // Nếu WebAudio chưa sẵn sàng, phát trực tiếp cùng giọng Google Warm qua HTMLAudioElement độc lập; lỗi thì skip
+          // Nếu WebAudio chưa sẵn sàng, chuyển sang thử HTMLAudioElement các mirror Google Warm rồi tới Web Speech
         }
       }
 
       if (token !== this.teacherLiveTokenSeq) return;
-      const directAudio = new Audio();
-      (
-        directAudio as HTMLAudioElement & { referrerPolicy?: string }
-      ).referrerPolicy = 'no-referrer';
-      this.teacherLiveFallbackAudio = directAudio;
-      directAudio.src =
-        blobUrl || this.buildDirectGoogleWarmStreamUrl(chunkText);
-      const directRate = Math.max(
-        0.55,
-        Math.min(2.0, desiredRate * desiredPitch)
-      );
-      this.applyAudioPlaybackParams(
-        directAudio,
-        directRate,
-        false,
-        Math.min(1.0, desiredVolume)
-      );
+      const directMirrors = buildGoogleWarmDirectMirrorUrls(chunkText, 180);
+      const htmlCandidates = [
+        ...(blobUrl ? [blobUrl] : []),
+        ...directMirrors.map((m) => m.url),
+      ];
 
-      let settled = false;
-      const settleDirect = () => {
-        if (settled || token !== this.teacherLiveTokenSeq) return;
-        settled = true;
-        clearTimeout(directWatchdog);
-        void playChunkAt(idx + 1);
+      const tryHtmlCandidateAt = (candIdx: number) => {
+        if (token !== this.teacherLiveTokenSeq) return;
+        if (candIdx >= htmlCandidates.length) {
+          fallbackChunkViaWebSpeech(chunkText, () => {
+            void playChunkAt(idx + 1);
+          });
+          return;
+        }
+
+        const directAudio = new Audio();
+        (
+          directAudio as HTMLAudioElement & { referrerPolicy?: string }
+        ).referrerPolicy = 'no-referrer';
+        this.teacherLiveFallbackAudio = directAudio;
+        directAudio.src = htmlCandidates[candIdx];
+        const directRate = Math.max(
+          0.55,
+          Math.min(2.0, desiredRate * desiredPitch)
+        );
+        this.applyAudioPlaybackParams(
+          directAudio,
+          directRate,
+          false,
+          Math.min(1.0, desiredVolume)
+        );
+
+        let settled = false;
+        let startedPlaying = false;
+
+        const cleanupDirect = () => {
+          directAudio.onended = null;
+          directAudio.onerror = null;
+          directAudio.onplaying = null;
+          try {
+            directAudio.pause();
+            directAudio.removeAttribute('src');
+          } catch {
+            // Ignore
+          }
+          if (this.teacherLiveFallbackAudio === directAudio) {
+            this.teacherLiveFallbackAudio = null;
+          }
+        };
+
+        const advanceNextChunk = () => {
+          if (settled || token !== this.teacherLiveTokenSeq) return;
+          settled = true;
+          clearTimeout(connectTimer);
+          clearTimeout(directWatchdog);
+          cleanupDirect();
+          void playChunkAt(idx + 1);
+        };
+
+        const failToNextCandidate = () => {
+          if (settled || token !== this.teacherLiveTokenSeq) return;
+          settled = true;
+          clearTimeout(connectTimer);
+          clearTimeout(directWatchdog);
+          cleanupDirect();
+          tryHtmlCandidateAt(candIdx + 1);
+        };
+
+        const connectTimer = setTimeout(() => {
+          if (!startedPlaying) {
+            failToNextCandidate();
+          }
+        }, 1500);
+        const directWatchdog = setTimeout(advanceNextChunk, 12000);
+
+        directAudio.onplaying = () => {
+          startedPlaying = true;
+          clearTimeout(connectTimer);
+        };
+        directAudio.onended = advanceNextChunk;
+        directAudio.onerror = failToNextCandidate;
+        directAudio.play().catch(() => {
+          if (settled || token !== this.teacherLiveTokenSeq) return;
+          failToNextCandidate();
+        });
       };
-      const directWatchdog = setTimeout(settleDirect, 12000);
-      directAudio.onended = settleDirect;
-      directAudio.onerror = settleDirect;
-      directAudio.play().catch(settleDirect);
+
+      tryHtmlCandidateAt(0);
     };
 
     void playChunkAt(0);
@@ -3756,7 +3901,7 @@ class TempleSoundService {
       return;
     }
 
-    // 3. Tiếng Việt — Lựa chọn 2: Google Warm (không fallback, lỗi tự skip)
+    // 3. Tiếng Việt — Lựa chọn 2: Google Warm (Có tự động Fallback sang Mirror & Web Speech Tiếng Việt khi nghẽn)
     const isMaleTeacherRole =
       !isDharmaLine && nextItem?.meta?.speakerRole === 'senior_novice';
     this.playViaGoogleStream(
@@ -3823,11 +3968,13 @@ class TempleSoundService {
     const proxyUrl = `/api/tts?lang=vi&voice=google-vi-warm&text=${encodeURIComponent(
       shortText
     )}`;
+    const directMirrors = buildGoogleWarmDirectMirrorUrls(shortText, 180);
 
     let settled = false;
+    let fallbackTriggered = false;
     let hasStartedPlaying = false;
     let activeAudio: HTMLAudioElement | null = null;
-    let skipTimer: ReturnType<typeof setTimeout> | null = null;
+    let startLagTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanupAudio = () => {
       if (!activeAudio) return;
@@ -3848,53 +3995,63 @@ class TempleSoundService {
       activeAudio = null;
     };
 
+    const clearStartLagTimer = () => {
+      if (startLagTimer) {
+        clearTimeout(startLagTimer);
+        startLagTimer = null;
+      }
+    };
+
     const clearStreamTimers = () => {
-      clearTimeout(lagTimeout);
+      clearStartLagTimer();
       if (playbackWatchdog) {
         clearTimeout(playbackWatchdog);
         playbackWatchdog = null;
       }
-      if (skipTimer) {
-        clearTimeout(skipTimer);
-        skipTimer = null;
-      }
     };
 
-    // KHÔNG FALLBACK: Đọc không được hoặc quá hạn thì dọn dẹp và skip ngay sang câu tiếp theo
-    const skipOnce = (reasonText: string) => {
-      if (settled || token !== this.speechTokenSeq) return;
+    // FALLBACK TỰ ĐỘNG: Khi toàn bộ luồng Google Warm (Proxy + Local :8080 + Direct Mirrors) đều nghẽn/lỗi,
+    // tự động chuyển câu hiện tại sang Web Speech Tiếng Việt để lớp học không bị mất tiếng,
+    // đồng thời giữ nguyên cấu hình Google Warm để câu tiếp theo tự phục hồi ngay khi mạng ổn định!
+    const fallbackToWebSpeechOnce = (reasonText: string) => {
+      if (settled || fallbackTriggered || token !== this.speechTokenSeq) return;
+      fallbackTriggered = true;
       settled = true;
       clearStreamTimers();
       cleanupAudio();
       this.stopCurrentTtsBufferSourceOnly();
+
+      const fromLabel = forceMaleWarmFilter
+        ? 'Google Warm (Giọng Nam)'
+        : 'Google Warm';
       this.recordTtsDiagnosticIncident(
         {
-          type: 'disconnected',
-          fromSource: 'Google Warm',
-          toSource: 'Skip (Không Fallback)',
+          type: 'fallback',
+          fromSource: fromLabel,
+          toSource: 'Web Speech Tiếng Việt (Fallback)',
           reason: reasonText,
           textSample: shortText.slice(0, 48),
         },
         {
-          health: 'disconnected',
-          activeServerLabel: 'Google Warm (Vừa Skip câu lỗi)',
-          statusHeadline: '⏭️ Google Warm không đọc được ➔ Đã Skip (Không chuyển giọng)',
-          statusDetail: reasonText,
+          health: 'fallback',
+          activeServerLabel: 'Web Speech VI (Dự phòng Google Warm)',
+          statusHeadline:
+            '🔄 Google Warm nghẽn ➔ Đang đọc dự phòng bằng Web Speech Tiếng Việt',
+          statusDetail: `${reasonText} • Câu tiếp theo tự phục hồi lại Google Warm`,
         }
       );
-      skipTimer = setTimeout(() => {
-        if (token === this.speechTokenSeq) {
-          onDone();
-        }
-      }, 120);
-    };
 
-    const timeoutBudget = 3500;
-    const lagTimeout = setTimeout(() => {
-      if (!hasStartedPlaying) {
-        skipOnce('Google Warm phản hồi quá hạn >3.5s ➔ Tự động Skip');
-      }
-    }, timeoutBudget);
+      const fallbackPitch = resolveGoogleWarmWebSpeechFallbackPitch(
+        config.ttsPitch,
+        forceMaleWarmFilter
+      );
+      this.playViaWebSpeech(text, config, token, onDone, {
+        lang: 'vi-VN',
+        rate: config.ttsRate || 1.05,
+        pitch: fallbackPitch,
+        isFallbackFromGoogleWarm: true,
+      });
+    };
 
     const approxStreamRate = Math.max(0.5, Number(config.ttsRate || 1));
     const estimatedPlayMs = Math.max(
@@ -3906,6 +4063,12 @@ class TempleSoundService {
     );
     let playbackWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       if (settled || token !== this.speechTokenSeq) return;
+      if (!hasStartedPlaying) {
+        fallbackToWebSpeechOnce(
+          'Quá thời gian chờ kết nối Google Warm ➔ Chuyển sang Web Speech dự phòng'
+        );
+        return;
+      }
       settled = true;
       clearStreamTimers();
       cleanupAudio();
@@ -3913,14 +4076,37 @@ class TempleSoundService {
       onDone();
     }, estimatedPlayMs);
 
-    void this.getOrFetchAudioBlobUrl(proxyUrl, timeoutBudget - 150).then(
+    const proxyFetchBudgetMs = 2800;
+
+    void this.getOrFetchAudioBlobUrl(proxyUrl, proxyFetchBudgetMs).then(
       (blobUrl) => {
         if (settled || token !== this.speechTokenSeq) {
           clearStreamTimers();
           return;
         }
         const meta = this.audioBlobMetaCache.get(proxyUrl);
-        const startViaHtmlAudio = (srcUrl: string, isDirectStream = false) => {
+
+        const tryDirectMirrorAt = (mirrorIdx: number, lastReason?: string) => {
+          if (settled || token !== this.speechTokenSeq) return;
+          if (mirrorIdx >= directMirrors.length) {
+            fallbackToWebSpeechOnce(
+              lastReason ||
+                'Các máy chủ Google Warm tạm nghẽn ➔ Chuyển sang Web Speech Tiếng Việt'
+            );
+            return;
+          }
+          startViaHtmlAudio(directMirrors[mirrorIdx].url, true, mirrorIdx);
+        };
+
+        const startViaHtmlAudio = (
+          srcUrl: string,
+          isDirectStream = false,
+          directMirrorIdx = 0
+        ) => {
+          if (settled || token !== this.speechTokenSeq) return;
+          clearStartLagTimer();
+          cleanupAudio();
+
           const audio = new Audio();
           (
             audio as HTMLAudioElement & { referrerPolicy?: string }
@@ -3951,6 +4137,53 @@ class TempleSoundService {
             }
           };
 
+          let localAttemptFailed = false;
+          const cleanupThisAudio = () => {
+            audio.onended = null;
+            audio.onerror = null;
+            audio.onplaying = null;
+            audio.onloadedmetadata = null;
+            try {
+              audio.pause();
+              audio.removeAttribute('src');
+            } catch {
+              // Ignore
+            }
+            if (activeAudio === audio) {
+              activeAudio = null;
+            }
+            if (this.currentAudio === audio) {
+              this.currentAudio = null;
+            }
+          };
+
+          const failCurrentAudioAttempt = (reason: string) => {
+            if (localAttemptFailed || settled || token !== this.speechTokenSeq) {
+              return;
+            }
+            localAttemptFailed = true;
+            if (activeAudio === audio) {
+              clearStartLagTimer();
+            }
+            cleanupThisAudio();
+            if (!isDirectStream) {
+              tryDirectMirrorAt(0, reason);
+            } else {
+              tryDirectMirrorAt(directMirrorIdx + 1, reason);
+            }
+          };
+
+          // Mỗi lượt thử kết nối stream có 1.5s riêng để bắt đầu phát (nhanh gọn, không ăn lẹm thời gian bước trước)
+          startLagTimer = setTimeout(() => {
+            if (!hasStartedPlaying && activeAudio === audio) {
+              failCurrentAudioAttempt(
+                isDirectStream
+                  ? `Stream dự phòng #${directMirrorIdx + 1} phản hồi quá 1.5s`
+                  : 'Luồng âm thanh proxy phản hồi chậm quá 1.5s'
+              );
+            }
+          }, 1500);
+
           audio.src = srcUrl;
           this.applyAudioPlaybackParams(
             audio,
@@ -3970,8 +4203,11 @@ class TempleSoundService {
           };
 
           audio.onplaying = () => {
+            if (localAttemptFailed || settled || token !== this.speechTokenSeq) {
+              return;
+            }
             hasStartedPlaying = true;
-            clearTimeout(lagTimeout);
+            clearStartLagTimer();
             this.applyAudioPlaybackParams(
               audio,
               effectiveRate,
@@ -3982,20 +4218,31 @@ class TempleSoundService {
             this.prefetchNextQueueItems(this.latestConfig || config);
 
             const isRamCache = !isDirectStream && meta?.source === 'ram-cache';
+            const usedBackupMirror =
+              (!isDirectStream && Boolean(meta?.switchedMirror)) ||
+              (isDirectStream && directMirrorIdx > 0);
+            const directLabel =
+              directMirrors[directMirrorIdx]?.label ||
+              'Google Warm (Stream Trực Tiếp)';
+
             this.ttsDiagnostic = {
               ...this.ttsDiagnostic,
               configuredEngineLabel: this.getConfiguredEngineLabel(config),
-              health: 'healthy',
+              health: usedBackupMirror ? 'server_switched' : 'healthy',
               activeServerLabel: isRamCache
                 ? 'Google Warm (RAM Cache 0ms)'
                 : isDirectStream
-                ? 'Google Warm (Stream Trực Tiếp)'
+                ? directLabel
+                : usedBackupMirror
+                ? `Google Warm (${meta?.source || 'Mirror'})`
                 : 'Google Warm (Trực tiếp)',
-              statusHeadline: 'Ổn định • Đang phát giọng Google Warm',
+              statusHeadline: usedBackupMirror
+                ? '⚡ Đang phát Google Warm qua máy chủ Mirror dự phòng'
+                : 'Ổn định • Đang phát giọng Google Warm',
               statusDetail: isRamCache
                 ? 'Phát tức thì từ bộ nhớ đệm RAM (0ms)'
                 : isDirectStream
-                ? 'Phát trực tiếp luồng Google Warm từ trình duyệt'
+                ? `Phát trực tiếp qua ${directLabel}`
                 : `Phản hồi Google Warm: ${meta?.latencyMs ?? 0}ms`,
               lastLatencyMs: meta?.latencyMs ?? 0,
               lastUpdatedAt: Date.now(),
@@ -4004,28 +4251,29 @@ class TempleSoundService {
           };
 
           audio.onended = () => {
-            if (settled || token !== this.speechTokenSeq) return;
+            if (localAttemptFailed || settled || token !== this.speechTokenSeq) {
+              return;
+            }
             settled = true;
             clearStreamTimers();
-            cleanupAudio();
+            cleanupThisAudio();
             onDone();
           };
 
           audio.onerror = () => {
-            if (!isDirectStream) {
-              cleanupAudio();
-              startViaHtmlAudio(
-                this.buildDirectGoogleWarmStreamUrl(shortText),
-                true
-              );
-              return;
-            }
-            skipOnce('Không tải/giải mã được âm thanh Google Warm ➔ Đã Skip');
+            failCurrentAudioAttempt(
+              'Không tải/giải mã được luồng âm thanh Google Warm'
+            );
           };
 
           audio.play().catch((err) => {
-            cleanupAudio();
+            if (localAttemptFailed || settled || token !== this.speechTokenSeq) {
+              return;
+            }
             if (!isDirectStream && blobUrl) {
+              localAttemptFailed = true;
+              clearStartLagTimer();
+              cleanupThisAudio();
               void this.tryPlayBlobViaWebAudio(
                 blobUrl,
                 effectiveRate,
@@ -4033,7 +4281,7 @@ class TempleSoundService {
                 token,
                 (durSec) => {
                   hasStartedPlaying = true;
-                  clearTimeout(lagTimeout);
+                  clearStartLagTimer();
                   if (playbackWatchdog) clearTimeout(playbackWatchdog);
                   const exactMs = Math.ceil(durSec * 1000) + 1500;
                   playbackWatchdog = setTimeout(() => {
@@ -4054,26 +4302,28 @@ class TempleSoundService {
               ).then((playedViaCtx) => {
                 if (!playedViaCtx && !settled && token === this.speechTokenSeq) {
                   const errName = String((err as Error)?.name || '');
-                  skipOnce(
+                  tryDirectMirrorAt(
+                    0,
                     errName === 'NotAllowedError'
-                      ? 'Trình duyệt đang khóa Autoplay (hãy click 1 chạm vào màn hình để mở tiếng Google Warm) ➔ Đã Skip'
-                      : 'Trình duyệt chặn phát âm thanh Google Warm ➔ Đã Skip'
+                      ? 'Trình duyệt chặn Autoplay HTMLAudio'
+                      : 'Không phát được Blob âm thanh Google Warm'
                   );
                 }
               });
               return;
             }
-            skipOnce(
-              'Không phát được luồng Google Warm (chưa mở khóa âm thanh trình duyệt hoặc lỗi mạng) ➔ Đã Skip'
+
+            failCurrentAudioAttempt(
+              'Không phát được luồng stream trực tiếp Google Warm'
             );
           });
         };
 
-        // Nếu proxy /api/tts và local :8080 không phản hồi (VD: chạy static host hoặc Cloud IP bị giới hạn), phát trực tiếp cùng luồng Google Warm qua trình duyệt (không chuyển sang giọng khác!)
+        // Nếu proxy /api/tts và local :8080 không phản hồi -> thử lần lượt các Mirror Stream trực tiếp trên trình duyệt rồi tới Web Speech Tiếng Việt
         if (!blobUrl) {
-          startViaHtmlAudio(
-            this.buildDirectGoogleWarmStreamUrl(shortText),
-            true
+          tryDirectMirrorAt(
+            0,
+            'Proxy /api/tts không phản hồi ➔ Thử luồng Mirror trực tiếp'
           );
           return;
         }
@@ -4086,7 +4336,7 @@ class TempleSoundService {
             token,
             (actualPlaySec) => {
               hasStartedPlaying = true;
-              clearTimeout(lagTimeout);
+              clearStartLagTimer();
               if (playbackWatchdog) clearTimeout(playbackWatchdog);
               const exactMs = Math.ceil(actualPlaySec * 1000) + 1200;
               playbackWatchdog = setTimeout(() => {
@@ -4102,9 +4352,11 @@ class TempleSoundService {
               this.ttsDiagnostic = {
                 ...this.ttsDiagnostic,
                 configuredEngineLabel: 'Google Warm (Giọng Nam Thầy Cá)',
-                health: 'healthy',
+                health: meta?.switchedMirror ? 'server_switched' : 'healthy',
                 activeServerLabel: isRamCache
                   ? 'Google Warm Nam (RAM Cache 0ms)'
+                  : meta?.switchedMirror
+                  ? `Google Warm Nam (${meta?.source || 'Mirror'})`
                   : 'Google Warm Nam (Trực tiếp)',
                 statusHeadline: 'Ổn định • Đang phát giọng Nam Google Warm (Thầy Cá)',
                 statusDetail: isRamCache
@@ -4127,13 +4379,13 @@ class TempleSoundService {
             }
           ).then((playedMaleCtx) => {
             if (!playedMaleCtx && !settled && token === this.speechTokenSeq) {
-              startViaHtmlAudio(blobUrl, false);
+              startViaHtmlAudio(blobUrl, false, 0);
             }
           });
           return;
         }
 
-        startViaHtmlAudio(blobUrl, false);
+        startViaHtmlAudio(blobUrl, false, 0);
       }
     );
   }
@@ -4143,11 +4395,17 @@ class TempleSoundService {
     config: GameConfig,
     token: number,
     onDone: () => void,
-    override?: { rate?: number; pitch?: number; lang?: string }
+    override?: {
+      rate?: number;
+      pitch?: number;
+      lang?: string;
+      isFallbackFromGoogleWarm?: boolean;
+    }
   ) {
     if (token !== this.speechTokenSeq) return;
     const targetLang = override?.lang || 'vi-VN';
     const isEnglish = targetLang.toLowerCase().startsWith('en');
+    const isGoogleWarmFallback = Boolean(override?.isFallbackFromGoogleWarm);
     const defaultRate = isEnglish
       ? config.englishTtsRate ?? 0.95
       : config.ttsRate;
@@ -4185,7 +4443,7 @@ class TempleSoundService {
       onDone();
     };
 
-    // KHÔNG FALLBACK: Đọc không được hoặc thiếu giọng Web Speech tương ứng thì skip ngay (120ms)
+    // Đọc không được hoặc thiếu giọng Web Speech tương ứng thì skip gọn (120ms) để không bao giờ treo hàng đợi
     const skipWebSpeechOnce = (reason: string) => {
       if (settled || token !== this.speechTokenSeq) return;
       this.recordTtsDiagnosticIncident(
@@ -4193,8 +4451,10 @@ class TempleSoundService {
           type: 'disconnected',
           fromSource: isEnglish
             ? 'Web Speech Nước Ngoài (EN)'
+            : isGoogleWarmFallback
+            ? 'Web Speech Tiếng Việt (Fallback Google Warm)'
             : 'Web Speech Tiếng Việt',
-          toSource: 'Skip (Không Fallback)',
+          toSource: 'Skip (Không đọc được)',
           reason,
           textSample: text.slice(0, 48),
         },
@@ -4204,7 +4464,9 @@ class TempleSoundService {
             ? 'Web Speech EN (Đã Skip)'
             : 'Web Speech VI (Đã Skip)',
           statusHeadline: `⏭️ ${reason}`,
-          statusDetail: 'Không chuyển giọng dự phòng • Đã bỏ qua câu này',
+          statusDetail: isGoogleWarmFallback
+            ? 'Cả Google Warm & Web Speech dự phòng đều không khả dụng ở câu này ➔ Đã bỏ qua'
+            : 'Không đọc được câu này ➔ Đã tự động bỏ qua',
         }
       );
       cancelDelayTimer = setTimeout(settleOnce, 120);
@@ -4319,20 +4581,37 @@ class TempleSoundService {
         }
 
         const displayVoice = chosenVoiceName || targetLang;
-        this.ttsDiagnostic = {
-          ...this.ttsDiagnostic,
-          configuredEngineLabel: this.getConfiguredEngineLabel(config),
-          health: 'healthy',
-          activeServerLabel: isEnglish
-            ? `Web Speech EN (${displayVoice.slice(0, 22)})`
-            : `Web Speech VI (${displayVoice.slice(0, 22)})`,
-          statusHeadline: isEnglish
-            ? 'Ổn định • Đang đọc từ Tiếng Anh bằng Web Speech Nước Ngoài'
-            : 'Ổn định • Đang phát qua Web Speech Tiếng Việt',
-          statusDetail: `Giọng hệ thống: ${displayVoice} (0ms mạng)`,
-          lastLatencyMs: 0,
-          lastUpdatedAt: Date.now(),
-        };
+        if (isGoogleWarmFallback) {
+          this.ttsDiagnostic = {
+            ...this.ttsDiagnostic,
+            configuredEngineLabel: this.getConfiguredEngineLabel(config),
+            health: 'fallback',
+            activeServerLabel: `Web Speech VI (Dự phòng: ${displayVoice.slice(
+              0,
+              16
+            )})`,
+            statusHeadline:
+              '🔄 Google Warm nghẽn ➔ Đang phát dự phòng qua Web Speech Tiếng Việt',
+            statusDetail: `Giọng dự phòng: ${displayVoice} • Câu tiếp theo tự phục hồi lại Google Warm`,
+            lastLatencyMs: 0,
+            lastUpdatedAt: Date.now(),
+          };
+        } else {
+          this.ttsDiagnostic = {
+            ...this.ttsDiagnostic,
+            configuredEngineLabel: this.getConfiguredEngineLabel(config),
+            health: 'healthy',
+            activeServerLabel: isEnglish
+              ? `Web Speech EN (${displayVoice.slice(0, 22)})`
+              : `Web Speech VI (${displayVoice.slice(0, 22)})`,
+            statusHeadline: isEnglish
+              ? 'Ổn định • Đang đọc từ Tiếng Anh bằng Web Speech Nước Ngoài'
+              : 'Ổn định • Đang phát qua Web Speech Tiếng Việt',
+            statusDetail: `Giọng hệ thống: ${displayVoice} (0ms mạng)`,
+            lastLatencyMs: 0,
+            lastUpdatedAt: Date.now(),
+          };
+        }
         this.emitEventQueue();
 
         utter.onstart = () => {

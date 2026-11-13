@@ -3603,10 +3603,10 @@ export const TabAudio: React.FC<TabAudioProps> = ({
           </div>
         </div>
 
-        {/* 2 lựa chọn giọng Tiếng Việt sạch 100% */}
+        {/* 2 lựa chọn giọng Tiếng Việt */}
         <div className="space-y-1.5">
           <div className="text-[10px] text-stone-300 font-medium">
-            Chọn 1 trong 2 giọng đọc Tiếng Việt (Không Fallback • Đọc lỗi tự Skip):
+            Chọn 1 trong 2 giọng đọc Tiếng Việt (Google Warm có tự động Fallback khi nghẽn mạng):
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             <button
@@ -3661,7 +3661,7 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               }`}
             >
               <div className="text-[11px] font-extrabold flex items-center justify-between gap-1">
-                <span>2. 🎙️ Google Warm (Trầm Ấm)</span>
+                <span>2. 🎙️ Google Warm (Trầm Ấm • Có Fallback)</span>
                 {config.ttsEngine === 'google_stream' && (
                   <span className="px-1.5 py-0.5 rounded bg-amber-400 text-stone-950 text-[9px] font-black">
                     ĐANG CHỌN
@@ -3669,17 +3669,39 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                 )}
               </div>
               <div className="text-[9.5px] text-stone-400 mt-0.5">
-                Giọng Google hạ trầm ấm áp + lưu RAM Cache 0ms cho câu lặp lại.
+                Giọng Google hạ trầm ấm + RAM Cache 0ms • Nghẽn tự chuyển Mirror &amp; Web Speech, tự phục hồi ở câu sau.
               </div>
             </button>
           </div>
           {liveDiagnostic && (
-            <div className="px-2 py-1 rounded bg-stone-950/90 border border-stone-800 flex items-center justify-between gap-2 text-[9.5px]">
+            <div
+              className={`px-2 py-1 rounded border flex items-center justify-between gap-2 text-[9.5px] ${
+                liveDiagnostic.health === 'fallback'
+                  ? 'bg-amber-950/60 border-amber-500/40'
+                  : liveDiagnostic.health === 'server_switched'
+                  ? 'bg-sky-950/60 border-sky-500/40'
+                  : 'bg-stone-950/90 border-stone-800'
+              }`}
+            >
               <span className="text-stone-300 truncate">
-                Trạng thái: <b className="text-amber-300">{liveDiagnostic.statusHeadline}</b>
+                Trạng thái:{' '}
+                <b
+                  className={
+                    liveDiagnostic.health === 'fallback'
+                      ? 'text-amber-200'
+                      : liveDiagnostic.health === 'server_switched'
+                      ? 'text-sky-200'
+                      : 'text-emerald-300'
+                  }
+                >
+                  {liveDiagnostic.statusHeadline}
+                </b>
               </span>
               <span className="text-stone-400 font-mono shrink-0">
                 {liveDiagnostic.activeServerLabel}
+                {liveDiagnostic.totalFallbacks > 0
+                  ? ` • FB:${liveDiagnostic.totalFallbacks}`
+                  : ''}
               </span>
             </div>
           )}

@@ -1710,6 +1710,7 @@ const localTtsCache = new Map();
 async function handleLocalGoogleWarmTts(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source, X-TTS-Switched');
   try {
     const text = String(req.query?.text || '').replace(/\\s+/g, ' ').trim().slice(0, 240);
     if (!text) return res.status(400).end();
@@ -1718,20 +1719,24 @@ async function handleLocalGoogleWarmTts(req, res) {
       const cached = localTtsCache.get(cacheKey);
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('X-TTS-Source', 'ram-cache');
+      res.setHeader('X-TTS-Switched', '0');
       return res.send(cached);
     }
     const enc = encodeURIComponent(text);
-    const urls = [
-      'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=' + enc,
-      'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc,
-      'https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc,
+    const mirrors = [
+      { id: 'google-gtx', switched: false, u: 'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=' + enc },
+      { id: 'google-clients5', switched: true, u: 'https://clients5.google.com/translate_tts?ie=UTF-8&tl=vi&client=dict-chrome-ex&q=' + enc },
+      { id: 'google-tw-ob', switched: true, u: 'https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc },
+      { id: 'google-vn', switched: true, u: 'https://translate.google.com.vn/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=' + enc },
     ];
     let audioBuf = null;
-    for (const u of urls) {
+    let sourceId = 'google-gtx';
+    let switched = false;
+    for (const m of mirrors) {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 2800);
+      const t = setTimeout(() => ctrl.abort(), 1800);
       try {
-        const r = await fetch(u, {
+        const r = await fetch(m.u, {
           signal: ctrl.signal,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
@@ -1745,11 +1750,44 @@ async function handleLocalGoogleWarmTts(req, res) {
         const b = Buffer.from(await r.arrayBuffer());
         if (b.length >= 128) {
           audioBuf = b;
+          sourceId = m.id;
+          switched = m.switched;
           break;
         }
       } catch (e) {
         clearTimeout(t);
       }
+    }
+    if (!audioBuf) {
+      try {
+        const cCtrl = new AbortController();
+        const cTimer = setTimeout(() => cCtrl.abort(), 2200);
+        const cr = await fetch('https://api.soundoftext.com/sounds', {
+          method: 'POST',
+          signal: cCtrl.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ engine: 'Google', data: { text, voice: 'vi-VN' } }),
+        });
+        clearTimeout(cTimer);
+        if (cr.ok) {
+          const cj = await cr.json();
+          if (cj && cj.id) {
+            const pr = await fetch('https://api.soundoftext.com/sounds/' + cj.id);
+            const pj = pr.ok ? await pr.json() : null;
+            if (pj && pj.location) {
+              const dr = await fetch(pj.location);
+              if (dr.ok) {
+                const rb = Buffer.from(await dr.arrayBuffer());
+                if (rb.length >= 128) {
+                  audioBuf = rb;
+                  sourceId = 'google-relay';
+                  switched = true;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {}
     }
     if (!audioBuf) return res.status(502).end();
     if (localTtsCache.size >= 200) {
@@ -1758,7 +1796,8 @@ async function handleLocalGoogleWarmTts(req, res) {
     }
     localTtsCache.set(cacheKey, audioBuf);
     res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('X-TTS-Source', 'google-gtx');
+    res.setHeader('X-TTS-Source', sourceId);
+    res.setHeader('X-TTS-Switched', switched ? '1' : '0');
     res.send(audioBuf);
   } catch (e) {
     res.status(502).end();

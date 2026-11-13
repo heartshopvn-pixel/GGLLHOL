@@ -887,19 +887,118 @@ async function startServer() {
     return parts;
   }
 
-  async function fetchSingleGoogleWarmViSegment(segment: string): Promise<Buffer> {
+  async function fetchSoundOfTextRelayMp3(segment: string): Promise<Buffer> {
+    const createCtrl = new AbortController();
+    const createTimer = setTimeout(() => createCtrl.abort(), 2200);
+    try {
+      const createRes = await fetch('https://api.soundoftext.com/sounds', {
+        method: 'POST',
+        signal: createCtrl.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engine: 'Google',
+          data: { text: segment, voice: 'vi-VN' },
+        }),
+      });
+      clearTimeout(createTimer);
+      if (!createRes.ok) {
+        throw new Error(`Relay create HTTP ${createRes.status}`);
+      }
+      const createJson = (await createRes.json()) as {
+        success?: boolean;
+        id?: string;
+      };
+      if (!createJson?.id) {
+        throw new Error('Relay missing sound id');
+      }
+
+      let mp3Location = '';
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const pollCtrl = new AbortController();
+        const pollTimer = setTimeout(() => pollCtrl.abort(), 1500);
+        try {
+          const pollRes = await fetch(
+            `https://api.soundoftext.com/sounds/${createJson.id}`,
+            { signal: pollCtrl.signal }
+          );
+          clearTimeout(pollTimer);
+          if (pollRes.ok) {
+            const pollJson = (await pollRes.json()) as {
+              status?: string;
+              location?: string;
+            };
+            if (pollJson.status === 'Done' && pollJson.location) {
+              mp3Location = pollJson.location;
+              break;
+            }
+          }
+        } catch {
+          clearTimeout(pollTimer);
+        }
+        await new Promise((r) => setTimeout(r, 180));
+      }
+
+      if (!mp3Location) {
+        throw new Error('Relay audio not ready');
+      }
+
+      const dlCtrl = new AbortController();
+      const dlTimer = setTimeout(() => dlCtrl.abort(), 2200);
+      try {
+        const dlRes = await fetch(mp3Location, { signal: dlCtrl.signal });
+        clearTimeout(dlTimer);
+        if (!dlRes.ok) {
+          throw new Error(`Relay download HTTP ${dlRes.status}`);
+        }
+        const buf = Buffer.from(await dlRes.arrayBuffer());
+        if (buf.length < 128) {
+          throw new Error('Empty relay MP3 buffer');
+        }
+        return buf;
+      } catch (err) {
+        clearTimeout(dlTimer);
+        throw err;
+      }
+    } catch (err) {
+      clearTimeout(createTimer);
+      throw err;
+    }
+  }
+
+  async function fetchSingleGoogleWarmViSegment(segment: string): Promise<{
+    buf: Buffer;
+    source: string;
+    switched: boolean;
+  }> {
     const encoded = encodeURIComponent(segment);
-    const mirrors = [
-      `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=${encoded}`,
-      `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
-      `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
+    const mirrors: Array<{ id: string; url: string; switched: boolean }> = [
+      {
+        id: 'google-gtx',
+        url: `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=gtx&ttsspeed=1&q=${encoded}`,
+        switched: false,
+      },
+      {
+        id: 'google-clients5',
+        url: `https://clients5.google.com/translate_tts?ie=UTF-8&tl=vi&client=dict-chrome-ex&q=${encoded}`,
+        switched: true,
+      },
+      {
+        id: 'google-tw-ob',
+        url: `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
+        switched: true,
+      },
+      {
+        id: 'google-vn',
+        url: `https://translate.google.com.vn/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encoded}`,
+        switched: true,
+      },
     ];
     let lastErr: unknown = new Error('Google TTS unavailable');
-    for (const url of mirrors) {
+    for (const mirror of mirrors) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2800);
+      const timeout = setTimeout(() => controller.abort(), 1800);
       try {
-        const response = await fetch(url, {
+        const response = await fetch(mirror.url, {
           signal: controller.signal,
           headers: {
             'User-Agent':
@@ -923,31 +1022,54 @@ async function startServer() {
           lastErr = new Error('Empty Google TTS buffer');
           continue;
         }
-        return buf;
+        return { buf, source: mirror.id, switched: mirror.switched };
       } catch (err) {
         clearTimeout(timeout);
         lastErr = err;
       }
     }
-    throw lastErr;
+
+    // Fallback tầng cuối trên Server: gọi qua Relay độc lập (vẫn lấy đúng giọng Google vi-VN khi IP hiện tại bị giới hạn 429)
+    try {
+      const relayBuf = await fetchSoundOfTextRelayMp3(segment);
+      return { buf: relayBuf, source: 'google-relay', switched: true };
+    } catch {
+      throw lastErr;
+    }
   }
+
+  const ttsSourceMetaCache = new Map<
+    string,
+    { source: string; switched: boolean }
+  >();
 
   async function fetchGoogleWarmViBuffer(text: string): Promise<{
     buf: Buffer;
-    source: 'ram-cache' | 'google-gtx';
+    source: string;
+    switched: boolean;
   }> {
     const cacheKey = `vi:${text}`;
     const cached = ttsBufferCache.get(cacheKey);
     if (cached) {
       ttsBufferCache.delete(cacheKey);
       ttsBufferCache.set(cacheKey, cached);
-      return { buf: cached, source: 'ram-cache' };
+      const prevMeta = ttsSourceMetaCache.get(cacheKey);
+      return {
+        buf: cached,
+        source: 'ram-cache',
+        switched: Boolean(prevMeta?.switched),
+      };
     }
 
     const existing = inFlightGoogleTts.get(cacheKey);
     if (existing) {
       const buf = await existing;
-      return { buf, source: 'google-gtx' };
+      const meta = ttsSourceMetaCache.get(cacheKey);
+      return {
+        buf,
+        source: meta?.source || 'google-gtx',
+        switched: Boolean(meta?.switched),
+      };
     }
 
     const task = (async () => {
@@ -956,22 +1078,41 @@ async function startServer() {
         throw new Error('Empty TTS text');
       }
       const buffers: Buffer[] = [];
+      let chosenSource = 'google-gtx';
+      let anySwitched = false;
       for (const seg of segments) {
-        buffers.push(await fetchSingleGoogleWarmViSegment(seg));
+        const resSeg = await fetchSingleGoogleWarmViSegment(seg);
+        buffers.push(resSeg.buf);
+        if (resSeg.switched) {
+          anySwitched = true;
+          chosenSource = resSeg.source;
+        }
       }
       const combined = buffers.length === 1 ? buffers[0] : Buffer.concat(buffers);
       if (ttsBufferCache.size >= MAX_TTS_CACHE_ITEMS) {
         const oldestKey = ttsBufferCache.keys().next().value;
-        if (oldestKey) ttsBufferCache.delete(oldestKey);
+        if (oldestKey) {
+          ttsBufferCache.delete(oldestKey);
+          ttsSourceMetaCache.delete(oldestKey);
+        }
       }
       ttsBufferCache.set(cacheKey, combined);
+      ttsSourceMetaCache.set(cacheKey, {
+        source: chosenSource,
+        switched: anySwitched,
+      });
       return combined;
     })();
 
     inFlightGoogleTts.set(cacheKey, task);
     try {
       const buf = await task;
-      return { buf, source: 'google-gtx' };
+      const meta = ttsSourceMetaCache.get(cacheKey);
+      return {
+        buf,
+        source: meta?.source || 'google-gtx',
+        switched: Boolean(meta?.switched),
+      };
     } finally {
       inFlightGoogleTts.delete(cacheKey);
     }
@@ -990,15 +1131,18 @@ async function startServer() {
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.setHeader('X-TTS-Source', result.source);
-      res.setHeader('X-TTS-Switched', '0');
-      res.setHeader('Access-Control-Expose-Headers', 'X-TTS-Source, X-TTS-Switched');
+      res.setHeader('X-TTS-Switched', result.switched ? '1' : '0');
+      res.setHeader(
+        'Access-Control-Expose-Headers',
+        'X-TTS-Source, X-TTS-Switched'
+      );
       res.send(result.buf);
     } catch {
       res.status(502).end();
     }
   };
 
-  // Built-in Google Warm TTS proxy routes (/api/tts & /tts) — no fallback, fail fast 502 so client skips cleanly
+  // Built-in Google Warm TTS proxy routes (/api/tts & /tts) with multi-mirror + relay fallback
   app.get('/api/tts', handleTtsHttpRequest);
   app.get('/tts', handleTtsHttpRequest);
 

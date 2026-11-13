@@ -204,10 +204,10 @@ export const TeacherLiveVoiceCard: React.FC<TeacherLiveVoiceCardProps> = ({
               className="px-2 py-1 rounded-md bg-stone-950 border border-stone-700 text-[10.5px] text-sky-200 font-semibold focus:outline-none"
             >
               <option value="google_stream">
-                🎙️ Google Warm (Phát song song 100% mọi luồng • Không Fallback)
+                🎙️ Google Warm (Phát song song 100% mọi luồng • Tự động Fallback)
               </option>
               <option value="web_speech">
-                🇻🇳 Web Speech Tiếng Việt (Song song với Google Warm • Không Fallback)
+                🇻🇳 Web Speech Tiếng Việt (Song song với Google Warm)
               </option>
             </select>
 
