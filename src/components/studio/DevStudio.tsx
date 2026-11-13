@@ -813,6 +813,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
 
         {activeTab === 'safety' && (
           <TabSafety
+            config={config}
+            onUpdateConfig={onUpdateConfig}
             actionMode={safetyActionMode}
             categories={safetyCategories}
             customWords={customWords}

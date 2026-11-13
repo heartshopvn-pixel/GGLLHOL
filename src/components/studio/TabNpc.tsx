@@ -26,6 +26,11 @@ import {
   WaitingQueueItem,
 } from '../../types/game';
 import { DEFAULT_NPC_SPEECH_CATEGORIES } from '../../config/constants';
+import {
+  buildWrongScrambledNpcSentence,
+  formatCleanSentenceAnswer,
+  isSentenceScrambleItem,
+} from '../../utils/sentenceScramble';
 import { HostLiveTtsCard } from './HostLiveTtsCard';
 
 interface TabNpcProps {
@@ -275,12 +280,20 @@ export const TabNpc: React.FC<TabNpcProps> = ({
       ? selectedStudentName
       : npcStudentOptions[0]?.username || npcNames[0] || 'Học Sinh NPC';
 
-  const currentQuizAnswer = classBoardState?.currentQuestion?.en
-    ? classBoardState.currentQuestion.en.charAt(0).toUpperCase() +
-      classBoardState.currentQuestion.en.slice(1).toLowerCase()
+  const activeQuestion = classBoardState?.currentQuestion;
+  const isActiveSentenceQuiz = isSentenceScrambleItem(activeQuestion);
+
+  const currentQuizAnswer = activeQuestion?.en
+    ? isActiveSentenceQuiz
+      ? formatCleanSentenceAnswer(activeQuestion.en)
+      : activeQuestion.en.charAt(0).toUpperCase() +
+        activeQuestion.en.slice(1).toLowerCase()
     : 'School';
 
   const currentTypoQuizAnswer = React.useMemo(() => {
+    if (isActiveSentenceQuiz && activeQuestion?.en) {
+      return buildWrongScrambledNpcSentence(activeQuestion.en);
+    }
     const clean = currentQuizAnswer.trim();
     if (clean.length < 2) return `${clean}a`;
     const chars = clean.split('');
@@ -298,7 +311,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
       }
     }
     return `${clean}e`;
-  }, [currentQuizAnswer]);
+  }, [isActiveSentenceQuiz, activeQuestion?.en, currentQuizAnswer]);
 
   const handleSendStudentComment = (customText?: string) => {
     const text = (

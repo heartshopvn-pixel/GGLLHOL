@@ -9,6 +9,7 @@ import {
   Plus,
   Repeat,
   RotateCcw,
+  Shuffle,
   SkipForward,
   Sparkles,
   Trash2,
@@ -30,7 +31,10 @@ import {
   CLASSROOM_GIFT_EVENTS_META,
   DEFAULT_CONFIG,
 } from '../../config/constants';
-import { DEFAULT_QUESTION_DURATION_BY_LEVEL } from '../../config/vocabDecks';
+import {
+  DEFAULT_QUESTION_DURATION_BY_LEVEL,
+  DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL,
+} from '../../config/vocabDecks';
 import { soundEngine } from '../../services/soundEngine';
 
 interface TabAudioProps {
@@ -728,6 +732,54 @@ export const TabAudio: React.FC<TabAudioProps> = ({
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
+          </div>
+
+          {/* Chế độ phát nhạc nền: Tự chạy tiếp / Lặp / Random */}
+          <div className="flex items-center justify-between gap-1.5 pt-0.5">
+            <span className="text-[10.5px] text-stone-400 shrink-0">Chế độ:</span>
+            <div className="grid grid-cols-3 gap-1 flex-1">
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ bgmPlayMode: 'sequential' })}
+                title="Hết bài tự động chuyển sang bài tiếp theo trong danh sách"
+                className={`px-2 py-1 rounded border text-[10.5px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                  (config.bgmPlayMode || 'sequential') === 'sequential'
+                    ? 'bg-amber-600/30 border-amber-400 text-amber-200 shadow-sm'
+                    : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                }`}
+              >
+                <SkipForward className="w-3 h-3 shrink-0" />
+                <span className="truncate">Tự chạy tiếp</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ bgmPlayMode: 'loop_one' })}
+                title="Lặp lại liên tục bài nhạc nền đang chọn"
+                className={`px-2 py-1 rounded border text-[10.5px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                  config.bgmPlayMode === 'loop_one'
+                    ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200 shadow-sm'
+                    : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                }`}
+              >
+                <Repeat className="w-3 h-3 shrink-0" />
+                <span className="truncate">Lặp bài</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ bgmPlayMode: 'shuffle' })}
+                title="Hết bài tự động phát ngẫu nhiên một bài khác trong danh sách"
+                className={`px-2 py-1 rounded border text-[10.5px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                  config.bgmPlayMode === 'shuffle'
+                    ? 'bg-fuchsia-600/30 border-fuchsia-400 text-fuchsia-200 shadow-sm'
+                    : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                }`}
+              >
+                <Shuffle className="w-3 h-3 shrink-0" />
+                <span className="truncate">Random</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 text-[10.5px] text-stone-400">
@@ -2065,12 +2117,36 @@ export const TabAudio: React.FC<TabAudioProps> = ({
             const dHard = dMap?.hard ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.hard;
             const dOmg = dMap?.omg ?? DEFAULT_QUESTION_DURATION_BY_LEVEL.omg;
             const dOther = dMap?.other ?? legacyDur;
+
+            const sMap = config.hudLayout.classBoardSentenceQuestionDurationByLevel;
+            const sEasy =
+              sMap?.easy ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.easy;
+            const sNormal =
+              sMap?.normal ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.normal;
+            const sHard =
+              sMap?.hard ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.hard;
+            const sOmg =
+              sMap?.omg ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.omg;
+            const sOther =
+              sMap?.other ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.other;
             return (
-              <div className="flex items-center justify-between gap-2 text-[10px] bg-stone-900/70 px-2 py-1 rounded border border-stone-800/80">
-                <span className="text-stone-400 shrink-0">Thời gian luồng:</span>
-                <span className="font-mono font-bold text-amber-300 text-right">
-                  🔒 Chung với Luồng 3 (Dễ {dEasy}s • Thường {dNormal}s • Khó {dHard}s • OMG {dOmg}s • Khác {dOther}s)
-                </span>
+              <div className="space-y-1 text-[10px] bg-stone-900/70 px-2 py-1.5 rounded border border-stone-800/80">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-stone-400 shrink-0">
+                    🔒 Thời gian chung Luồng 3 (Từ vựng):
+                  </span>
+                  <span className="font-mono font-bold text-amber-300 text-right">
+                    Dễ {dEasy}s • Thường {dNormal}s • Khó {dHard}s • OMG {dOmg}s • Khác {dOther}s
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-stone-400 shrink-0">
+                    🔒 Thời gian chung Luồng 3 (Ghép từ):
+                  </span>
+                  <span className="font-mono font-bold text-violet-300 text-right">
+                    Dễ {sEasy}s • Thường {sNormal}s • Khó {sHard}s • OMG {sOmg}s • Khác {sOther}s
+                  </span>
+                </div>
               </div>
             );
           })()}
@@ -2109,6 +2185,24 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               legacyDur,
           };
 
+          const curSentenceDurByLevel: QuizQuestionDurationByLevel = {
+            easy:
+              config.hudLayout.classBoardSentenceQuestionDurationByLevel?.easy ??
+              DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.easy,
+            normal:
+              config.hudLayout.classBoardSentenceQuestionDurationByLevel
+                ?.normal ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.normal,
+            hard:
+              config.hudLayout.classBoardSentenceQuestionDurationByLevel?.hard ??
+              DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.hard,
+            omg:
+              config.hudLayout.classBoardSentenceQuestionDurationByLevel?.omg ??
+              DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.omg,
+            other:
+              config.hudLayout.classBoardSentenceQuestionDurationByLevel
+                ?.other ?? DEFAULT_SENTENCE_QUESTION_DURATION_BY_LEVEL.other,
+          };
+
           const updateDurationForLevel = (
             key: keyof QuizQuestionDurationByLevel,
             rawVal: number
@@ -2126,6 +2220,23 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                     ? clamped
                     : config.hudLayout.classBoardQuestionDurationSec || nextByLevel.easy,
                 classBoardQuestionDurationByLevel: nextByLevel,
+              },
+            });
+          };
+
+          const updateSentenceDurationForLevel = (
+            key: keyof QuizQuestionDurationByLevel,
+            rawVal: number
+          ) => {
+            const clamped = Math.max(5, Math.min(120, Number(rawVal) || 18));
+            const nextByLevel: QuizQuestionDurationByLevel = {
+              ...curSentenceDurByLevel,
+              [key]: clamped,
+            };
+            onUpdateConfig({
+              hudLayout: {
+                ...config.hudLayout,
+                classBoardSentenceQuestionDurationByLevel: nextByLevel,
               },
             });
           };
@@ -2203,83 +2314,169 @@ export const TabAudio: React.FC<TabAudioProps> = ({
                   </div>
                 </div>
 
-                <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-amber-200 font-semibold">
-                      ⏱ Tổng TG Luồng 2 & 3 theo độ khó câu hỏi (giây):
-                    </span>
-                    <span className="text-[9px] text-stone-400 font-mono">
-                      5s – 120s
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {(
-                      [
-                        {
-                          key: 'easy',
-                          label: 'Dễ',
-                          borderCls: 'border-emerald-500/50 text-emerald-300',
-                          labelCls: 'text-emerald-300',
-                        },
-                        {
-                          key: 'normal',
-                          label: 'Thường',
-                          borderCls: 'border-sky-500/50 text-sky-300',
-                          labelCls: 'text-sky-300',
-                        },
-                        {
-                          key: 'hard',
-                          label: 'Khó',
-                          borderCls: 'border-amber-500/55 text-amber-300',
-                          labelCls: 'text-amber-300',
-                        },
-                        {
-                          key: 'omg',
-                          label: 'OMG',
-                          borderCls: 'border-rose-500/55 text-rose-300',
-                          labelCls: 'text-rose-300',
-                        },
-                        {
-                          key: 'other',
-                          label: 'Khác',
-                          borderCls: 'border-purple-500/50 text-purple-300',
-                          labelCls: 'text-purple-300',
-                        },
-                      ] as Array<{
-                        key: keyof QuizQuestionDurationByLevel;
-                        label: string;
-                        borderCls: string;
-                        labelCls: string;
-                      }>
-                    ).map((lvl) => (
-                      <label
-                        key={lvl.key}
-                        className="flex flex-col items-center gap-0.5 p-1 rounded bg-stone-950/90 border border-stone-800"
-                      >
-                        <span
-                          className={`text-[9.5px] font-bold leading-none ${lvl.labelCls}`}
+                <div className="pt-1.5 border-t border-stone-800/80 space-y-2">
+                  {/* Hàng 1: Tổng TG Luồng 2 & 3 cho câu hỏi Từ Vựng */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-amber-200 font-semibold">
+                        ⏱ 🔤 Câu Từ Vựng — Tổng TG Luồng 2 & 3 (giây):
+                      </span>
+                      <span className="text-[9px] text-stone-400 font-mono">
+                        5s – 120s
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {(
+                        [
+                          {
+                            key: 'easy',
+                            label: 'Dễ',
+                            borderCls: 'border-emerald-500/50 text-emerald-300',
+                            labelCls: 'text-emerald-300',
+                          },
+                          {
+                            key: 'normal',
+                            label: 'Thường',
+                            borderCls: 'border-sky-500/50 text-sky-300',
+                            labelCls: 'text-sky-300',
+                          },
+                          {
+                            key: 'hard',
+                            label: 'Khó',
+                            borderCls: 'border-amber-500/55 text-amber-300',
+                            labelCls: 'text-amber-300',
+                          },
+                          {
+                            key: 'omg',
+                            label: 'OMG',
+                            borderCls: 'border-rose-500/55 text-rose-300',
+                            labelCls: 'text-rose-300',
+                          },
+                          {
+                            key: 'other',
+                            label: 'Khác',
+                            borderCls: 'border-purple-500/50 text-purple-300',
+                            labelCls: 'text-purple-300',
+                          },
+                        ] as Array<{
+                          key: keyof QuizQuestionDurationByLevel;
+                          label: string;
+                          borderCls: string;
+                          labelCls: string;
+                        }>
+                      ).map((lvl) => (
+                        <label
+                          key={`vocab-dur-${lvl.key}`}
+                          className="flex flex-col items-center gap-0.5 p-1 rounded bg-stone-950/90 border border-stone-800"
                         >
-                          {lvl.label}
-                        </span>
-                        <div className="flex items-center gap-0.5">
-                          <input
-                            type="number"
-                            min={5}
-                            max={120}
-                            step={1}
-                            value={curDurByLevel[lvl.key]}
-                            onChange={(e) =>
-                              updateDurationForLevel(
-                                lvl.key,
-                                Number(e.target.value)
-                              )
-                            }
-                            className={`w-11 px-1 py-0.5 rounded bg-stone-900 border text-center font-mono font-bold text-[10.5px] focus:outline-none ${lvl.borderCls}`}
-                          />
-                          <span className="text-[9px] text-stone-400">s</span>
-                        </div>
-                      </label>
-                    ))}
+                          <span
+                            className={`text-[9.5px] font-bold leading-none ${lvl.labelCls}`}
+                          >
+                            {lvl.label}
+                          </span>
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={5}
+                              max={120}
+                              step={1}
+                              aria-label={`Tổng TG Luồng 2 và 3 câu từ vựng mức ${lvl.label}`}
+                              value={curDurByLevel[lvl.key]}
+                              onChange={(e) =>
+                                updateDurationForLevel(
+                                  lvl.key,
+                                  Number(e.target.value)
+                                )
+                              }
+                              className={`w-11 px-1 py-0.5 rounded bg-stone-900 border text-center font-mono font-bold text-[10.5px] focus:outline-none ${lvl.borderCls}`}
+                            />
+                            <span className="text-[9px] text-stone-400">s</span>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Hàng 2: Tổng TG Luồng 2 & 3 cho câu hỏi Ghép Từ / Ghép Câu */}
+                  <div className="pt-1.5 border-t border-stone-800/60 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-violet-300 font-semibold">
+                        ⏱ 🧩 Câu Ghép Từ / Ghép Câu — Tổng TG Luồng 2 & 3 (giây):
+                      </span>
+                      <span className="text-[9px] text-stone-400 font-mono">
+                        5s – 120s
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {(
+                        [
+                          {
+                            key: 'easy',
+                            label: 'Dễ',
+                            borderCls: 'border-emerald-500/50 text-emerald-300',
+                            labelCls: 'text-emerald-300',
+                          },
+                          {
+                            key: 'normal',
+                            label: 'Thường',
+                            borderCls: 'border-sky-500/50 text-sky-300',
+                            labelCls: 'text-sky-300',
+                          },
+                          {
+                            key: 'hard',
+                            label: 'Khó',
+                            borderCls: 'border-amber-500/55 text-amber-300',
+                            labelCls: 'text-amber-300',
+                          },
+                          {
+                            key: 'omg',
+                            label: 'OMG',
+                            borderCls: 'border-rose-500/55 text-rose-300',
+                            labelCls: 'text-rose-300',
+                          },
+                          {
+                            key: 'other',
+                            label: 'Khác',
+                            borderCls: 'border-purple-500/50 text-purple-300',
+                            labelCls: 'text-purple-300',
+                          },
+                        ] as Array<{
+                          key: keyof QuizQuestionDurationByLevel;
+                          label: string;
+                          borderCls: string;
+                          labelCls: string;
+                        }>
+                      ).map((lvl) => (
+                        <label
+                          key={`sentence-dur-${lvl.key}`}
+                          className="flex flex-col items-center gap-0.5 p-1 rounded bg-violet-950/25 border border-violet-500/30"
+                        >
+                          <span
+                            className={`text-[9.5px] font-bold leading-none ${lvl.labelCls}`}
+                          >
+                            {lvl.label}
+                          </span>
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={5}
+                              max={120}
+                              step={1}
+                              aria-label={`Tổng TG Luồng 2 và 3 câu ghép từ mức ${lvl.label}`}
+                              value={curSentenceDurByLevel[lvl.key]}
+                              onChange={(e) =>
+                                updateSentenceDurationForLevel(
+                                  lvl.key,
+                                  Number(e.target.value)
+                                )
+                              }
+                              className={`w-11 px-1 py-0.5 rounded bg-stone-900 border text-center font-mono font-bold text-[10.5px] focus:outline-none ${lvl.borderCls}`}
+                            />
+                            <span className="text-[9px] text-stone-400">s</span>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>

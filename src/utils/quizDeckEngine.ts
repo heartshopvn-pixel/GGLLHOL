@@ -1,4 +1,13 @@
-import { EnglishQuizItem, GameConfig, QuizDifficultyLevel } from '../types/game';
+import {
+  EnglishQuizItem,
+  GameConfig,
+  QuizDifficultyLevel,
+  QuizQuestionType,
+} from '../types/game';
+import {
+  analyzeSentencePair,
+  isSentenceDeckName,
+} from './sentenceScramble';
 
 export const QUIZ_DECKS_IDB_KEY = 'classroom_quiz_decks_v1';
 export const QUIZ_QUEUE_IDB_KEY = 'classroom_quiz_queue_v1';
@@ -11,6 +20,7 @@ export interface QuizDeckRecord {
   id: string;
   name: string;
   level?: QuizDifficultyLevel;
+  questionType?: QuizQuestionType;
   questions: EnglishQuizItem[];
 }
 
@@ -74,7 +84,8 @@ function parseSingleQuizLine(
   idPrefix: string,
   idx: number,
   deckName?: string,
-  quizLevel?: QuizDifficultyLevel
+  quizLevel?: QuizDifficultyLevel,
+  forceQuestionType?: QuizQuestionType
 ): EnglishQuizItem | null {
   const line = rawLine.trim();
   if (!line) return null;
@@ -88,16 +99,47 @@ function parseSingleQuizLine(
   if (!cols) return null;
 
   const [rawCol0, rawCol1, phonetic] = cols;
-  let vi: string;
-  let en: string;
+  let rawVi: string;
+  let rawEn: string;
 
   if (!VIETNAMESE_DIACRITICS_RE.test(rawCol0) && VIETNAMESE_DIACRITICS_RE.test(rawCol1)) {
-    vi = rawCol1.trim();
-    en = rawCol0.replace(LEADING_NUMBER_RE, '').trim().toUpperCase().replace(NON_ALPHA_EN_RE, '');
+    rawVi = rawCol1.trim();
+    rawEn = rawCol0.replace(LEADING_NUMBER_RE, '').trim();
   } else {
-    vi = rawCol0.replace(LEADING_NUMBER_RE, '').trim();
-    en = rawCol1.trim().toUpperCase().replace(NON_ALPHA_EN_RE, '');
+    rawVi = rawCol0.replace(LEADING_NUMBER_RE, '').trim();
+    rawEn = rawCol1.trim();
   }
+
+  const shouldParseAsSentence =
+    forceQuestionType === 'sentence_scramble' ||
+    (forceQuestionType !== 'vocab' &&
+      (isSentenceDeckName(deckName) ||
+        /\b[a-zA-Z0-9']+\s+[a-zA-Z0-9']+\b/.test(rawEn)));
+
+  if (shouldParseAsSentence) {
+    const { viDisplay, enCanonical, words, trailingPunct } =
+      analyzeSentencePair(rawVi, rawEn);
+    if (!viDisplay || words.length < 2) return null;
+
+    const dedupKey = `sent__${viDisplay.toLowerCase()}__${words.join(' ')}`;
+    if (seenKeys.has(dedupKey)) return null;
+    seenKeys.add(dedupKey);
+
+    const item: EnglishQuizItem = {
+      id: `${idPrefix}-${idx}`,
+      vi: viDisplay,
+      en: enCanonical,
+      questionType: 'sentence_scramble',
+      trailingPunct,
+    };
+    if (phonetic) item.phonetic = phonetic;
+    if (deckName) item.deckName = deckName;
+    if (quizLevel) item.quizLevel = quizLevel;
+    return item;
+  }
+
+  const vi = rawVi;
+  const en = rawEn.toUpperCase().replace(NON_ALPHA_EN_RE, '');
 
   if (!vi || en.length < 2) return null;
 
@@ -120,6 +162,7 @@ export interface ParseQuizTxtOptions {
   idPrefix?: string;
   deckName?: string;
   quizLevel?: QuizDifficultyLevel;
+  questionType?: QuizQuestionType;
   chunkLines?: number;
   onProgress?: (parsedCount: number) => void;
 }
@@ -138,6 +181,7 @@ export function parseLargeQuizTxtFast(
   const idPrefix = options?.idPrefix || `txt-${Date.now()}`;
   const deckName = options?.deckName;
   const quizLevel = options?.quizLevel;
+  const questionType = options?.questionType;
   const parsed: EnglishQuizItem[] = [];
   const seenKeys = new Set<string>();
 
@@ -157,7 +201,8 @@ export function parseLargeQuizTxtFast(
         idPrefix,
         lineIdx,
         deckName,
-        quizLevel
+        quizLevel,
+        questionType
       );
       if (item) parsed.push(item);
     }
@@ -183,6 +228,7 @@ export async function parseLargeQuizTxtChunked(
   const idPrefix = options?.idPrefix || `txt-${Date.now()}`;
   const deckName = options?.deckName;
   const quizLevel = options?.quizLevel;
+  const questionType = options?.questionType;
   const chunkLines = Math.max(500, options?.chunkLines ?? 4000);
   const parsed: EnglishQuizItem[] = [];
   const seenKeys = new Set<string>();
@@ -205,7 +251,8 @@ export async function parseLargeQuizTxtChunked(
         idPrefix,
         lineIdx,
         deckName,
-        quizLevel
+        quizLevel,
+        questionType
       );
       if (item) parsed.push(item);
     }

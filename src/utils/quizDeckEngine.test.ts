@@ -43,7 +43,7 @@ function generateSyntheticTxtLines(count: number): string {
   return lines.join('\n');
 }
 
-test('build15MinuteTieredRoundQuestions returns 10 questions: 3 easy + 4 normal + 3 hard', () => {
+test('build15MinuteTieredRoundQuestions returns 10 questions: 3 easy + 4 normal + 2 hard + Q10 normal', () => {
   const round = build15MinuteTieredRoundQuestions(DEFAULT_CONFIG);
   assert.equal(round.length, 10);
   assert.deepEqual(
@@ -58,7 +58,7 @@ test('build15MinuteTieredRoundQuestions returns 10 questions: 3 easy + 4 normal 
       'normal',
       'hard',
       'hard',
-      'hard',
+      'normal',
     ]
   );
 });

@@ -54,6 +54,7 @@ import {
 import {
   QUIZ_DECK_SCHEMA_VERSION,
   build15MinuteTieredRoundQuestions,
+  ensureSentenceDecksSeeded,
   ensureTieredQuizDecksLoaded,
   getQuizLevelRewardInfo,
   normalizeQuizDeckFileName,
@@ -62,6 +63,7 @@ import {
   parseLargeQuizTxtChunked,
   prepareEnqueuedQuestions,
 } from '../../utils/quizDeckEngine';
+import { isSentenceScrambleItem } from '../../utils/sentenceScramble';
 import { Flower10BadgeIcon, GoldTrophyIcon, SchoolGiftArt } from '../stage/SchoolGiftArt';
 import {
   TeacherLiveVoiceOptions,
@@ -343,15 +345,16 @@ export const TabControl: React.FC<TabControlProps> = ({
       ? config.customQuizQuestions
       : ENGLISH_QUIZ_QUESTIONS;
 
-  const quizDecks = useMemo(
-    () =>
-      ensureTieredQuizDecksLoaded(
-        Array.isArray(config.quizDecks) && config.quizDecks.length > 0
-          ? config.quizDecks
-          : DEFAULT_QUIZ_DECKS
-      ),
-    [config.quizDecks]
-  );
+  const quizDecks = useMemo(() => {
+    const baseDecks = ensureTieredQuizDecksLoaded(
+      Array.isArray(config.quizDecks) && config.quizDecks.length > 0
+        ? config.quizDecks
+        : DEFAULT_QUIZ_DECKS
+    );
+    return config.sentenceDecksSeededV1
+      ? baseDecks
+      : ensureSentenceDecksSeeded(baseDecks);
+  }, [config.quizDecks, config.sentenceDecksSeededV1]);
 
   const totalLibraryQuestions = useMemo(
     () => quizDecks.reduce((acc, d) => acc + (d.questions?.length || 0), 0),
@@ -863,7 +866,7 @@ export const TabControl: React.FC<TabControlProps> = ({
             </span>
             {activeEngine === 'english_quiz' && (
               <span className="px-1.5 py-0.5 rounded bg-stone-950 border border-stone-800 text-[10px] font-mono text-amber-300 truncate">
-                Câu {(classBoardState?.roundQuestionIndex ?? qIdx) + 1}/15: {curQuiz.vi} → {curQuiz.en}
+                Câu {(classBoardState?.roundQuestionIndex ?? qIdx) + 1}/{classBoardState?.totalQuestions || 10}: {curQuiz.vi} → {curQuiz.en}
               </span>
             )}
           </div>
@@ -1200,10 +1203,10 @@ export const TabControl: React.FC<TabControlProps> = ({
 
             <div className="text-[9.5px] text-stone-400 bg-stone-950/80 border border-stone-800/80 rounded px-2 py-1 leading-tight">
               {letterMode === 'hint_2'
-                ? '💡 Gợi ý 2: Hiện 2 chữ cái ngẫu nhiên.'
+                ? '💡 Từ vựng (Gợi ý 2): Hiện 2 chữ cái ngẫu nhiên. • Ghép câu: Hiện đủ các ô từ xáo trộn (từ đầu không đứng đầu, dấu ?/! ở cuối).'
                 : letterMode === 'hint_3'
-                ? '💡 Gợi ý 3: Hiện 2 chữ cái đầu & cuối.'
-                : '💡 Mặc định: Luôn gợi ý 1 chữ cái đầu; sau 5s thêm 1 chữ (6 ký tự), thêm 2 (7-9 ký tự), thêm 3 (10+ ký tự).'}
+                ? '💡 Từ vựng (Gợi ý 3): Hiện chữ đầu & cuối. • Ghép câu: Hiện đủ các ô từ xáo trộn (từ đầu không đứng đầu, dấu ?/! ở cuối).'
+                : '💡 Từ vựng (Mặc định): Hiện 1 chữ đầu (+gợi ý sau 5s). • Ghép câu: Hiện đủ các ô từ xáo trộn (từ đầu không đứng đầu, dấu ?/! ở cuối).'}
             </div>
 
             {/* QUẢN LÝ BỘ ĐỀ & HÀNG CHỜ CÂU HỎI TIẾNG ANH (THẺ CỐ ĐỊNH KÍCH THƯỚC) */}
@@ -1286,86 +1289,91 @@ export const TabControl: React.FC<TabControlProps> = ({
                 {visibleQueueEntries.map(({ q, idx }) => {
                   const isCurrent = idx === (classBoardState?.questionIndex ?? 0);
                   const stars = q.luckyStars || 0;
+                  const isSentence = isSentenceScrambleItem(q);
+                  const levelSpec = getQuizLevelRewardInfo(q);
                   return (
                     <div
                       key={q.id || idx}
-                      className={`p-1.5 rounded-lg border flex items-center justify-between gap-1.5 transition ${
+                      title={`#${idx + 1}: "${q.vi}" → ${q.en}${q.deckName ? ` (${q.deckName})` : ''}`}
+                      className={`p-1.5 rounded-lg border space-y-1 transition ${
                         isCurrent
                           ? 'bg-emerald-950/60 border-emerald-500/70 shadow-sm'
                           : 'bg-stone-900/80 border-stone-800/90 hover:border-stone-700'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-[9.5px] font-mono text-stone-400 w-7 text-right shrink-0">
-                          #{idx + 1}
-                        </span>
-                        {isCurrent && (
-                          <span className="px-1 py-0.2 rounded bg-emerald-500 text-stone-950 font-black text-[8.5px] shrink-0 animate-pulse">
-                            Đang phát
+                      <div className="flex items-center justify-between gap-1 min-w-0">
+                        <div className="flex items-center gap-1 min-w-0 flex-wrap">
+                          <span className="text-[9.5px] font-mono font-bold text-stone-400 shrink-0">
+                            #{idx + 1}
                           </span>
-                        )}
-                        <span className="font-bold text-amber-200 truncate">
-                          "{q.vi}"
-                        </span>
-                        <span className="text-stone-400 text-[10px]">→</span>
-                        <span className="font-mono font-bold text-white truncate">
-                          {q.en}
-                        </span>
-                        {q.deckName && (
-                          <span className="px-1 py-0.2 rounded bg-stone-800 border border-stone-700 text-[8px] text-cyan-300 shrink-0">
-                            {q.deckName.includes('500')
-                              ? '500 Cơ bản'
-                              : q.deckName.includes('300')
-                              ? '300 TB'
-                              : q.deckName.includes('vua_phai') ||
-                                q.deckName.includes('vừa phải')
-                              ? '200 Khó vừa'
-                              : q.deckName.includes('nang_cao') ||
-                                q.deckName.includes('nâng cao')
-                              ? '200 Nâng cao'
-                              : q.deckName.replace(/\.txt$/i, '')}
+                          {isCurrent && (
+                            <span className="px-1 py-0.2 rounded bg-emerald-500 text-stone-950 font-black text-[8.5px] shrink-0 animate-pulse">
+                              Đang phát
+                            </span>
+                          )}
+                          <span
+                            className={`px-1 py-0.2 rounded border text-[8px] font-extrabold shrink-0 ${
+                              isSentence
+                                ? 'bg-violet-600/35 border-violet-400/70 text-violet-200'
+                                : 'bg-cyan-950/60 border-cyan-500/40 text-cyan-200'
+                            }`}
+                          >
+                            {isSentence ? '🧩 Ghép câu' : '🔤 Từ vựng'}
                           </span>
-                        )}
+                          <span className="px-1 py-0.2 rounded bg-stone-800 border border-stone-700 text-[8px] font-bold text-amber-200 shrink-0">
+                            {levelSpec.label}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {/* Nút bấm đổi sao may mắn (cycle 0 -> 1 -> 2 -> 3 -> 0) */}
+                          <button
+                            type="button"
+                            onClick={() => handleCycleQuestionStars(idx)}
+                            title={
+                              stars > 0
+                                ? `${stars} sao may mắn, x${stars + 1} điểm. Bấm để đổi`
+                                : 'Câu hỏi thường (không sao, x1 điểm). Bấm để thêm sao'
+                            }
+                            className={`px-1.5 py-0.5 rounded font-mono font-bold text-[9px] flex items-center gap-0.5 border cursor-pointer ${
+                              stars === 3
+                                ? 'bg-amber-500/30 border-yellow-300 text-yellow-200'
+                                : stars === 2
+                                ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                                : stars === 1
+                                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                                : 'bg-stone-800 border-stone-700 text-stone-400'
+                            }`}
+                          >
+                            {stars > 0 ? (
+                              <>
+                                <span>{'⭐'.repeat(stars)}</span>
+                                <span>x{stars + 1}</span>
+                              </>
+                            ) : (
+                              <span>Thường</span>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteQueueQuestion(idx)}
+                            title="Xóa câu này khỏi hàng chờ"
+                            className="w-4 h-4 rounded hover:bg-rose-900/60 text-stone-400 hover:text-rose-200 flex items-center justify-center text-[10px] cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        {/* Nút bấm đổi sao may mắn (cycle 0 -> 1 -> 2 -> 3 -> 0) */}
-                        <button
-                          type="button"
-                          onClick={() => handleCycleQuestionStars(idx)}
-                          title={
-                            stars > 0
-                              ? `${stars} sao may mắn, x${stars + 1} điểm. Bấm để đổi`
-                              : 'Câu hỏi thường (không sao, x1 điểm). Bấm để thêm sao'
-                          }
-                          className={`px-1.5 py-0.5 rounded font-mono font-bold text-[9px] flex items-center gap-0.5 border cursor-pointer ${
-                            stars === 3
-                              ? 'bg-amber-500/30 border-yellow-300 text-yellow-200'
-                              : stars === 2
-                              ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                              : stars === 1
-                              ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
-                              : 'bg-stone-800 border-stone-700 text-stone-400'
-                          }`}
-                        >
-                          {stars > 0 ? (
-                            <>
-                              <span>{'⭐'.repeat(stars)}</span>
-                              <span>x{stars + 1}</span>
-                            </>
-                          ) : (
-                            <span>Thường</span>
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteQueueQuestion(idx)}
-                          title="Xóa câu này khỏi hàng chờ"
-                          className="w-4 h-4 rounded hover:bg-rose-900/60 text-stone-400 hover:text-rose-200 flex items-center justify-center text-[10px] cursor-pointer"
-                        >
-                          ✕
-                        </button>
+                      <div className="flex items-center gap-1 min-w-0 text-[10px] leading-snug">
+                        <span className="font-bold text-amber-200 truncate max-w-[48%]">
+                          "{q.vi}"
+                        </span>
+                        <span className="text-stone-400 shrink-0">→</span>
+                        <span className="font-mono font-bold text-white truncate flex-1">
+                          {q.en}
+                        </span>
                       </div>
                     </div>
                   );
@@ -1430,10 +1438,63 @@ export const TabControl: React.FC<TabControlProps> = ({
                   </button>
                 </div>
                 <div className="text-[9px] text-stone-400 leading-snug">
-                  Quy ước tên file: <span className="text-emerald-300 font-mono">tienganh-de</span> (5/10/8/7) •{' '}
-                  <span className="text-sky-300 font-mono">tienganh-thuong</span> (7/12/10/9) •{' '}
-                  <span className="text-amber-300 font-mono">tienganh-kho</span> (9/15/13/12) •{' '}
-                  <span className="text-rose-300 font-mono">tienganh-OMG</span> (12/20/18/16). Chọn nhiều file cùng lúc được; trùng tên ghi đè, khác tên tạo bộ đề mới.
+                  Từ vựng: <span className="text-emerald-300 font-mono">tienganh-de</span> •{' '}
+                  <span className="text-sky-300 font-mono">tienganh-thuong</span> •{' '}
+                  <span className="text-amber-300 font-mono">tienganh-kho</span> •{' '}
+                  <span className="text-rose-300 font-mono">tienganh-OMG</span>. Ghép câu:{' '}
+                  <span className="text-violet-300 font-mono">ghepcau-tienganh-de / thuong / kho / OMG</span> (trùng tên ghi đè, khác tên tạo mới).
+                </div>
+
+                {/* Tỉ lệ xuất hiện câu hỏi Ghép Câu trên mỗi câu trong tiết kiểm tra 15 phút (0% -> 100%) */}
+                <div className="p-1.5 rounded-lg bg-violet-950/35 border border-violet-500/40 space-y-1">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <label
+                      htmlFor="sentence-scramble-ratio-input"
+                      className="text-[10px] font-bold text-violet-200"
+                    >
+                      🧩 Tỉ lệ câu Ghép Câu (Tiết 15p / mỗi câu):
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        id="sentence-scramble-ratio-input"
+                        aria-label="Tỉ lệ câu Ghép Câu tiết 15p"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={config.sentenceScrambleRatio ?? 30}
+                        onChange={(e) => {
+                          const nextRatio = Math.max(
+                            0,
+                            Math.min(100, parseInt(e.target.value, 10) || 0)
+                          );
+                          onUpdateConfig({ sentenceScrambleRatio: nextRatio });
+                        }}
+                        className="w-12 px-1 py-0.5 rounded bg-stone-950 border border-violet-400/60 text-center font-mono font-bold text-[10px] text-violet-200 focus:outline-none focus:border-violet-300"
+                      />
+                      <span className="text-[9.5px] font-bold text-violet-300">%</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      aria-label="Thanh trượt tỉ lệ câu Ghép Câu tiết 15p"
+                      value={config.sentenceScrambleRatio ?? 30}
+                      onChange={(e) => {
+                        const nextRatio = Math.max(
+                          0,
+                          Math.min(100, parseInt(e.target.value, 10) || 0)
+                        );
+                        onUpdateConfig({ sentenceScrambleRatio: nextRatio });
+                      }}
+                      className="flex-1 accent-violet-400 h-1.5 cursor-pointer"
+                    />
+                    <span className="text-[8.5px] text-stone-400 shrink-0">
+                      Thay thế đúng Level Dễ/Thường/Khó/OMG
+                    </span>
+                  </div>
                 </div>
 
                 {/* Nút bật/tắt xáo trộn + 3 Nút Nạp Đề Tiêu Đề Ngắn Gọn */}
@@ -1453,17 +1514,20 @@ export const TabControl: React.FC<TabControlProps> = ({
                       type="button"
                       onClick={() => {
                         const tiered10 = build15MinuteTieredRoundQuestions(config);
+                        const sentenceCount = tiered10.filter((item) =>
+                          isSentenceScrambleItem(item)
+                        ).length;
                         onUpdateConfig({
                           customQuizQuestions: tiered10,
                         });
                         setQuizImportFeedback(
-                          '🎯 Đã trích ngẫu nhiên 10 câu kiểm tra 15 phút (3 câu Dễ + 4 câu Thường + 3 câu Khó)!'
+                          `🎯 Đã trích 10 câu kiểm tra 15p (${sentenceCount}/10 câu Ghép Câu theo tỉ lệ ${config.sentenceScrambleRatio ?? 30}%)!`
                         );
                       }}
-                      title="Trích ngẫu nhiên 10 câu kiểm tra 15 phút (O(k) tức thì): 3 câu đầu Dễ (tienganh-de) + 4 câu kế Thường (tienganh-thuong) + 3 câu cuối Khó (tienganh-kho)"
+                      title="Trích ngẫu nhiên 10 câu kiểm tra 15 phút: Câu 1–3 Dễ + Câu 4–7 Thường + Câu 8–9 Khó + Câu 10 Thường (tự động thay thế câu Ghép Câu cùng Level theo tỉ lệ %)"
                       className="px-2 py-1 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-extrabold text-[10px] cursor-pointer shadow-sm transition"
                     >
-                      🎯 Trích 10 câu (3+4+3)
+                      🎯 Trích 10 câu (15p)
                     </button>
                     <button
                       type="button"
@@ -2109,7 +2173,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'Rose',
-                  1,
+                  1 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2119,7 +2183,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               className="py-1.5 px-2 rounded-lg bg-pink-950/75 hover:bg-pink-900/80 border border-pink-500/45 text-[11px] font-bold text-pink-200 flex items-center justify-between gap-1 transition cursor-pointer"
             >
               <span className="truncate">🌹 (1) Hoa hồng: Tặng cô</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+10đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{1 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2127,7 +2193,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'Ice Cream',
-                  1,
+                  1 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2137,7 +2203,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               className="py-1.5 px-2 rounded-lg bg-cyan-950/75 hover:bg-cyan-900/80 border border-cyan-500/45 text-[11px] font-bold text-cyan-200 flex items-center justify-between gap-1 transition cursor-pointer"
             >
               <span className="truncate">🍦 (1) Kem: Tặng thầy</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+10đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{1 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2145,7 +2213,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'Đỉnh',
-                  1,
+                  1 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2156,7 +2224,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               title="Quà Đỉnh (con mèo đưa tay lên like 1 coin) -> Nuôi mèo"
             >
               <span className="truncate">🐱 (1) Đỉnh: Nuôi mèo</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+10đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{1 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2164,7 +2234,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'GG',
-                  1,
+                  1 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2174,7 +2244,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               className="py-1.5 px-2 rounded-lg bg-emerald-950/75 hover:bg-emerald-900/80 border border-emerald-500/45 text-[11px] font-bold text-emerald-200 flex items-center justify-between gap-1 transition cursor-pointer"
             >
               <span className="truncate">🍿 (1) GG: Ăn vụn</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+10đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{1 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2182,7 +2254,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'Heart Me',
-                  5,
+                  5 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2192,7 +2264,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               className="py-1.5 px-2 rounded-lg bg-fuchsia-950/75 hover:bg-fuchsia-900/80 border border-fuchsia-500/45 text-[11px] font-bold text-fuchsia-200 flex items-center justify-between gap-1 transition cursor-pointer"
             >
               <span className="truncate">🖥️ (5) Bắn tim: ĐT reo (PC)</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+20đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{5 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2200,7 +2274,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'Chú heo may mắn',
-                  10,
+                  10 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2211,7 +2285,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               title="Quà Chú heo may mắn (10 coin) -> Thêm 1 heo lên bàn (max 1) & Thả 8 heo tấn công"
             >
               <span className="truncate">🐷 (10) Chú heo may mắn: 8 heo</span>
-              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">+40đ</span>
+              <span className="text-[9.5px] font-mono text-emerald-300 shrink-0">
+                +{10 * giftTestComboCount * 5}đ
+              </span>
             </button>
 
             <button
@@ -2219,7 +2295,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               onClick={() =>
                 onTriggerClassroomGift?.(
                   'VIP',
-                  20,
+                  20 * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2229,7 +2305,9 @@ export const TabControl: React.FC<TabControlProps> = ({
               className="col-span-2 py-1.5 px-2.5 rounded-lg bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:brightness-105 text-xs font-extrabold text-stone-950 flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>💵 (10+) VIP: Tôi là Rich Kid (+99đ, cả lớp +30đ, Nhảy bàn & Mưa tiền 5s)</span>
+              <span>
+                💵 (10+) VIP: Tôi là Rich Kid (+{20 * giftTestComboCount * 5}đ, cả lớp +30đ, Nhảy bàn & Mưa tiền 5s)
+              </span>
             </button>
 
             <button
@@ -2240,7 +2318,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                   randomPrices[Math.floor(Math.random() * randomPrices.length)];
                 onTriggerClassroomGift?.(
                   `Quà Lạ ${pickPrice} Xu`,
-                  pickPrice,
+                  pickPrice * giftTestComboCount,
                   giftTestTargetMode === 'in_class' ? '' : customName,
                   customAvatarUrl,
                   giftTestTargetMode === 'in_class',
@@ -2249,7 +2327,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               }}
               className="col-span-2 py-1 px-2 rounded-lg bg-stone-950 hover:bg-stone-800 border border-stone-700 text-[10.5px] font-semibold text-amber-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
-              <span>🎲 Test Quà Ngoài Danh Sách (Tự khớp món bằng hoặc gần bằng giá ngẫu nhiên)</span>
+              <span>🎲 Test Quà Ngoài Danh Sách (1 xu = +5đ • Tự khớp hiệu ứng quà gần giá nhất)</span>
             </button>
           </div>
 

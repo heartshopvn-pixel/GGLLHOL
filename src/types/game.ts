@@ -309,6 +309,8 @@ export interface QuizQuestionDurationByLevel {
   other: number;
 }
 
+export type QuizQuestionType = 'vocab' | 'sentence_scramble';
+
 export interface EnglishQuizItem {
   id: string;
   vi: string;
@@ -317,6 +319,8 @@ export interface EnglishQuizItem {
   luckyStars?: 0 | 1 | 2 | 3;
   deckName?: string;
   quizLevel?: QuizDifficultyLevel;
+  questionType?: QuizQuestionType;
+  trailingPunct?: '' | '?' | '!';
 }
 
 export interface TikTokOrderMeta {
@@ -466,6 +470,7 @@ export interface HudLayoutConfig {
   classBoardLetterMode?: ClassBoardLetterMode;
   classBoardQuestionDurationSec?: number;
   classBoardQuestionDurationByLevel?: QuizQuestionDurationByLevel;
+  classBoardSentenceQuestionDurationByLevel?: QuizQuestionDurationByLevel;
   classBoardRevealDurationSec?: number;
   classBoardNpcParticipate?: boolean;
   classBoardTtsReadQuestion?: boolean;
@@ -569,6 +574,7 @@ export interface GameConfig {
   bgmVolume: number;
   bgmTracks: BgmTrackItem[];
   activeBgmTrackId: string;
+  bgmPlayMode?: 'sequential' | 'loop_one' | 'shuffle';
 
   bellEnabled: boolean;
   bellMp3Url: string | null;
@@ -660,6 +666,8 @@ export interface GameConfig {
   activeQuizDeckId?: string;
   quizQueueLimitDisplay?: number;
   shuffleBeforeEnqueue?: boolean;
+  sentenceScrambleRatio?: number; // % tỉ lệ xuất hiện câu hỏi Ghép Câu trên mỗi câu trong tiết kiểm tra 15p (0..100)
+  sentenceDecksSeededV1?: boolean;
   luckyStarRatio1?: number; // % câu hỏi 1 sao (x1 điểm)
   luckyStarRatio2?: number; // % câu hỏi 2 sao (x2 điểm)
   luckyStarRatio3?: number; // % câu hỏi 3 sao (x3 điểm)
@@ -829,6 +837,13 @@ export interface GameConfig {
   zombieFlow6Speech1Template?: string;
   zombieFlow6Speech2Template?: string;
   zombieFlow6MinDurationSec?: number;
+  // Cảnh báo ngầm về Telegram (Focus-Reminder) khi Node.js tạm đứt kết nối hoặc comment xuất hiện từ khóa báo lỗi
+  reminderAlertEnabled?: boolean;
+  reminderAlertUrl?: string;
+  reminderAlertCooldownSec?: number;
+  reminderAlertOnDisconnect?: boolean;
+  reminderAlertOnKeyword?: boolean;
+  reminderAlertKeywords?: string[];
   incenseBurner: Point2D; // Vị trí học sinh đứng trước bàn Giáo viên để nộp bài / tặng quà
   offeringTrayPos: Point2D; // Vị trí đặt quà trên bàn Giáo viên
   monkZone: RectBounds; // Khu vực bục giảng của Cô Giáo
@@ -1249,7 +1264,9 @@ export interface SyncPacket {
     | 'TRIGGER_ROSE_HEART_BURST'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'
-    | 'OBS_DISPLAY_CONTROL';
+    | 'OBS_DISPLAY_CONTROL'
+    | 'REMINDER_ALERT_SYNC'
+    | 'SYNC_BGM_ACTIVE_TRACK';
   payload: Record<string, any>;
   ts: number;
 }

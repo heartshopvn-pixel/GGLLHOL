@@ -514,6 +514,8 @@ class TempleSoundService {
     const startMs = Date.now();
     try {
       const res = await fetch(candidateUrl, { signal: controller.signal });
+      clearTimeout(timer);
+      const latencyMs = Math.max(1, Date.now() - startMs);
       if (!res.ok) return null;
       const contentType = (
         res.headers.get('content-type') || ''
@@ -541,12 +543,10 @@ class TempleSoundService {
       }
       const blob = await res.blob();
       if (!blob || blob.size < 128) return null;
-      const latencyMs = Math.max(1, Date.now() - startMs);
       return { blob, rawSource, switchedMirror, decodedFail, latencyMs };
     } catch {
-      return null;
-    } finally {
       clearTimeout(timer);
+      return null;
     }
   }
 
@@ -568,25 +568,19 @@ class TempleSoundService {
     if (existingPromise) return existingPromise;
 
     const p = (async () => {
-      const startedAt = Date.now();
       // 1. Thử máy chủ hiện tại (/api/tts)
       let fetched = await this.fetchSingleAudioBlobCandidate(url, timeoutMs);
 
       // 2. Nếu host hiện tại là static host hoặc IP cloud bị Google giới hạn 429/502 -> thử cổng local server.js (127.0.0.1:8080) trên máy người dùng (vẫn 100% cùng giọng Google Warm)
-      const remainingTimeoutMs = Math.max(
-        0,
-        timeoutMs - (Date.now() - startedAt)
-      );
       if (
         !fetched &&
-        remainingTimeoutMs > 0 &&
         url.startsWith('/api/tts') &&
         typeof window !== 'undefined' &&
         window.location.port !== '8080'
       ) {
         fetched = await this.fetchSingleAudioBlobCandidate(
           `http://127.0.0.1:8080${url}`,
-          Math.min(1800, remainingTimeoutMs)
+          1800
         );
       }
 
@@ -1181,9 +1175,68 @@ class TempleSoundService {
     }
   }
 
+  private currentBgmTrackId: string | null = null;
+  private synthBgmNoteCount = 0;
+  private onBgmTrackChangeCallback: ((nextTrackId: string) => void) | null = null;
+
+  public setOnBgmTrackChange(cb: ((nextTrackId: string) => void) | null) {
+    this.onBgmTrackChangeCallback = cb;
+  }
+
+  private pickNextBgmTrackId(
+    tracks: NonNullable<GameConfig['bgmTracks']>,
+    currentTrackId: string | null | undefined,
+    mode: 'sequential' | 'loop_one' | 'shuffle'
+  ): string | null {
+    if (!tracks.length) return null;
+    if (tracks.length === 1) return tracks[0].id;
+    const curIdx = Math.max(
+      0,
+      tracks.findIndex((t) => t.id === currentTrackId)
+    );
+    if (mode === 'loop_one') {
+      return tracks[curIdx]?.id || tracks[0].id;
+    }
+    if (mode === 'shuffle') {
+      const offset = 1 + Math.floor(Math.random() * (tracks.length - 1));
+      return tracks[(curIdx + offset) % tracks.length].id;
+    }
+    return tracks[(curIdx + 1) % tracks.length].id;
+  }
+
+  private handleBgmTrackEnded() {
+    const cfg = this.latestConfig;
+    if (!cfg || !cfg.bgmEnabled || this.localTabMuted || this.isZombieEventActive) {
+      return;
+    }
+    const tracks = cfg.bgmTracks || [];
+    if (!tracks.length) return;
+    const mode = cfg.bgmPlayMode || 'sequential';
+    if (mode === 'loop_one' || tracks.length <= 1) {
+      if (this.bgmAudio) {
+        this.bgmAudio.currentTime = 0;
+        void this.bgmAudio.play().catch(() => {});
+      }
+      return;
+    }
+    const nextId = this.pickNextBgmTrackId(
+      tracks,
+      this.currentBgmTrackId || cfg.activeBgmTrackId,
+      mode
+    );
+    if (!nextId) return;
+    this.latestConfig = {
+      ...cfg,
+      activeBgmTrackId: nextId,
+    };
+    this.syncBgm(this.latestConfig);
+    this.onBgmTrackChangeCallback?.(nextId);
+  }
+
   private stopBgmInternal() {
     if (this.bgmAudio) {
       try {
+        this.bgmAudio.onended = null;
         this.bgmAudio.pause();
         this.bgmAudio = null;
       } catch {
@@ -1191,6 +1244,8 @@ class TempleSoundService {
       }
     }
     this.currentBgmUrl = null;
+    this.currentBgmTrackId = null;
+    this.synthBgmNoteCount = 0;
     if (this.synthBgmInterval) {
       clearInterval(this.synthBgmInterval);
       this.synthBgmInterval = null;
@@ -1339,6 +1394,8 @@ class TempleSoundService {
       return;
     }
 
+    const playMode = config.bgmPlayMode || 'sequential';
+    const shouldLoopSingle = playMode === 'loop_one' || tracks.length <= 1;
     const vol = Math.max(0.05, Math.min(1, config.bgmVolume ?? 0.4));
 
     if (activeTrack.url) {
@@ -1348,24 +1405,38 @@ class TempleSoundService {
         this.synthBgmInterval = null;
         this.activeSynthPreset = null;
       }
-      if (this.currentBgmUrl !== activeTrack.url || !this.bgmAudio) {
+      this.synthBgmNoteCount = 0;
+      if (
+        this.currentBgmUrl !== activeTrack.url ||
+        this.currentBgmTrackId !== activeTrack.id ||
+        !this.bgmAudio
+      ) {
         if (this.bgmAudio) {
           try {
+            this.bgmAudio.onended = null;
             this.bgmAudio.pause();
           } catch {
             // Ignore
           }
         }
         const audio = new Audio(activeTrack.url);
-        audio.loop = true;
+        audio.loop = shouldLoopSingle;
         audio.volume = vol;
+        audio.onended = () => {
+          this.handleBgmTrackEnded();
+        };
         this.bgmAudio = audio;
         this.currentBgmUrl = activeTrack.url;
+        this.currentBgmTrackId = activeTrack.id;
         audio.play().catch(() => {
           // Chờ tương tác người dùng đầu tiên
         });
       } else {
+        this.bgmAudio.loop = shouldLoopSingle;
         this.bgmAudio.volume = vol;
+        this.bgmAudio.onended = () => {
+          this.handleBgmTrackEnded();
+        };
         if (this.bgmAudio.paused) {
           this.bgmAudio.play().catch(() => {});
         }
@@ -1374,6 +1445,7 @@ class TempleSoundService {
       // Phát nhạc thiền định mặc định bằng WebAudio (khi chưa nạp file MP3 ngoài)
       if (this.bgmAudio) {
         try {
+          this.bgmAudio.onended = null;
           this.bgmAudio.pause();
           this.bgmAudio = null;
         } catch {
@@ -1382,12 +1454,30 @@ class TempleSoundService {
         this.currentBgmUrl = null;
       }
       const preset = activeTrack.presetType || 'zen_bowl';
-      if (this.activeSynthPreset !== preset || !this.synthBgmInterval) {
+      if (
+        this.activeSynthPreset !== preset ||
+        this.currentBgmTrackId !== activeTrack.id ||
+        !this.synthBgmInterval
+      ) {
         if (this.synthBgmInterval) clearInterval(this.synthBgmInterval);
         this.activeSynthPreset = preset;
+        this.currentBgmTrackId = activeTrack.id;
+        this.synthBgmNoteCount = 0;
         this.playZenAmbientNote(preset, vol);
         this.synthBgmInterval = setInterval(() => {
           if (!this.latestConfig?.bgmEnabled || this.localTabMuted) return;
+          const latestMode = this.latestConfig.bgmPlayMode || 'sequential';
+          const latestTracks = this.latestConfig.bgmTracks || [];
+          this.synthBgmNoteCount += 1;
+          if (
+            latestMode !== 'loop_one' &&
+            latestTracks.length > 1 &&
+            this.synthBgmNoteCount >= 16
+          ) {
+            this.synthBgmNoteCount = 0;
+            this.handleBgmTrackEnded();
+            return;
+          }
           const latestVol = Math.max(
             0.05,
             Math.min(1, this.latestConfig?.bgmVolume ?? 0.4)
@@ -3738,13 +3828,6 @@ class TempleSoundService {
     let hasStartedPlaying = false;
     let activeAudio: HTMLAudioElement | null = null;
     let skipTimer: ReturnType<typeof setTimeout> | null = null;
-    let lagTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const clearLagTimeout = () => {
-      if (!lagTimeout) return;
-      clearTimeout(lagTimeout);
-      lagTimeout = null;
-    };
 
     const cleanupAudio = () => {
       if (!activeAudio) return;
@@ -3766,7 +3849,7 @@ class TempleSoundService {
     };
 
     const clearStreamTimers = () => {
-      clearLagTimeout();
+      clearTimeout(lagTimeout);
       if (playbackWatchdog) {
         clearTimeout(playbackWatchdog);
         playbackWatchdog = null;
@@ -3807,14 +3890,11 @@ class TempleSoundService {
     };
 
     const timeoutBudget = 3500;
-    const armLagTimeout = () => {
-      clearLagTimeout();
-      lagTimeout = setTimeout(() => {
-        if (!hasStartedPlaying) {
-          skipOnce('Google Warm phản hồi quá hạn >3.5s ➔ Tự động Skip');
-        }
-      }, timeoutBudget);
-    };
+    const lagTimeout = setTimeout(() => {
+      if (!hasStartedPlaying) {
+        skipOnce('Google Warm phản hồi quá hạn >3.5s ➔ Tự động Skip');
+      }
+    }, timeoutBudget);
 
     const approxStreamRate = Math.max(0.5, Number(config.ttsRate || 1));
     const estimatedPlayMs = Math.max(
@@ -3841,7 +3921,6 @@ class TempleSoundService {
         }
         const meta = this.audioBlobMetaCache.get(proxyUrl);
         const startViaHtmlAudio = (srcUrl: string, isDirectStream = false) => {
-          armLagTimeout();
           const audio = new Audio();
           (
             audio as HTMLAudioElement & { referrerPolicy?: string }
@@ -3892,7 +3971,7 @@ class TempleSoundService {
 
           audio.onplaying = () => {
             hasStartedPlaying = true;
-            clearLagTimeout();
+            clearTimeout(lagTimeout);
             this.applyAudioPlaybackParams(
               audio,
               effectiveRate,
@@ -3947,7 +4026,6 @@ class TempleSoundService {
           audio.play().catch((err) => {
             cleanupAudio();
             if (!isDirectStream && blobUrl) {
-              armLagTimeout();
               void this.tryPlayBlobViaWebAudio(
                 blobUrl,
                 effectiveRate,
@@ -3955,7 +4033,7 @@ class TempleSoundService {
                 token,
                 (durSec) => {
                   hasStartedPlaying = true;
-                  clearLagTimeout();
+                  clearTimeout(lagTimeout);
                   if (playbackWatchdog) clearTimeout(playbackWatchdog);
                   const exactMs = Math.ceil(durSec * 1000) + 1500;
                   playbackWatchdog = setTimeout(() => {
@@ -4001,7 +4079,6 @@ class TempleSoundService {
         }
 
         if (forceMaleWarmFilter) {
-          armLagTimeout();
           void this.tryPlayBlobViaWebAudio(
             blobUrl,
             config.ttsRate || 1.05,
@@ -4009,7 +4086,7 @@ class TempleSoundService {
             token,
             (actualPlaySec) => {
               hasStartedPlaying = true;
-              clearLagTimeout();
+              clearTimeout(lagTimeout);
               if (playbackWatchdog) clearTimeout(playbackWatchdog);
               const exactMs = Math.ceil(actualPlaySec * 1000) + 1200;
               playbackWatchdog = setTimeout(() => {

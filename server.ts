@@ -596,17 +596,47 @@ async function startServer() {
         });
       };
 
+      const giftStreakMap = new Map<string, { count: number; at: number }>();
+
       const onGift = (data: any) => {
-        const giftType =
-          data?.gift?.type ??
-          data?.giftType ??
-          data?.gift?.giftType ??
-          data?.giftDetails?.giftType;
-        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
-        if (giftType === 1 && !repeatEnd) return;
         const username = extractTikTokUsername(data);
+        const giftType = Number(
+          data?.gift?.type ??
+            data?.giftType ??
+            data?.gift?.giftType ??
+            data?.giftDetails?.giftType ??
+            (data?.gift?.combo ? 1 : 0)
+        );
+        const isComboGift = giftType === 1 || Boolean(data?.gift?.combo);
+        const rawRepeatCount = Math.max(
+          1,
+          Number(
+            data?.repeatCount ?? data?.comboCount ?? data?.gift?.repeat_count ?? 1
+          ) || 1
+        );
+        const groupId = String(
+          data?.groupId || data?.giftId || data?.gift?.id || 'default'
+        );
+        const nowGiftMs = Date.now();
+        for (const [gk, gv] of giftStreakMap.entries()) {
+          if (nowGiftMs - gv.at > 45000) giftStreakMap.delete(gk);
+        }
+
+        let effectiveUnits = rawRepeatCount;
+        if (isComboGift) {
+          const streakKey = `${username.toLowerCase()}:${groupId}`;
+          const prevStreak = giftStreakMap.get(streakKey);
+          const prevCount = prevStreak ? prevStreak.count : 0;
+          if (rawRepeatCount <= prevCount) {
+            return;
+          }
+          effectiveUnits = rawRepeatCount - prevCount;
+          giftStreakMap.set(streakKey, { count: rawRepeatCount, at: nowGiftMs });
+        }
+
         const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
-        const diamondCount =
+        const diamondCount = Math.max(
+          1,
           Number(
             data?.gift?.diamondCount ??
               data?.giftDetails?.diamondCount ??
@@ -614,10 +644,7 @@ async function startServer() {
               data?.diamondCount ??
               fallbackGift?.coins ??
               1
-          ) || 1;
-        const repeatCount = Math.max(
-          1,
-          Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1
+          ) || 1
         );
         const giftName =
           data?.gift?.name ||
@@ -626,10 +653,12 @@ async function startServer() {
           data?.giftName ||
           fallbackGift?.name ||
           'Quà tặng';
-        const coins = Math.max(1, diamondCount * repeatCount);
+        const coins = Math.max(1, diamondCount * effectiveUnits);
         const avatarUrl = extractTikTokAvatar(data);
         const orderFields = extractServerTikTokOrderFields(data);
-        console.log(`🎁 [TIKTOK GIFT] ${username} tặng ${giftName} x${repeatCount} (${coins} xu)`);
+        console.log(
+          `🎁 [TIKTOK GIFT] ${username} tặng ${giftName} +${effectiveUnits} (combo x${rawRepeatCount} • +${coins} xu)`
+        );
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
           event: {
@@ -638,7 +667,9 @@ async function startServer() {
             avatarUrl,
             giftName,
             coins,
-            repeatCount,
+            repeatCount: effectiveUnits,
+            comboCount: rawRepeatCount,
+            groupId,
             ...orderFields,
           },
         });

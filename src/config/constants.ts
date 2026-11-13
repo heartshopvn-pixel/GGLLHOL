@@ -18,6 +18,11 @@ import {
 } from '../types/game';
 import { BUILT_IN_TIERED_QUIZ_DECKS } from './vocabDecks';
 import { parseLargeQuizTxtFast, ParseQuizTxtOptions } from '../utils/quizDeckEngine';
+import {
+  DEFAULT_REMINDER_ALERT_COOLDOWN_SEC,
+  DEFAULT_REMINDER_ALERT_KEYWORDS,
+  DEFAULT_REMINDER_ALERT_URL,
+} from '../utils/silentReminderAlert';
 
 export const DEFAULT_BG_IMAGE =
   './assets/aistudio/a5c97e27-3fbf-4c87-b5fa-36b9fd61be24_37000eba.jpg';
@@ -112,6 +117,13 @@ export interface ClassroomGiftEventMeta {
   description: string;
 }
 
+export const GIFT_POINTS_PER_COIN = 5;
+
+export function calculateGiftBonusPoints(coins: number): number {
+  const safeCoins = Math.max(1, Math.round(Number(coins) || 1));
+  return safeCoins * GIFT_POINTS_PER_COIN;
+}
+
 export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
   {
     id: 'rose',
@@ -119,10 +131,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(1)',
     giftLabel: '(1) Hoa hồng',
     actionTitle: 'Tặng hoa cho cô',
-    bonusPoints: 10,
+    bonusPoints: 5,
     offeringType: 'rose',
     colorTheme: 'pink',
-    description: '+10đ • Cầm bó hoa hồng đi đến cạnh Cô Giáo tặng hoa + nổ hoa rồi về chỗ',
+    description: '+5đ (1 xu = +5đ) • Cầm bó hoa hồng đi đến cạnh Cô Giáo tặng hoa + nổ hoa rồi về chỗ',
   },
   {
     id: 'icecream',
@@ -130,10 +142,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(1)',
     giftLabel: '(1) Kem',
     actionTitle: 'Tặng hoa cho thầy',
-    bonusPoints: 10,
+    bonusPoints: 5,
     offeringType: 'icecream',
     colorTheme: 'cyan',
-    description: '+10đ • Cầm hoa đi đến cạnh Thầy Giám Thị tặng hoa + nổ hoa rồi về chỗ',
+    description: '+5đ (1 xu = +5đ) • Cầm hoa đi đến cạnh Thầy Giám Thị tặng hoa + nổ hoa rồi về chỗ',
   },
   {
     id: 'cat',
@@ -141,10 +153,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(1)',
     giftLabel: '(1) Đỉnh (Con mèo)',
     actionTitle: 'Nuôi mèo',
-    bonusPoints: 10,
+    bonusPoints: 5,
     offeringType: 'cat',
     colorTheme: 'amber',
-    description: '+10đ • Quà Đỉnh (con mèo đưa tay lên like 1 coin) • Mèo rơi xuống bàn học (tối đa 1 con trên bàn)',
+    description: '+5đ (1 xu = +5đ) • Quà Đỉnh (con mèo đưa tay lên like 1 coin) • Mèo rơi xuống bàn học (tối đa 1 con trên bàn)',
   },
   {
     id: 'gg',
@@ -152,10 +164,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(1)',
     giftLabel: '(1) GG',
     actionTitle: 'Ăn vụn',
-    bonusPoints: 10,
+    bonusPoints: 5,
     offeringType: 'gg',
     colorTheme: 'emerald',
-    description: '+10đ • Bịch snack rơi xuống bàn học (sát mép trái/phải theo chỗ ngồi, mất khi sai/không trả lời)',
+    description: '+5đ (1 xu = +5đ) • Bịch snack rơi xuống bàn học (sát mép trái/phải theo chỗ ngồi, mất khi sai/không trả lời)',
   },
   {
     id: 'heart',
@@ -163,10 +175,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(5)',
     giftLabel: '(5) Bắn tim',
     actionTitle: 'Điện thoại reo',
-    bonusPoints: 20,
+    bonusPoints: 25,
     offeringType: 'heart',
     colorTheme: 'pink',
-    description: '+20đ • Đổi skin bàn thành Bàn PC Gaming RGB (mất skin khi trả lời sai/không trả lời)',
+    description: '+25đ (1 xu = +5đ) • Đổi skin bàn thành Bàn PC Gaming RGB (mất skin khi trả lời sai/không trả lời)',
   },
   {
     id: 'pig',
@@ -174,10 +186,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(10)',
     giftLabel: '(10) Chú heo may mắn',
     actionTitle: 'Thả heo hù dọa',
-    bonusPoints: 40,
+    bonusPoints: 50,
     offeringType: 'pig',
     colorTheme: 'amber',
-    description: '+40đ • Quà Chú heo may mắn (10 coin) • Thêm 1 heo lên bàn (max 1) & Thả 8 con heo tấn công (-20đ mỗi người)',
+    description: '+50đ (1 xu = +5đ) • Quà Chú heo may mắn (10 coin) • Thêm 1 heo lên bàn (max 1) & Thả 8 con heo tấn công (-20đ mỗi người)',
   },
   {
     id: 'vip',
@@ -185,10 +197,10 @@ export const CLASSROOM_GIFT_EVENTS_META: ClassroomGiftEventMeta[] = [
     priceBadge: '(10+)',
     giftLabel: '(10+) VIP',
     actionTitle: 'Tôi là Rich Kid',
-    bonusPoints: 99,
+    bonusPoints: 100,
     offeringType: 'vip',
     colorTheme: 'yellow',
-    description: 'Bản thân +99đ, cả lớp +30đ • Đứng lên mặt bàn nhảy 5s + Mưa tiền rơi đầy màn hình 5s',
+    description: 'Bản thân +5đ/xu (+100đ với 20 xu), cả lớp +30đ • Đứng lên mặt bàn nhảy 5s + Mưa tiền rơi đầy màn hình 5s',
   },
 ];
 
@@ -843,6 +855,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   bgmVolume: 0.35,
   bgmTracks: DEFAULT_BGM_TRACKS,
   activeBgmTrackId: 'bgm-school-1',
+  bgmPlayMode: 'sequential',
 
   bellEnabled: true,
   bellMp3Url: null,
@@ -1001,6 +1014,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   activeQuizDeckId: 'deck-tienganh-de',
   quizQueueLimitDisplay: 10,
   shuffleBeforeEnqueue: false,
+  sentenceScrambleRatio: 30,
+  sentenceDecksSeededV1: true,
   luckyStarRatio1: 15,
   luckyStarRatio2: 10,
   luckyStarRatio3: 5,
@@ -1191,6 +1206,12 @@ export const DEFAULT_CONFIG: GameConfig = {
   zombieFlow6Speech2Template:
     'Cô trọng thưởng cho ba bạn top 1: [Top1] 100 hoa điểm 10, top 2: [Top2] 75 hoa điểm 10 và top 3: [Top3] 50 hoa điểm 10, các bạn còn lại 25 hoa điểm 10. Cùng tất cả các bạn một ly trà sữa mát cha lát te phun tóp pinh, chúng ta tiếp tục học thôi nào',
   zombieFlow6MinDurationSec: 4.5,
+  reminderAlertEnabled: true,
+  reminderAlertUrl: DEFAULT_REMINDER_ALERT_URL,
+  reminderAlertCooldownSec: DEFAULT_REMINDER_ALERT_COOLDOWN_SEC,
+  reminderAlertOnDisconnect: true,
+  reminderAlertOnKeyword: true,
+  reminderAlertKeywords: [...DEFAULT_REMINDER_ALERT_KEYWORDS],
   incenseBurner: { x: 438, y: 492 },
   offeringTrayPos: { x: 438, y: 434 },
   monkZone: { ...MONK_ZONE_BOUNDS },
@@ -1276,6 +1297,13 @@ export const DEFAULT_CONFIG: GameConfig = {
       hard: 18,
       omg: 22,
       other: 12,
+    },
+    classBoardSentenceQuestionDurationByLevel: {
+      easy: 18,
+      normal: 22,
+      hard: 26,
+      omg: 30,
+      other: 20,
     },
     classBoardRevealDurationSec: 10,
     classBoardNpcParticipate: true,
@@ -2157,28 +2185,54 @@ async function connectTikTok(customUser, isAutoRetry = false) {
       } catch (e) {}
     });
 
+    const giftStreakMap = new Map();
+
     tiktok.on('gift', data => {
       try {
-        // Trong tiktok-live-proto v3, loại quà nằm ở data.gift.type (1 = quà combo gửi liên tục)
-        const giftType =
+        const username = getUserName(data);
+        const giftType = Number(
           data?.gift?.type ??
           data?.giftType ??
           data?.gift?.giftType ??
-          data?.giftDetails?.giftType;
-        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
-        if (giftType === 1 && !repeatEnd) return;
+          data?.giftDetails?.giftType ??
+          (data?.gift?.combo ? 1 : 0)
+        );
+        const isComboGift = giftType === 1 || Boolean(data?.gift?.combo);
+        const rawRepeatCount = Math.max(
+          1,
+          Number(data?.repeatCount ?? data?.comboCount ?? data?.gift?.repeat_count ?? 1) || 1
+        );
+        const groupId = String(data?.groupId || data?.giftId || data?.gift?.id || 'default');
+        const nowGiftMs = Date.now();
+        for (const [gk, gv] of giftStreakMap.entries()) {
+          if (nowGiftMs - gv.at > 45000) giftStreakMap.delete(gk);
+        }
 
-        const username = getUserName(data);
+        let effectiveUnits = rawRepeatCount;
+        if (isComboGift) {
+          const streakKey = \`\${username.toLowerCase()}:\${groupId}\`;
+          const prevStreak = giftStreakMap.get(streakKey);
+          const prevCount = prevStreak ? prevStreak.count : 0;
+          if (rawRepeatCount <= prevCount) {
+            // Gói chốt repeatEnd lặp lại cùng repeatCount đã cộng trước đó -> bỏ qua để không cộng trùng
+            return;
+          }
+          effectiveUnits = rawRepeatCount - prevCount;
+          giftStreakMap.set(streakKey, { count: rawRepeatCount, at: nowGiftMs });
+        }
+
         const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
-        const diamondCount = Number(
-          data?.gift?.diamondCount ??
-          data?.giftDetails?.diamondCount ??
-          data?.extendedGiftInfo?.diamond_count ??
-          data?.diamondCount ??
-          fallbackGift?.coins ??
-          1
-        ) || 1;
-        const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.comboCount ?? 1) || 1);
+        const diamondCount = Math.max(
+          1,
+          Number(
+            data?.gift?.diamondCount ??
+            data?.giftDetails?.diamondCount ??
+            data?.extendedGiftInfo?.diamond_count ??
+            data?.diamondCount ??
+            fallbackGift?.coins ??
+            1
+          ) || 1
+        );
         const giftName =
           data?.gift?.name ||
           data?.giftDetails?.giftName ||
@@ -2187,16 +2241,18 @@ async function connectTikTok(customUser, isAutoRetry = false) {
           fallbackGift?.name ||
           (typeof data?.describe === 'string' ? data.describe.replace(/^sent\\s+/i, '').trim() : '') ||
           'Quà tặng';
-        const coins = Math.max(1, diamondCount * repeatCount);
+        const coins = Math.max(1, diamondCount * effectiveUnits);
         const orderFields = extractOrderFields(data);
-        console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);
+        console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} +\${effectiveUnits} (combo x\${rawRepeatCount} • +\${coins} xu)\`);
         broadcast({
           type: 'gift',
           username,
           avatarUrl: getUserAvatar(data),
           giftName,
           coins,
-          repeatCount,
+          repeatCount: effectiveUnits,
+          comboCount: rawRepeatCount,
+          groupId,
           ...orderFields,
         });
       } catch (e) {}

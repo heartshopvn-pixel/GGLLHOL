@@ -34,6 +34,9 @@ class LiveSyncService {
   private tiktokListeners = new Set<TikTokEventListener>();
   private statusListeners = new Set<StatusListener>();
   private peerListeners = new Set<PeerCountListener>();
+  private disconnectAlertListeners = new Set<(reason: string) => void>();
+  private hasActiveLiveRoomSession = false;
+  private isManualDisconnecting = false;
   private status: WsConnectionStatus = 'simulated';
   private recentPacketTimestamps = new Set<number>();
 
@@ -159,6 +162,7 @@ class LiveSyncService {
   private reconnectWsTimer: ReturnType<typeof setTimeout> | null = null;
   private localSseFallback: EventSource | null = null;
   private recentTikTokEventKeys = new Map<string, number>();
+  private tfGiftStreaks = new Map<string, { count: number; updatedAt: number }>();
   private cloudRelayConnected = false;
   private tiktokLogs: string[] = [];
   private tiktokLogListeners = new Set<(logs: string[]) => void>();
@@ -248,6 +252,9 @@ class LiveSyncService {
                 ? d.eulerKeyConfigured
                 : this.lastRoomInfo.eulerKeyConfigured,
           };
+          if (d.roomId) {
+            this.hasActiveLiveRoomSession = true;
+          }
           this.roomInfoListeners.forEach((fn) => fn(this.lastRoomInfo));
         }
       } catch {
@@ -278,11 +285,20 @@ class LiveSyncService {
       if (now - t > ttl) this.recentTikTokEventKeys.delete(k);
     }
 
-    // Nếu có tiktokMsgId gốc từ máy chủ TikTok: khử trùng lặp chính xác tuyệt đối theo msgId (tránh nhân đôi khi vừa mở WS vừa mở SSE, đồng thời không bao giờ nuốt nhầm 2 bình luận khác nhau)
+    const groupIdTag = (ev as { groupId?: string }).groupId || '';
     const dedupKey = ev.tiktokMsgId
-      ? `${ev.type}:msg:${ev.tiktokMsgId}`
-      : `${ev.type}:${ev.username}:${ev.comment || ev.giftName || ev.likeCount || ''}`;
-    const dedupWindowMs = ev.tiktokMsgId ? 5000 : 350;
+      ? `${ev.type}:msg:${ev.tiktokMsgId}:${ev.comboCount || ev.repeatCount || ''}`
+      : ev.serverSeq !== undefined
+      ? `${ev.type}:seq:${ev.serverSeq}`
+      : ev.type === 'gift'
+      ? `gift:${ev.username}:${ev.giftName || ''}:${groupIdTag}:${ev.comboCount || ev.repeatCount || ''}:${ev.coins || 1}`
+      : `${ev.type}:${ev.username}:${ev.comment || ev.likeCount || ''}`;
+    const dedupWindowMs =
+      ev.tiktokMsgId || ev.serverSeq !== undefined
+        ? 5000
+        : ev.type === 'gift'
+        ? 120
+        : 350;
     const prevAt = this.recentTikTokEventKeys.get(dedupKey);
     if (prevAt && now - prevAt < dedupWindowMs) {
       return;
@@ -301,6 +317,7 @@ class LiveSyncService {
       this.appendTikTokLog(`➕ [FOLLOW] ${ev.username} đã follow kênh`);
     }
 
+    this.hasActiveLiveRoomSession = true;
     this.tiktokListeners.forEach((fn) => fn(ev));
   }
 
@@ -342,20 +359,45 @@ class LiveSyncService {
           } else if (data.type === 'ADMIN_SYNC') {
             this.dispatchIncomingSync(data as SyncPacket);
           } else if (data.type === 'TIKTOK_LIVE_STATUS') {
+            const wasActiveLive = this.hasActiveLiveRoomSession;
             if (data.status === 'connected') {
               this.cloudRelayConnected = true;
+              if (data.roomId) {
+                this.hasActiveLiveRoomSession = true;
+              }
               this.setStatus('connected');
             } else if (data.status === 'connecting') {
-              if (!this.cloudRelayConnected) {
-                this.setStatus('connecting');
+              this.cloudRelayConnected = false;
+              this.setStatus('connecting');
+              if (wasActiveLive && !this.isManualDisconnecting) {
+                this.hasActiveLiveRoomSession = false;
+                this.emitDisconnectAlert(
+                  data.message || 'Node.js tạm mất kết nối với phòng TikTok Live'
+                );
               }
             } else if (data.status === 'error') {
               this.cloudRelayConnected = false;
               this.setStatus('error');
-            } else if (data.status === 'idle') {
+              if (wasActiveLive && !this.isManualDisconnecting) {
+                this.hasActiveLiveRoomSession = false;
+                this.emitDisconnectAlert(
+                  data.message || 'Node.js ngắt kết nối với phòng TikTok Live'
+                );
+              }
+            } else if (data.status === 'idle' || data.status === 'simulated') {
               this.cloudRelayConnected = false;
               if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 this.setStatus('simulated');
+              }
+              const msgStr = String(data.message || '');
+              const isStreamEnd = msgStr.includes('streamEnd');
+              if (wasActiveLive && !this.isManualDisconnecting && !isStreamEnd) {
+                this.hasActiveLiveRoomSession = false;
+                this.emitDisconnectAlert(
+                  msgStr || 'Phiên kết nối TikTok Live bị gián đoạn'
+                );
+              } else if (this.isManualDisconnecting || isStreamEnd) {
+                this.hasActiveLiveRoomSession = false;
               }
             }
             this.lastRoomInfo = {
@@ -428,6 +470,15 @@ class LiveSyncService {
   public onPeerCountChange(fn: PeerCountListener) {
     this.peerListeners.add(fn);
     return () => this.peerListeners.delete(fn);
+  }
+
+  public onDisconnectAlert(fn: (reason: string) => void) {
+    this.disconnectAlertListeners.add(fn);
+    return () => this.disconnectAlertListeners.delete(fn);
+  }
+
+  private emitDisconnectAlert(reason: string) {
+    this.disconnectAlertListeners.forEach((fn) => fn(reason));
   }
 
   private setStatus(next: WsConnectionStatus) {
@@ -625,6 +676,11 @@ class LiveSyncService {
   }
 
   public async disconnectTikTokRoom() {
+    this.isManualDisconnecting = true;
+    this.hasActiveLiveRoomSession = false;
+    setTimeout(() => {
+      this.isManualDisconnecting = false;
+    }, 3000);
     try {
       fetch('http://127.0.0.1:8080/disconnect', { method: 'POST' }).catch(() => {});
     } catch {
@@ -780,12 +836,39 @@ class LiveSyncService {
       return;
     }
     if (raw.type === 'status') {
+      const wasActiveLive = this.hasActiveLiveRoomSession;
       if (raw.status === 'connected') {
+        if (raw.roomId) {
+          this.hasActiveLiveRoomSession = true;
+        }
         this.setStatus('connected');
       } else if (raw.status === 'connecting') {
         this.setStatus('connecting');
+        if (wasActiveLive && !this.isManualDisconnecting) {
+          this.hasActiveLiveRoomSession = false;
+          this.emitDisconnectAlert(
+            raw.message || 'server.js tạm đứt kết nối với phòng TikTok Live'
+          );
+        }
       } else if (raw.status === 'error') {
         this.setStatus('error');
+        if (wasActiveLive && !this.isManualDisconnecting) {
+          this.hasActiveLiveRoomSession = false;
+          this.emitDisconnectAlert(
+            raw.message || 'server.js mất kết nối với phòng TikTok Live'
+          );
+        }
+      } else if (raw.status === 'simulated') {
+        const msgStr = String(raw.message || '');
+        const isStreamEnd = msgStr.includes('streamEnd');
+        if (wasActiveLive && !this.isManualDisconnecting && !isStreamEnd) {
+          this.hasActiveLiveRoomSession = false;
+          this.emitDisconnectAlert(
+            msgStr || 'server.js bị ngắt kết nối phiên Live'
+          );
+        } else if (this.isManualDisconnecting || isStreamEnd) {
+          this.hasActiveLiveRoomSession = false;
+        }
       }
       this.lastRoomInfo = {
         username: raw.username || this.lastRoomInfo.username,
@@ -845,17 +928,41 @@ class LiveSyncService {
     const rawEv = raw.event === 'comment' ? 'chat' : raw.event;
     const d = raw.data || {};
     if (rawEv === 'chat' || rawEv === 'gift' || rawEv === 'like' || rawEv === 'follow') {
-      if (rawEv === 'gift' && d.giftType === 1 && d.repeatEnd === false) {
-        return;
-      }
       const username = this.extractUsername(raw);
       const avatarUrl = this.extractAvatar(d) || this.extractAvatar(raw);
-      const diamondCount =
-        d.diamondCount ??
-        d.giftDetails?.diamondCount ??
-        d.gift?.diamondCount ??
-        1;
-      const repeatCount = d.repeatCount ?? d.comboCount ?? 1;
+      const diamondCount = Math.max(
+        1,
+        Number(
+          d.diamondCount ??
+            d.giftDetails?.diamondCount ??
+            d.gift?.diamondCount ??
+            1
+        ) || 1
+      );
+      const rawRepeatCount = Math.max(
+        1,
+        Number(d.repeatCount ?? d.comboCount ?? 1) || 1
+      );
+      let effectiveRepeat = rawRepeatCount;
+      if (rawEv === 'gift' && (d.giftType === 1 || d.gift?.type === 1 || d.gift?.combo)) {
+        const nowTf = Date.now();
+        for (const [sk, sv] of this.tfGiftStreaks.entries()) {
+          if (nowTf - sv.updatedAt > 60000) this.tfGiftStreaks.delete(sk);
+        }
+        const groupKey = `tf_streak:${username.toLowerCase()}:${d.groupId || d.giftId || d.giftName || 'g'}`;
+        const prevEntry = this.tfGiftStreaks.get(groupKey);
+        const prevCount = prevEntry ? prevEntry.count : 0;
+        if (rawRepeatCount <= prevCount) {
+          if (d.repeatEnd) this.tfGiftStreaks.delete(groupKey);
+          return;
+        }
+        effectiveRepeat = rawRepeatCount - prevCount;
+        if (d.repeatEnd) {
+          this.tfGiftStreaks.delete(groupKey);
+        } else {
+          this.tfGiftStreaks.set(groupKey, { count: rawRepeatCount, updatedAt: nowTf });
+        }
+      }
       const orderMeta = extractTikTokOrderMeta(raw, ++this.clientTikTokArrivalSeq);
 
       this.emitDeduplicatedTikTokEvent({
@@ -869,7 +976,9 @@ class LiveSyncService {
           d.gift?.name ||
           d.extendedGiftInfo?.name ||
           'Quà tặng',
-        coins: Math.max(1, Number(diamondCount) * Number(repeatCount)),
+        coins: Math.max(1, diamondCount * effectiveRepeat),
+        repeatCount: effectiveRepeat,
+        comboCount: rawRepeatCount,
         likeCount: Math.max(
           1,
           Number(d.likeCount ?? d.count ?? d.unmergedLikeCount ?? 1)
@@ -971,6 +1080,17 @@ class LiveSyncService {
           const ipv4Url = this.lastWsUrl.replace('localhost', '127.0.0.1');
           this.connectWebSocket(ipv4Url, true);
           return;
+        }
+        if (
+          this.hasActiveLiveRoomSession &&
+          !this.isManualDisconnecting &&
+          this.shouldReconnectWs &&
+          !this.cloudRelayConnected
+        ) {
+          this.hasActiveLiveRoomSession = false;
+          this.emitDisconnectAlert(
+            `Mất kết nối tới máy chủ Node.js (${this.lastWsUrl})`
+          );
         }
         this.startLocalHttpSseFallback(this.lastWsUrl);
         if (!this.cloudRelayConnected && this.status !== 'connected') {

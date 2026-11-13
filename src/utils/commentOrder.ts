@@ -1,4 +1,5 @@
 import type { ClassBoardQuizWinner, EnglishQuizItem, TikTokOrderMeta } from '../types/game';
+import { doesCommentMatchSentence } from './sentenceScramble';
 
 /**
  * Chuyển đổi giá trị int64/uint64 từ Protobuf (chuỗi số, number, BigInt, hoặc Long { low, high, unsigned })
@@ -382,6 +383,15 @@ export function doesCommentMatchQuizWord(
   targetEn?: string | null
 ): boolean {
   if (!targetEn) return false;
+  const trimmedTarget = targetEn.trim();
+  if (!trimmedTarget) return false;
+
+  // Nếu đáp án là câu ghép từ (>= 2 từ cách nhau bởi khoảng trắng):
+  // khớp đúng thứ tự các từ, chấp nhận cả có hoặc không có dấu ? / ! (dính vào từ cuối hay cách ra đều tính)
+  if (/\b[a-zA-Z0-9']+\s+[a-zA-Z0-9']+\b/.test(trimmedTarget)) {
+    return doesCommentMatchSentence(rawComment, trimmedTarget);
+  }
+
   const cleanText = (rawComment || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
@@ -389,7 +399,9 @@ export function doesCommentMatchQuizWord(
     .trim();
   if (!cleanText) return false;
 
-  const targetWord = targetEn.toLowerCase().trim();
+  const targetWord = trimmedTarget
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
   if (!targetWord) return false;
 
   const words = cleanText.split(' ');

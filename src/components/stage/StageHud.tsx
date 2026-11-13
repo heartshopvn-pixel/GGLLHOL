@@ -33,6 +33,11 @@ import {
   getQuizPointsForRank,
 } from '../../config/vocabDecks';
 import { DEFAULT_GUIDE_ITEMS, ENGLISH_QUIZ_QUESTIONS } from '../../config/constants';
+import {
+  analyzeSentencePair,
+  isSentenceScrambleItem,
+  scrambleSentenceWords,
+} from '../../utils/sentenceScramble';
 import { Flower10BadgeIcon, GoldTrophyIcon, SchoolGiftArt } from './SchoolGiftArt';
 
 export type HudBoxKey =
@@ -531,6 +536,29 @@ const StageHudInner: React.FC<StageHudProps> = ({
     classBoardState?.currentQuestion ||
     ENGLISH_QUIZ_QUESTIONS[qIdx % ENGLISH_QUIZ_QUESTIONS.length] ||
     ENGLISH_QUIZ_QUESTIONS[0];
+  const isSentenceQuiz = isSentenceScrambleItem(quizItem);
+  const sentenceAnalysis = React.useMemo(
+    () => (isSentenceQuiz ? analyzeSentencePair(quizItem.vi, quizItem.en) : null),
+    [isSentenceQuiz, quizItem.vi, quizItem.en]
+  );
+  const sentenceWords = React.useMemo(
+    () => sentenceAnalysis?.words ?? [],
+    [sentenceAnalysis]
+  );
+  const sentenceTrailingPunct: '' | '?' | '!' =
+    quizItem.trailingPunct !== undefined
+      ? quizItem.trailingPunct
+      : sentenceAnalysis?.trailingPunct ?? '';
+  const scrambledSentenceWords = React.useMemo(
+    () =>
+      isSentenceQuiz
+        ? scrambleSentenceWords(
+            sentenceWords,
+            `${quizItem.id}_${classBoardState?.roundSeq ?? 1}_${qIdx}`
+          )
+        : [],
+    [isSentenceQuiz, sentenceWords, quizItem.id, classBoardState?.roundSeq, qIdx]
+  );
   const quizLetters = quizItem.en.toUpperCase().split('');
   // Chế độ Mặc định: Luôn gợi ý 1 chữ cái đầu; 5s sau thêm 1 chữ nếu 6 ký tự, thêm 2 nếu 7-9 ký tự, thêm 3 nếu >= 10 ký tự
   const defaultHintExtraIndices = React.useMemo(() => {
@@ -635,7 +663,7 @@ const StageHudInner: React.FC<StageHudProps> = ({
         continue;
       }
       const key = p.username.trim().toLowerCase();
-      const pts = donorPointsMap.get(key) ?? 0;
+      const pts = Math.max(donorPointsMap.get(key) ?? 0, p.currentScoreDisplay ?? 0);
       const existing = map.get(key);
       if (!existing) {
         map.set(key, {
@@ -1603,11 +1631,17 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 </div>
               </div>
 
-              {/* Nội dung trung tâm: Câu hỏi hoặc "Đáp án là:" + Các ô chữ cái tương ứng + Dòng sao may mắn bên dưới */}
+              {/* Nội dung trung tâm: Câu hỏi hoặc "Đáp án là:" + Các ô chữ cái / ô từ ghép câu + Dòng sao may mắn bên dưới */}
               <div className="my-auto flex flex-col items-center justify-center gap-1.5 py-1">
                 <div
-                  className="text-center font-extrabold text-white leading-snug tracking-wide"
-                  style={{ fontSize: `${safeClassBoardFontSize + 2}px` }}
+                  className="text-center font-extrabold text-white leading-snug tracking-wide px-1"
+                  style={{
+                    fontSize: `${
+                      isSentenceQuiz
+                        ? Math.max(12, safeClassBoardFontSize + 1)
+                        : safeClassBoardFontSize + 2
+                    }px`,
+                  }}
                 >
                   {isAnswerFlashPhase || isLegacyRevealed ? (
                     <span className="text-emerald-300 uppercase tracking-wider drop-shadow-[0_0_10px_rgba(52,211,153,0.85)]">
@@ -1615,79 +1649,148 @@ const StageHudInner: React.FC<StageHudProps> = ({
                     </span>
                   ) : (
                     <>
-                      <span className="text-yellow-300">"{quizItem.vi}"</span>{' '}
+                      <span className="text-yellow-300">
+                        "{isSentenceQuiz ? sentenceAnalysis?.viDisplay || quizItem.vi : quizItem.vi}"
+                      </span>{' '}
                       <span>tiếng Anh là gì ?</span>
                     </>
                   )}
                 </div>
 
-                {/* Dãy ô chữ cái tương ứng với từ tiếng Anh */}
-                <div className="flex flex-wrap items-center justify-center gap-1.5 px-1">
-                  {quizLetters.map((letter, idx) => {
-                    const len = quizLetters.length;
-                    const elapsedQuestionMs = Math.max(
-                      elapsedPhaseMs,
-                      totalDurMs - remMs
-                    );
-                    let showChar = false;
-                    if (isAnswerFlashPhase || isLegacyRevealed) {
-                      showChar = true;
-                    } else if (
-                      classBoardLetterMode === 'hint_3' ||
-                      classBoardLetterMode === 'full'
-                    ) {
-                      // Gợi ý 3: 2 chữ cái đầu & cuối
-                      showChar = idx === 0 || idx === len - 1;
-                    } else if (
-                      classBoardLetterMode === 'hint_2' ||
-                      classBoardLetterMode === 'blank'
-                    ) {
-                      // Gợi ý 2: 2 chữ cái random
-                      showChar = hint2RandomIndices.includes(idx);
-                    } else {
-                      // Mặc định ('default' / 'hint'): Luôn gợi ý 1 chữ cái đầu, 5s sau thêm 1 chữ nếu 6 ký tự, thêm 2 nếu 7-9 ký tự, thêm 3 nếu >= 10 ký tự
-                      if (idx === 0) {
+                {isSentenceQuiz ? (
+                  /* Dãy ô từ Ghép Câu: mỗi ô 1 từ xếp ngẫu nhiên (từ đầu không đứng đầu), dấu ? / ! đặt ở sau cùng cạnh ô chữ cuối cùng */
+                  <div
+                    data-testid="sentence-scramble-boxes"
+                    className="flex flex-wrap items-center justify-center gap-1.5 px-1.5 max-w-full"
+                  >
+                    {(isAnswerFlashPhase || isLegacyRevealed
+                      ? sentenceWords
+                      : scrambledSentenceWords
+                    ).map((word, idx, arr) => {
+                      const isRevealedWord = isAnswerFlashPhase || isLegacyRevealed;
+                      const isLastWord = idx === arr.length - 1;
+                      const wordCount = arr.length;
+                      const wordFontPx =
+                        wordCount >= 8 ? 11.5 : wordCount >= 6 ? 13 : 14.5;
+                      const padClass =
+                        wordCount >= 7 ? 'px-2 py-0.5' : 'px-2.5 py-1';
+                      const renderedWord =
+                        isRevealedWord && idx === 0 && word.length > 0
+                          ? word.charAt(0).toUpperCase() + word.slice(1)
+                          : word;
+
+                      const wordTile = (
+                        <div
+                          key={`${quizItem.id}-word-${idx}`}
+                          data-testid={`sentence-word-box-${idx}`}
+                          className={`rounded-md border-2 font-mono font-black flex items-center justify-center transition-all duration-300 ${padClass} ${
+                            isRevealedWord
+                              ? 'bg-emerald-500/75 border-emerald-200 text-white answer-green-flash'
+                              : 'bg-amber-500/20 border-amber-300/90 text-amber-100 shadow-[0_2px_6px_rgba(0,0,0,0.45)]'
+                          }`}
+                          style={{
+                            fontSize: `${wordFontPx}px`,
+                            lineHeight: 1.25,
+                          }}
+                        >
+                          {renderedWord}
+                        </div>
+                      );
+
+                      if (isLastWord && sentenceTrailingPunct) {
+                        return (
+                          <span
+                            key={`${quizItem.id}-last-word-wrap`}
+                            className="inline-flex items-center gap-1"
+                          >
+                            {wordTile}
+                            <span
+                              data-testid="sentence-trailing-punct"
+                              className={`font-mono font-black select-none leading-none px-0.5 ${
+                                isRevealedWord
+                                  ? 'text-emerald-300 drop-shadow-[0_0_8px_rgba(52,211,153,0.85)]'
+                                  : 'text-yellow-300 drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]'
+                              }`}
+                              style={{ fontSize: `${wordFontPx + 4}px` }}
+                            >
+                              {sentenceTrailingPunct}
+                            </span>
+                          </span>
+                        );
+                      }
+
+                      return wordTile;
+                    })}
+                  </div>
+                ) : (
+                  /* Dãy ô chữ cái tương ứng với từ vựng tiếng Anh */
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 px-1">
+                    {quizLetters.map((letter, idx) => {
+                      const len = quizLetters.length;
+                      const elapsedQuestionMs = Math.max(
+                        elapsedPhaseMs,
+                        totalDurMs - remMs
+                      );
+                      let showChar = false;
+                      if (isAnswerFlashPhase || isLegacyRevealed) {
                         showChar = true;
                       } else if (
-                        elapsedQuestionMs >= 5000 &&
-                        defaultHintExtraIndices.includes(idx)
+                        classBoardLetterMode === 'hint_3' ||
+                        classBoardLetterMode === 'full'
                       ) {
-                        showChar = true;
+                        // Gợi ý 3: 2 chữ cái đầu & cuối
+                        showChar = idx === 0 || idx === len - 1;
+                      } else if (
+                        classBoardLetterMode === 'hint_2' ||
+                        classBoardLetterMode === 'blank'
+                      ) {
+                        // Gợi ý 2: 2 chữ cái random
+                        showChar = hint2RandomIndices.includes(idx);
+                      } else {
+                        // Mặc định ('default' / 'hint'): Luôn gợi ý 1 chữ cái đầu, 5s sau thêm 1 chữ nếu 6 ký tự, thêm 2 nếu 7-9 ký tự, thêm 3 nếu >= 10 ký tự
+                        if (idx === 0) {
+                          showChar = true;
+                        } else if (
+                          elapsedQuestionMs >= 5000 &&
+                          defaultHintExtraIndices.includes(idx)
+                        ) {
+                          showChar = true;
+                        }
                       }
-                    }
 
-                    const boxSize = Math.max(
-                      20,
-                      Math.min(
-                        34,
-                        Math.floor(
-                          (safeClassBoardBox.width - 36 - (len - 1) * 6) /
-                            Math.max(4, len)
+                      const boxSize = Math.max(
+                        20,
+                        Math.min(
+                          34,
+                          Math.floor(
+                            (safeClassBoardBox.width - 36 - (len - 1) * 6) /
+                              Math.max(4, len)
+                          )
                         )
-                      )
-                    );
+                      );
 
-                    return (
-                      <div
-                        key={`${quizItem.id}-char-${idx}`}
-                        className={`rounded-md border-2 font-mono font-black flex items-center justify-center transition-all duration-300 ${
-                          isAnswerFlashPhase || isLegacyRevealed
-                            ? 'bg-emerald-500/75 border-emerald-200 text-white answer-green-flash'
-                            : showChar
-                            ? 'bg-amber-500/25 border-amber-300/90 text-amber-200'
-                            : 'bg-slate-950/55 border-white/75 text-white/40'
-                        }`}
-                        style={{
-                          width: `${boxSize}px`,
-                          height: `${boxSize + 2}px`,
-                          fontSize: `${Math.max(11, Math.min(20, Math.round(boxSize * 0.6)))}px`,
-                        }}
-                      >
-                        {showChar ? letter : ''}
-                      </div>
-                    );
-                  })}
-                </div>
+                      return (
+                        <div
+                          key={`${quizItem.id}-char-${idx}`}
+                          className={`rounded-md border-2 font-mono font-black flex items-center justify-center transition-all duration-300 ${
+                            isAnswerFlashPhase || isLegacyRevealed
+                              ? 'bg-emerald-500/75 border-emerald-200 text-white answer-green-flash'
+                              : showChar
+                              ? 'bg-amber-500/25 border-amber-300/90 text-amber-200'
+                              : 'bg-slate-950/55 border-white/75 text-white/40'
+                          }`}
+                          style={{
+                            width: `${boxSize}px`,
+                            height: `${boxSize + 2}px`,
+                            fontSize: `${Math.max(11, Math.min(20, Math.round(boxSize * 0.6)))}px`,
+                          }}
+                        >
+                          {showChar ? letter : ''}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* DÒNG SAO MAY MẮN MÀU VÀNG: Dời xuống phía dưới ô chữ và cách ra một khoảng trống nhỏ */}
                 {Boolean(quizItem.luckyStars && quizItem.luckyStars >= 1) && (
@@ -1729,8 +1832,17 @@ const StageHudInner: React.FC<StageHudProps> = ({
                 >
                   {isAnswerFlashPhase || isLegacyRevealed ? (
                     <span className="text-emerald-200 font-extrabold text-left truncate">
-                      ✨ {quizItem.vi} = {quizItem.en.toUpperCase()}{' '}
-                      {quizItem.phonetic ? `(${quizItem.phonetic})` : ''}
+                      {isSentenceQuiz ? (
+                        <>
+                          ✨ {sentenceAnalysis?.viDisplay || quizItem.vi} ={' '}
+                          {sentenceAnalysis?.enCanonical || quizItem.en}
+                        </>
+                      ) : (
+                        <>
+                          ✨ {quizItem.vi} = {quizItem.en.toUpperCase()}{' '}
+                          {quizItem.phonetic ? `(${quizItem.phonetic})` : ''}
+                        </>
+                      )}
                     </span>
                   ) : (
                     <span className="text-amber-200 font-bold text-left truncate">
