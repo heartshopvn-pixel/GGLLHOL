@@ -430,6 +430,7 @@ export default function App() {
           burnerLotusBursts={engine.burnerLotusBursts}
           flyingLotuses={engine.flyingLotuses}
           eventBarFlashKey={engine.eventBarFlashKey}
+          windBreezeTriggerKey={engine.windBreezeTriggerKey}
           cameraFocus={engine.cameraFocus}
           speakingMeta={
             engine.eventTtsQueue.isPlayingEvent
@@ -575,6 +576,7 @@ export default function App() {
           onTestPaperPlaneThrow={engine.handleTestPaperPlaneThrow}
           onTestRoseHeartBurst={engine.handleTestRoseHeartBurst}
           onTestRoseBouquetThrow={engine.handleTestRoseBouquetThrow}
+          onTestWindBreeze={engine.handleTestWindBreeze}
           compactRemoteStage={compactRemoteStage}
           onToggleCompactRemoteStage={handleToggleCompactRemoteStage}
           isFullscreen={obsIsFullscreen}

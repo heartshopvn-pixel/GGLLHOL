@@ -1538,6 +1538,7 @@ export function useClassroomEngine() {
   const [flyingFlowers, setFlyingFlowers] = useState<FlyingFlowerFX[]>([]);
   const [simpleExplosions, setSimpleExplosions] = useState<SimpleExplosionFX[]>([]);
   const [eventBarFlashKey, setEventBarFlashKey] = useState(0);
+  const [windBreezeTriggerKey, setWindBreezeTriggerKey] = useState(0);
 
   // State Sự Kiện "Zombie tấn công" ("Sự kiện đẩy lùi Zombie")
   const [zombieEventState, setZombieEventState] = useState<ZombieEventRuntimeState>(() => ({
@@ -15071,6 +15072,10 @@ export function useClassroomEngine() {
           }
           break;
         }
+        case 'TRIGGER_WIND_BREEZE': {
+          setWindBreezeTriggerKey((prev) => prev + 1);
+          break;
+        }
         case 'LEAVE_ALL':
           setPilgrims((prev) =>
             prev.map((st) => ({
@@ -19093,6 +19098,22 @@ export function useClassroomEngine() {
         pushToast('❤️ Test nổ tim đỏ trên sân khấu!', false);
       }
     },
+    handleTestWindBreeze: () => {
+      if (configRef.current.vfxWindBreezeEnabled === false) {
+        configRef.current = {
+          ...configRef.current,
+          vfxWindBreezeEnabled: true,
+        };
+        setConfig((prev) => ({ ...prev, vfxWindBreezeEnabled: true }));
+        syncService.sendCommand('UPDATE_CONFIG', {
+          patch: { vfxWindBreezeEnabled: true },
+        });
+      }
+      setWindBreezeTriggerKey((prev) => prev + 1);
+      syncService.sendCommand('TRIGGER_WIND_BREEZE', {});
+      pushToast('🍃 Làn gió nhẹ kèm lá bay qua lớp học!', false);
+    },
+    windBreezeTriggerKey,
     vipSlots,
     normalSlots,
     pilgrims,

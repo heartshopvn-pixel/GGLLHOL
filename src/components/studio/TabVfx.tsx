@@ -1,11 +1,16 @@
-import React, { useMemo, useState } from 'react';
-import { Heart, Minus, Plus, RotateCcw, Send, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Heart, Minus, Plus, RotateCcw, Send, Sparkles, Wind } from 'lucide-react';
 import { GameConfig } from '../../types/game';
 import { Flower10BadgeIcon, RoseBouquetModel } from '../stage/SchoolGiftArt';
 import {
   buildRoseHeartBurstVectors,
   RedHeartSvgIcon,
 } from '../stage/ZombieEventArt';
+import {
+  createWindBreezeRuntime,
+  normalizeWindBreezeSettings,
+  stepAndDrawWindBreeze,
+} from '../../utils/windBreezeVfx';
 
 interface TabVfxProps {
   config: GameConfig;
@@ -13,6 +18,7 @@ interface TabVfxProps {
   onTestFlower10Burst?: () => void;
   onTestRoseHeartBurst?: () => void;
   onTestRoseBouquetThrow?: () => void;
+  onTestWindBreeze?: () => void;
 }
 
 const PREVIEW_VECTORS = [
@@ -35,11 +41,60 @@ export const TabVfx: React.FC<TabVfxProps> = ({
   onTestFlower10Burst,
   onTestRoseHeartBurst,
   onTestRoseBouquetThrow,
+  onTestWindBreeze,
 }) => {
   const [previewKey, setPreviewKey] = useState<number>(() => Date.now());
   const [heartPreviewKey, setHeartPreviewKey] = useState<number>(() =>
     Date.now()
   );
+  const [windPreviewKey, setWindPreviewKey] = useState<number>(1);
+  const windPreviewCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const windSettings = useMemo(
+    () => normalizeWindBreezeSettings(config),
+    [config]
+  );
+  const windSettingsRef = useRef(windSettings);
+  windSettingsRef.current = windSettings;
+  const windPreviewKeyRef = useRef(windPreviewKey);
+  windPreviewKeyRef.current = windPreviewKey;
+
+  useEffect(() => {
+    const canvas = windPreviewCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const runtime = createWindBreezeRuntime();
+    let rafId = 0;
+    let lastTs = performance.now();
+
+    const loop = (now: number) => {
+      const dt = Math.min(0.08, Math.max(0.001, (now - lastTs) / 1000));
+      lastTs = now;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Trong khung xem trước, luôn cho phép chạy mẫu kể cả khi vừa mở Tab VFX
+      const previewCfg = {
+        ...windSettingsRef.current,
+        enabled: windSettingsRef.current.enabled,
+      };
+      stepAndDrawWindBreeze(
+        ctx,
+        runtime,
+        previewCfg,
+        dt,
+        Date.now(),
+        canvas.width,
+        canvas.height,
+        windPreviewKeyRef.current
+      );
+      rafId = requestAnimationFrame(loop);
+    };
+
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
 
   const enabled = config.vfxFlower10Enabled !== false;
   const scale = Number(config.vfxFlower10Scale ?? 1.0);
@@ -71,8 +126,644 @@ export const TabVfx: React.FC<TabVfxProps> = ({
     onTestRoseHeartBurst?.();
   };
 
+  const bumpWindPreview = () => {
+    setWindPreviewKey((prev) => prev + 1);
+  };
+
+  const handleTestWindOnStage = () => {
+    bumpWindPreview();
+    onTestWindBreeze?.();
+  };
+
   return (
     <div className="space-y-3 text-xs">
+      {/* 0. HIỆU ỨNG LÀN GIÓ THỔI & LÁ THU / LÁ XANH BAY QUA LỚP HỌC SAU KHOẢNG THỜI GIAN X */}
+      <section className="p-3 rounded-xl bg-stone-900/95 border border-emerald-500/45 space-y-3 shadow-md">
+        <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-stone-800">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Wind className="w-4 h-4 text-emerald-400 shrink-0" />
+            <h2 className="text-xs font-extrabold text-emerald-200 truncate">
+              🍃 VFX Làn Gió & Lá Bay
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const nextEnabled = !windSettings.enabled;
+                onUpdateConfig({ vfxWindBreezeEnabled: nextEnabled });
+                if (nextEnabled) bumpWindPreview();
+              }}
+              className={`px-2.5 py-1 rounded-lg font-extrabold text-[10.5px] border cursor-pointer transition whitespace-nowrap ${
+                windSettings.enabled
+                  ? 'bg-emerald-500 text-stone-950 border-emerald-300 shadow-sm'
+                  : 'bg-stone-800 text-stone-400 border-stone-700 hover:text-stone-200'
+              }`}
+            >
+              {windSettings.enabled ? 'ĐANG BẬT' : 'ĐANG TẮT'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateConfig({
+                  vfxWindBreezeEnabled: true,
+                  vfxWindBreezeIntervalSec: 25,
+                  vfxWindBreezeDurationSec: 6.5,
+                  vfxWindBreezeLeafCount: 14,
+                  vfxWindBreezeLeafTheme: 'mixed',
+                  vfxWindBreezeAutumnRatio: 55,
+                  vfxWindBreezeLeafScale: 1.0,
+                  vfxWindBreezeSpeed: 1.0,
+                  vfxWindBreezeOpacity: 0.88,
+                  vfxWindBreezeDirection: 'left_to_right',
+                  vfxWindBreezeShowStreaks: true,
+                });
+                bumpWindPreview();
+              }}
+              className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[10px] font-bold text-stone-300 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              title="Đặt toàn bộ thông số Làn Gió & Lá Bay về mặc định"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Mặc định</span>
+            </button>
+          </div>
+        </div>
+
+        <p className="text-[10.5px] text-stone-400 leading-relaxed">
+          Cứ sau mỗi khoảng thời gian <strong className="text-amber-300">x giây</strong>, một làn gió dịu nhẹ kèm những chiếc <strong className="text-amber-300">lá thu vàng cam</strong> và <strong className="text-emerald-300">lá xanh tươi</strong> sẽ khẽ lướt qua khung cảnh lớp học.
+        </p>
+
+        <div className="p-2.5 rounded-lg bg-stone-950/85 border border-stone-800 space-y-2.5">
+          {/* 0.1. Khoảng thời gian lặp lại x (giây) */}
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Chu kỳ gió thổi (x giây):
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    vfxWindBreezeIntervalSec: Math.max(
+                      5,
+                      Math.round(windSettings.intervalSec - 5)
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+                title="Giảm 5 giây"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={5}
+                max={180}
+                step={1}
+                aria-label="Chu kỳ gió thổi (giây)"
+                value={Math.min(180, windSettings.intervalSec)}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    vfxWindBreezeIntervalSec:
+                      parseInt(e.target.value, 10) || 25,
+                  })
+                }
+                className="w-20 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateConfig({
+                    vfxWindBreezeIntervalSec: Math.min(
+                      300,
+                      Math.round(windSettings.intervalSec + 5)
+                    ),
+                  })
+                }
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+                title="Tăng 5 giây"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <div className="flex items-center gap-0.5">
+                <input
+                  type="number"
+                  min={5}
+                  max={300}
+                  step={1}
+                  aria-label="Nhập số giây chu kỳ gió thổi"
+                  value={Math.round(windSettings.intervalSec)}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (Number.isFinite(v)) {
+                      onUpdateConfig({
+                        vfxWindBreezeIntervalSec: Math.max(5, Math.min(300, v)),
+                      });
+                    }
+                  }}
+                  className="w-12 h-6 px-1 rounded bg-stone-900 border border-stone-700 text-right font-mono font-bold text-amber-300 text-[11px] tabular-nums focus:outline-none focus:border-emerald-400"
+                />
+                <span className="text-[10px] font-mono text-stone-400">s</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 0.2. Thời gian mỗi đợt gió bay qua (giây) */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Thời lượng đợt gió:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeDurationSec: Math.max(
+                      2.5,
+                      Number((windSettings.durationSec - 0.5).toFixed(1))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={2.5}
+                max={15}
+                step={0.5}
+                aria-label="Thời lượng đợt gió"
+                value={windSettings.durationSec}
+                onChange={(e) => {
+                  onUpdateConfig({
+                    vfxWindBreezeDurationSec:
+                      parseFloat(e.target.value) || 6.5,
+                  });
+                }}
+                onMouseUp={bumpWindPreview}
+                onTouchEnd={bumpWindPreview}
+                className="w-28 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeDurationSec: Math.min(
+                      15,
+                      Number((windSettings.durationSec + 0.5).toFixed(1))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <span className="w-12 text-right font-mono font-bold text-emerald-300 tabular-nums">
+                {windSettings.durationSec.toFixed(1)}s
+              </span>
+            </div>
+          </div>
+
+          {/* 0.3. Chọn màu sắc lá (Lá thu + Lá xanh / Chỉ Lá thu / Chỉ Lá xanh) */}
+          <div className="pt-2 border-t border-stone-800/80 space-y-2">
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-bold text-stone-200 whitespace-nowrap">
+                Màu sắc lá bay:
+              </span>
+              <div className="grid grid-cols-3 gap-1 bg-stone-900 p-0.5 rounded-lg border border-stone-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeLeafTheme: 'mixed' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.leafTheme === 'mixed'
+                      ? 'bg-amber-500/25 text-amber-200 border border-amber-400/50'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  🍂🍃 Thu + Xanh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeLeafTheme: 'autumn' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.leafTheme === 'autumn'
+                      ? 'bg-orange-500/30 text-orange-200 border border-orange-400/60'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  🍁 Lá Thu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeLeafTheme: 'green' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.leafTheme === 'green'
+                      ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/60'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  🌿 Lá Xanh
+                </button>
+              </div>
+            </div>
+
+            {windSettings.leafTheme === 'mixed' && (
+              <div className="flex items-center justify-between gap-2 text-[10.5px] pl-2 border-l border-stone-800">
+                <span className="text-stone-300 whitespace-nowrap">
+                  Tỉ lệ Lá Thu / Xanh:
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    aria-label="Tỉ lệ lá thu phần trăm"
+                    value={windSettings.autumnRatio}
+                    onChange={(e) =>
+                      onUpdateConfig({
+                        vfxWindBreezeAutumnRatio: parseInt(e.target.value, 10) || 0,
+                      })
+                    }
+                    onMouseUp={bumpWindPreview}
+                    onTouchEnd={bumpWindPreview}
+                    className="w-24 accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+                  />
+                  <span className="w-24 text-right font-mono text-[10px] font-bold text-amber-300 tabular-nums whitespace-nowrap">
+                    {windSettings.autumnRatio}% Thu · {100 - windSettings.autumnRatio}% Xanh
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 0.4. Hướng gió & Bật/Tắt vệt lụa gió */}
+          <div className="pt-2 border-t border-stone-800/80 space-y-2">
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-bold text-stone-200 whitespace-nowrap">
+                Hướng gió lùa:
+              </span>
+              <div className="grid grid-cols-3 gap-1 bg-stone-900 p-0.5 rounded-lg border border-stone-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeDirection: 'left_to_right' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.direction === 'left_to_right'
+                      ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/50'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  Trái ➔ Phải
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeDirection: 'right_to_left' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.direction === 'right_to_left'
+                      ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/50'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  Phải ➔ Trái
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig({ vfxWindBreezeDirection: 'alternate' });
+                    bumpWindPreview();
+                  }}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer whitespace-nowrap ${
+                    windSettings.direction === 'alternate'
+                      ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/50'
+                      : 'text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  Luân phiên
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-bold text-stone-200 whitespace-nowrap">
+                Dải lụa làn gió mờ:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeShowStreaks: !windSettings.showStreaks,
+                  });
+                  bumpWindPreview();
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer whitespace-nowrap ${
+                  windSettings.showStreaks
+                    ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/50'
+                    : 'bg-stone-800 text-stone-400 border-stone-700 hover:text-stone-200'
+                }`}
+              >
+                {windSettings.showStreaks ? '🌬️ Có vệt làn gió' : '🍃 Chỉ hiện lá bay'}
+              </button>
+            </div>
+          </div>
+
+          {/* 0.5. Số lượng chiếc lá mỗi đợt */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Số lượng lá mỗi đợt:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeLeafCount: Math.max(
+                      1,
+                      windSettings.leafCount - 2
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={2}
+                max={45}
+                step={1}
+                aria-label="Số lượng lá mỗi đợt"
+                value={Math.min(45, windSettings.leafCount)}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    vfxWindBreezeLeafCount: parseInt(e.target.value, 10) || 14,
+                  })
+                }
+                onMouseUp={bumpWindPreview}
+                onTouchEnd={bumpWindPreview}
+                className="w-28 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeLeafCount: Math.min(
+                      60,
+                      windSettings.leafCount + 2
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <span className="w-12 text-right font-mono font-bold text-emerald-300 tabular-nums whitespace-nowrap">
+                {windSettings.leafCount} lá
+              </span>
+            </div>
+          </div>
+
+          {/* 0.6. Kích thước lá (Scale) */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Kích thước chiếc lá:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeLeafScale: Math.max(
+                      0.4,
+                      Number((windSettings.leafScale - 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={0.4}
+                max={2.5}
+                step={0.05}
+                aria-label="Kích thước chiếc lá"
+                value={windSettings.leafScale}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    vfxWindBreezeLeafScale: parseFloat(e.target.value) || 1.0,
+                  })
+                }
+                onMouseUp={bumpWindPreview}
+                onTouchEnd={bumpWindPreview}
+                className="w-28 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeLeafScale: Math.min(
+                      2.5,
+                      Number((windSettings.leafScale + 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <span className="w-12 text-right font-mono font-bold text-emerald-300 tabular-nums">
+                {Math.round(windSettings.leafScale * 100)}%
+              </span>
+            </div>
+          </div>
+
+          {/* 0.7. Tốc độ gió & lá bay */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Tốc độ gió bay:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeSpeed: Math.max(
+                      0.4,
+                      Number((windSettings.speed - 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={0.4}
+                max={2.5}
+                step={0.05}
+                aria-label="Tốc độ gió bay"
+                value={windSettings.speed}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    vfxWindBreezeSpeed: parseFloat(e.target.value) || 1.0,
+                  })
+                }
+                onMouseUp={bumpWindPreview}
+                onTouchEnd={bumpWindPreview}
+                className="w-28 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeSpeed: Math.min(
+                      2.5,
+                      Number((windSettings.speed + 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <span className="w-12 text-right font-mono font-bold text-emerald-300 tabular-nums">
+                {Math.round(windSettings.speed * 100)}%
+              </span>
+            </div>
+          </div>
+
+          {/* 0.8. Độ đậm (Opacity) */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+            <span className="font-bold text-stone-200 whitespace-nowrap">
+              Độ rõ nét (Opacity):
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeOpacity: Math.max(
+                      0.2,
+                      Number((windSettings.opacity - 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-stone-800 hover:bg-stone-700 border border-stone-700 flex items-center justify-center text-stone-200 cursor-pointer"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <input
+                type="range"
+                min={0.2}
+                max={1.0}
+                step={0.05}
+                aria-label="Độ rõ nét gió và lá"
+                value={windSettings.opacity}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    vfxWindBreezeOpacity: parseFloat(e.target.value) || 0.88,
+                  })
+                }
+                onMouseUp={bumpWindPreview}
+                onTouchEnd={bumpWindPreview}
+                className="w-28 accent-emerald-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateConfig({
+                    vfxWindBreezeOpacity: Math.min(
+                      1.0,
+                      Number((windSettings.opacity + 0.05).toFixed(2))
+                    ),
+                  });
+                  bumpWindPreview();
+                }}
+                className="w-5 h-5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 flex items-center justify-center text-emerald-300 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+              <span className="w-12 text-right font-mono font-bold text-emerald-300 tabular-nums">
+                {Math.round(windSettings.opacity * 100)}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Khung Xem Trước & Nút Test Gió & Lá Bay Ngay Trên Lớp Học */}
+        <div className="p-3 rounded-xl bg-stone-950 border border-emerald-500/30 flex flex-col items-center justify-between gap-2">
+          <div className="w-full flex items-center justify-between gap-1.5 flex-wrap text-[10.5px] text-stone-400">
+            <span>Xem trước làn gió & lá bay:</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={bumpWindPreview}
+                className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 font-bold text-[10px] cursor-pointer whitespace-nowrap"
+              >
+                Thổi mẫu
+              </button>
+              <button
+                type="button"
+                onClick={handleTestWindOnStage}
+                className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-500 to-amber-500 hover:from-emerald-400 hover:to-amber-400 text-stone-950 font-extrabold text-[10.5px] flex items-center gap-1 cursor-pointer shadow whitespace-nowrap"
+                title="Thổi ngay 1 đợt gió kèm lá thu / lá xanh bay qua lớp học & màn hình OBS Live"
+              >
+                <Wind className="w-3.5 h-3.5" />
+                <span>Test Gió Trên Lớp</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="relative w-full h-36 rounded-lg bg-gradient-to-br from-slate-900 via-emerald-950/35 to-amber-950/25 border border-stone-800 flex items-center justify-center overflow-hidden">
+            {/* Nền mô phỏng bảng xanh & nắng cửa sổ lớp học để dễ căn độ tương phản */}
+            <div className="w-44 h-16 rounded-md bg-emerald-950/75 border-2 border-amber-800/70 flex flex-col items-center justify-center pointer-events-none select-none shadow-inner">
+              <span className="text-[10px] font-bold text-amber-200/80">
+                LỚP 12A1 • TIẾT HỌC VUI
+              </span>
+              <span className="text-[9px] text-emerald-200/65 mt-0.5">
+                Chu kỳ tự động: {Math.round(windSettings.intervalSec)}s / đợt
+              </span>
+            </div>
+
+            <canvas
+              ref={windPreviewCanvasRef}
+              width={396}
+              height={144}
+              className="absolute inset-0 w-full h-full pointer-events-none z-20"
+            />
+          </div>
+        </div>
+      </section>
+
       {/* 1. HIỆU ỨNG HOA ĐIỂM 10 BUNG NỔ KHI CỘNG ĐIỂM */}
       <section className="p-3 rounded-xl bg-stone-900/95 border border-pink-500/45 space-y-3 shadow-md">
         <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-stone-800">

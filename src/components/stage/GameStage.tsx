@@ -37,6 +37,11 @@ import { TeacherSprite } from './TeacherSprite';
 import { HudBoxKey, ResizeCorner, StageHud } from './StageHud';
 import { subscribeAnimationLoop } from '../../utils/liveLoopWakeup';
 import {
+  createWindBreezeRuntime,
+  normalizeWindBreezeSettings,
+  stepAndDrawWindBreeze,
+} from '../../utils/windBreezeVfx';
+import {
   DeskCatModel,
   FallingMoneyModel,
   Flower10BadgeIcon,
@@ -98,6 +103,7 @@ interface GameStageProps {
   paperPlaneHitBubbles?: PaperPlaneHitBubbleFX[];
   roseHeartBursts?: RoseHeartBurstFX[];
   eventBarFlashKey?: number;
+  windBreezeTriggerKey?: number;
   cameraFocus: CameraFocusState;
   speakingMeta?: {
     pilgrimId?: number;
@@ -316,6 +322,7 @@ export const GameStage: React.FC<GameStageProps> = ({
   paperPlaneHitBubbles = [],
   roseHeartBursts = [],
   eventBarFlashKey,
+  windBreezeTriggerKey = 0,
   cameraFocus,
   speakingMeta,
   isTtsSpeaking = false,
@@ -545,6 +552,8 @@ export const GameStage: React.FC<GameStageProps> = ({
     dustParticleCount: config.dustParticleCount ?? 16,
     dustParticleOpacity: config.dustParticleOpacity ?? 0.65,
     dustParticleSize: config.dustParticleSize ?? 1.0,
+    config,
+    windBreezeTriggerKey,
     isZombieEventActive: Boolean(
       zombieEventState?.isActive && zombieEventState.phase !== 'idle'
     ),
@@ -568,6 +577,8 @@ export const GameStage: React.FC<GameStageProps> = ({
     dustParticleCount: config.dustParticleCount ?? 16,
     dustParticleOpacity: config.dustParticleOpacity ?? 0.65,
     dustParticleSize: config.dustParticleSize ?? 1.0,
+    config,
+    windBreezeTriggerKey,
     isZombieEventActive: Boolean(
       zombieEventState?.isActive && zombieEventState.phase !== 'idle'
     ),
@@ -877,6 +888,8 @@ export const GameStage: React.FC<GameStageProps> = ({
       hueType: i % 3, // 0: đỏ cam, 1: cam rực, 2: vàng lửa
     }));
 
+    const windRuntime = createWindBreezeRuntime();
+
     let wasRaining = false;
     let wasZombieFire = false;
     let lastTime = performance.now();
@@ -969,6 +982,19 @@ export const GameStage: React.FC<GameStageProps> = ({
           dustCtx.fill();
         }
       }
+
+      // Làn gió thổi kèm lá thu / lá xanh bay nhẹ qua lớp học sau khoảng thời gian x
+      const windSettings = normalizeWindBreezeSettings(fxStateRef.current.config);
+      stepAndDrawWindBreeze(
+        dustCtx,
+        windRuntime,
+        windSettings,
+        dt,
+        Date.now(),
+        dustCanvas.width,
+        dustCanvas.height,
+        fxStateRef.current.windBreezeTriggerKey
+      );
 
       // Mưa Hoa Điểm 10 toàn màn hình hoặc Hiệu ứng Hạt Lửa Thổi Bùng khi Sự kiện Zombie xảy ra
       const rainRemainingMs = fxStateRef.current.goldenLotusRainUntil - Date.now();

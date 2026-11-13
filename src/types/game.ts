@@ -778,6 +778,17 @@ export interface GameConfig {
   vfxRoseHeartBurstDurationMs?: number;
   vfxRoseHeartBurstOffsetX?: number;
   vfxRoseHeartBurstOffsetY?: number;
+  vfxWindBreezeEnabled?: boolean;
+  vfxWindBreezeIntervalSec?: number;
+  vfxWindBreezeDurationSec?: number;
+  vfxWindBreezeLeafCount?: number;
+  vfxWindBreezeLeafTheme?: 'mixed' | 'autumn' | 'green';
+  vfxWindBreezeAutumnRatio?: number;
+  vfxWindBreezeLeafScale?: number;
+  vfxWindBreezeSpeed?: number;
+  vfxWindBreezeOpacity?: number;
+  vfxWindBreezeDirection?: 'left_to_right' | 'right_to_left' | 'alternate';
+  vfxWindBreezeShowStreaks?: boolean;
   chatBubbleFontFamily: string;
   chatBubbleScale: number;
   chatBubbleDurationSec: number;
@@ -1262,6 +1273,7 @@ export interface SyncPacket {
     | 'SYNC_STUDENT_EXP'
     | 'TRIGGER_PAPER_PLANE'
     | 'TRIGGER_ROSE_HEART_BURST'
+    | 'TRIGGER_WIND_BREEZE'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'
     | 'OBS_DISPLAY_CONTROL'
