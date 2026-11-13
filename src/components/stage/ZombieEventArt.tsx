@@ -990,7 +990,15 @@ const FlyingMilkTeaSpriteInner: React.FC<FlyingMilkTeaSpriteProps> = ({
       {tea.variant === 'gold_trophy' ? (
         <div className="relative flex items-center justify-center">
           <div className="absolute w-10 h-10 rounded-full bg-yellow-300/35 blur-[4px]" />
-          <GoldTrophyIcon className="relative z-10 w-10 h-11 drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]" />
+          {customAssets?.deskTrophyUrl ? (
+            <img
+              src={customAssets.deskTrophyUrl}
+              alt="Cúp vàng chiến thắng"
+              className="relative z-10 w-10 h-11 object-contain drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]"
+            />
+          ) : (
+            <GoldTrophyIcon className="relative z-10 w-10 h-11 drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]" />
+          )}
         </div>
       ) : customAssets?.milkTeaCupUrl ? (
         <img src={customAssets.milkTeaCupUrl} alt="Trà sữa Matcha Latte" className="w-10 h-12 object-contain" />

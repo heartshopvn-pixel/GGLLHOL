@@ -675,7 +675,7 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
           transformOrigin: '50% 88%',
         }}
       >
-        {/* CÚP VÀNG VÔ ĐỊCH (100% / 150% / 200%) KHI ĐƯỢC CÔ TRAO Ở LỄ TUYÊN DƯƠNG KẾT THÚC VÒNG 15 PHÚT */}
+        {/* CÚP VÀNG VÔ ĐỊCH (Top 1: 200% / Top 2: 150% / Top 3: 100%) KHI ĐƯỢC CÔ TRAO Ở LỄ TUYÊN DƯƠNG KẾT THÚC VÒNG 10 CÂU */}
         {Boolean(pilgrim.winnerTrophyScale && pilgrim.winnerTrophyScale > 0) && (
           <div
             className="absolute pointer-events-none select-none z-40"
@@ -688,7 +688,15 @@ const StudentSpriteInner: React.FC<StudentSpriteProps> = ({
               transformOrigin: 'center center',
             }}
           >
-            <GoldTrophyIcon className="w-10 h-11 drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]" />
+            {customAssets?.deskTrophyUrl ? (
+              <img
+                src={customAssets.deskTrophyUrl}
+                alt="Cúp vàng chiến thắng"
+                className="w-10 h-11 object-contain drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]"
+              />
+            ) : (
+              <GoldTrophyIcon className="w-10 h-11 drop-shadow-[0_4px_10px_rgba(250,204,21,0.85)]" />
+            )}
           </div>
         )}
 

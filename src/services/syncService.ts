@@ -163,9 +163,19 @@ class LiveSyncService {
   private tiktokLogs: string[] = [];
   private tiktokLogListeners = new Set<(logs: string[]) => void>();
   private roomInfoListeners = new Set<
-    (info: { username: string; roomId: string; message: string }) => void
+    (info: {
+      username: string;
+      roomId: string;
+      message: string;
+      eulerKeyConfigured?: boolean;
+    }) => void
   >();
-  private lastRoomInfo = { username: '', roomId: '', message: '' };
+  private lastRoomInfo: {
+    username: string;
+    roomId: string;
+    message: string;
+    eulerKeyConfigured?: boolean;
+  } = { username: '', roomId: '', message: '' };
 
   private appendTikTokLog(line: string) {
     const timeStr = new Date().toLocaleTimeString('vi-VN', { hour12: false });
@@ -187,10 +197,63 @@ class LiveSyncService {
   }
 
   public onRoomInfoChange(
-    fn: (info: { username: string; roomId: string; message: string }) => void
+    fn: (info: {
+      username: string;
+      roomId: string;
+      message: string;
+      eulerKeyConfigured?: boolean;
+    }) => void
   ) {
     this.roomInfoListeners.add(fn);
     return () => this.roomInfoListeners.delete(fn);
+  }
+
+  public async refreshTikTokServerStatus() {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 1500);
+      const rLocal = await fetch('http://127.0.0.1:8080/status', {
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (rLocal.ok) {
+        const d = await rLocal.json();
+        this.lastRoomInfo = {
+          username: d.username || this.lastRoomInfo.username,
+          roomId: d.roomId || this.lastRoomInfo.roomId,
+          message: d.message || this.lastRoomInfo.message,
+          eulerKeyConfigured:
+            typeof d.eulerKeyConfigured === 'boolean'
+              ? d.eulerKeyConfigured
+              : this.lastRoomInfo.eulerKeyConfigured,
+        };
+        this.roomInfoListeners.forEach((fn) => fn(this.lastRoomInfo));
+        return;
+      }
+    } catch {
+      // Local 8080 not running, fallback to backend /api/tiktok/status
+    }
+
+    if (!this.isStaticHost()) {
+      try {
+        const rCloud = await fetch('/api/tiktok/status');
+        if (rCloud.ok) {
+          const d = await rCloud.json();
+          this.lastRoomInfo = {
+            username: d.username || this.lastRoomInfo.username,
+            roomId: d.roomId || this.lastRoomInfo.roomId,
+            message: this.lastRoomInfo.message,
+            eulerKeyConfigured:
+              typeof d.eulerKeyConfigured === 'boolean'
+                ? d.eulerKeyConfigured
+                : this.lastRoomInfo.eulerKeyConfigured,
+          };
+          this.roomInfoListeners.forEach((fn) => fn(this.lastRoomInfo));
+        }
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   private clientTikTokArrivalSeq = 0;
@@ -299,6 +362,10 @@ class LiveSyncService {
               username: data.username || this.lastRoomInfo.username,
               roomId: data.roomId || '',
               message: data.message || '',
+              eulerKeyConfigured:
+                typeof data.eulerKeyConfigured === 'boolean'
+                  ? data.eulerKeyConfigured
+                  : this.lastRoomInfo.eulerKeyConfigured,
             };
             this.roomInfoListeners.forEach((fn) => fn(this.lastRoomInfo));
             if (data.message) {
@@ -490,21 +557,16 @@ class LiveSyncService {
     const clean = username.trim().replace(/^@+/, '');
     if (!clean) return { ok: false, error: 'Vui lòng nhập ID TikTok' };
 
-    // Đảm bảo kết nối WebSocket tới Local Bridge 8080 nếu chưa mở
+    // Đảm bảo kết nối WebSocket tới Local Bridge 8080 nếu chưa mở (KHÔNG gửi CONNECT_TIKTOK qua WS trước để tránh nhân đôi 2 lượt gọi EulerStream!)
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.connectWebSocket(this.lastWsUrl || 'ws://127.0.0.1:8080');
-    } else {
-      try {
-        this.ws.send(JSON.stringify({ type: 'CONNECT_TIKTOK', username: clean }));
-      } catch {
-        // Ignore
-      }
     }
 
-    // 1. Ưu tiên gọi trực tiếp Local Node.js Bridge (http://127.0.0.1:8080/connect) - hoạt động cả trên GitHub Pages lẫn Local
+    // 1. Ưu tiên gọi duy nhất 1 lần qua Local Node.js Bridge (http://127.0.0.1:8080/connect)
+    let localBridgeReachable = false;
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
+      const timer = setTimeout(() => controller.abort(), 14000);
       const localRes = await fetch('http://127.0.0.1:8080/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -512,23 +574,31 @@ class LiveSyncService {
         signal: controller.signal,
       });
       clearTimeout(timer);
+      localBridgeReachable = true;
       const localData = await localRes.json();
       if (localRes.ok && localData?.ok) {
         this.setStatus('connected');
         return { ok: true, roomId: localData.roomId || 'Local-8080' };
       }
-      if (localData?.error && this.isStaticHost()) {
-        return { ok: false, error: localData.error };
-      }
+      // Nếu server.js ở máy đã phản hồi lỗi rõ ràng (VD: kênh chưa bật Live hoặc chạm 429) -> DỪNG NGAY, tuyệt đối không gọi bồi thêm lên Cloud Server!
+      return {
+        ok: false,
+        error: localData?.error || 'Không thể kết nối phòng Live từ server.js',
+      };
     } catch {
-      // Nếu Local Bridge 8080 chưa bật hoặc đang chạy trên Cloud Server
+      // Chỉ rơi vào đây khi cổng 127.0.0.1:8080 chưa bật
     }
 
-    // Nếu đang mở trên GitHub Pages mà ws://localhost:8080 đã kết nối (bản server.js cũ chưa có /connect)
+    // Nếu đang mở trên Static Host mà ws://localhost:8080 đã kết nối (bản server.js rất cũ chưa có HTTP /connect)
     if (this.isStaticHost()) {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.setStatus('connected');
-        return { ok: true, roomId: 'WS-8080' };
+      if (!localBridgeReachable && this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'CONNECT_TIKTOK', username: clean }));
+          this.setStatus('connected');
+          return { ok: true, roomId: 'WS-8080' };
+        } catch {
+          // Ignore
+        }
       }
       return {
         ok: false,
@@ -536,7 +606,7 @@ class LiveSyncService {
       };
     }
 
-    // 2. Kết nối qua Backend Server tích hợp sẵn (khi chạy trên AI Studio / Node server)
+    // 2. Kết nối qua Backend Server tích hợp sẵn (chỉ chạy khi người dùng KHÔNG mở server.js ở máy)
     try {
       const res = await fetch('/api/tiktok/connect', {
         method: 'POST',
@@ -721,6 +791,10 @@ class LiveSyncService {
         username: raw.username || this.lastRoomInfo.username,
         roomId: raw.roomId || '',
         message: raw.message || '',
+        eulerKeyConfigured:
+          typeof raw.eulerKeyConfigured === 'boolean'
+            ? raw.eulerKeyConfigured
+            : this.lastRoomInfo.eulerKeyConfigured,
       };
       this.roomInfoListeners.forEach((fn) => fn(this.lastRoomInfo));
       if (raw.message) this.appendTikTokLog(`📡 ${raw.message}`);

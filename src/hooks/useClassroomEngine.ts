@@ -4238,7 +4238,7 @@ export function useClassroomEngine() {
   >([]);
   const roundEndMilkTeaTriggeredRef = useRef<boolean>(false);
   const roundEndApplauseTimerRef = useRef<number | null>(null);
-  const triggerRoundEndMilkTeaRef = useRef<() => void>(() => {});
+  const triggerRoundEndMilkTeaRef = useRef<(fromSync?: boolean) => void>(() => {});
 
   // Khi soundEngine bắt đầu đọc tới lượt của 1 học sinh tặng quà -> lập tức cho học sinh đó bước vào lớp!
   // Đồng thời lắng nghe khi câu đọc của Cô Giáo thuộc Luồng Tiết Học (Luồng 0, 2, 4, 5, 6, Luồng Kết Thúc) bắt đầu / vừa đọc xong -> kích hoạt camera & chuyển luồng!
@@ -10868,8 +10868,8 @@ export function useClassroomEngine() {
   // - Luồng 4 (answer_flash): Đọc câu trả lời + Bảng đáp án xanh lá nhấp nháy [Nói xong chuyển luồng 5]
   // - Luồng 5 (result_summary): Cập nhật chỗ ngồi ngay khi bắt đầu luồng 5 + Bảng kết quả 2 cột + Đọc kết quả [Nói xong chuyển luồng 6]
   // - Luồng 6 (ranking_board): Bảng xếp hạng trong lớp (6 top đầu 3s, sau đó mỗi 2s load tiếp 6 top tiếp theo) + Đọc xếp hạng [Nói xong kết thúc câu hỏi -> về Luồng 1]
-  // Hàm trao 3 Cúp Vàng với kích thước 200% (Top 1: +3 cúp), 150% (Top 2: +2 cúp), 100% (Top 3: +1 cúp) kèm Floating Text số cúp + icon cúp cho 3 bạn chiến thắng trên bục giảng
-  triggerRoundEndMilkTeaRef.current = () => {
+  // Hàm trao 3 Cúp Vàng khi kết thúc vòng kiểm tra 10 câu với kích thước 200% (Top 1: to hơn 100%, +3 cúp), 150% (Top 2: +2 cúp), 100% (Top 3: giữ nguyên, +1 cúp)
+  triggerRoundEndMilkTeaRef.current = (fromSync = false) => {
     if (roundEndMilkTeaTriggeredRef.current) return;
     roundEndMilkTeaTriggeredRef.current = true;
 
@@ -10882,11 +10882,21 @@ export function useClassroomEngine() {
     const nowTea = Date.now();
     const winners = roundEndWinnersRef.current;
 
+    if (!fromSync) {
+      syncService.sendCommand('SYNC_ROUND_END_TROPHIES', {
+        roundSeq:
+          roundEndTargetRoundSeqRef.current ||
+          classBoardStateRef.current.roundSeq ||
+          1,
+        winners,
+      });
+    }
+
     const lineSpacing = Math.max(24, cfg.punishmentLineSpacing || 52);
     const scaleByRank: Record<1 | 2 | 3, number> = {
-      1: 1.0, // Đồng nhất kích thước Cúp cho cả Top 1, 2, 3
-      2: 1.0,
-      3: 1.0,
+      1: 2.0, // Top 1: to hơn 100% (200% = gấp đôi cúp chuẩn)
+      2: 1.5, // Top 2: 150% kích thước cúp chuẩn
+      3: 1.0, // Top 3: giữ nguyên kích thước cúp chuẩn (100%)
     };
     const trophiesByRank: Record<1 | 2 | 3, number> = {
       1: 3, // Top 1 +3 Cúp Vàng
@@ -10904,6 +10914,12 @@ export function useClassroomEngine() {
         const w = winners.find((item) => item.rank === rankNum);
         const livePilgrim = w?.pilgrimId
           ? pilgrimsRef.current.find((p) => p.id === w.pilgrimId)
+          : w?.username
+          ? pilgrimsRef.current.find(
+              (p) =>
+                p.username.trim().toLowerCase() ===
+                w.username.trim().toLowerCase()
+            )
           : undefined;
         const fallbackX = Math.max(
           36,
@@ -10933,8 +10949,8 @@ export function useClassroomEngine() {
 
     // Sau khi Cúp Vàng bay tới tay (~1.05s):
     // 1) Cộng Cúp Vàng vào tổng cúp sở hữu học sinh + bảng Kỷ lục cúp vàng trong ngày
-    // 2) Đặt Cúp Vàng đồng nhất kích thước lên mặt bàn (tại vị trí con mèo) & hiện Floating Text +3 / +2 / +1 kèm icon Cúp Vàng!
-    window.setTimeout(() => {
+    // 2) Cầm Cúp Vàng theo tỷ lệ 200% / 150% / 100% trên bục trao giải, đồng thời đặt Cúp Vàng đồng nhất kích thước lên mặt bàn (vị trí con mèo) & hiện Floating Text +3 / +2 / +1!
+    setUnthrottledTimeout(() => {
       const isPureLiveTabNow =
         typeof window !== 'undefined' &&
         (new URLSearchParams(window.location.search).get('view') === 'live' ||
@@ -11996,7 +12012,7 @@ export function useClassroomEngine() {
 
           // Nếu tắt tiếng TTS (hoặc dùng mẫu câu gộp 1 vế), vẫn tự động kích hoạt tuần tự khóa camera Top 1 -> Top 2 -> Top 3 -> Phát trà sữa -> Vỗ tay!
           if (!enqueuedRoundEnd || roundEndTtsItems.length === 1) {
-            window.setTimeout(() => {
+            setUnthrottledTimeout(() => {
               const p1 = pilgrimsRef.current.find(
                 (p) => p.id === top1Entry.pilgrimId
               );
@@ -12013,7 +12029,7 @@ export function useClassroomEngine() {
                 });
               }
             }, 1500);
-            window.setTimeout(() => {
+            setUnthrottledTimeout(() => {
               const p2 = pilgrimsRef.current.find(
                 (p) => p.id === top2Entry.pilgrimId
               );
@@ -12030,7 +12046,7 @@ export function useClassroomEngine() {
                 });
               }
             }, 3400);
-            window.setTimeout(() => {
+            setUnthrottledTimeout(() => {
               const p3 = pilgrimsRef.current.find(
                 (p) => p.id === top3Entry.pilgrimId
               );
@@ -12047,7 +12063,7 @@ export function useClassroomEngine() {
                 });
               }
             }, 5200);
-            window.setTimeout(() => {
+            setUnthrottledTimeout(() => {
               setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
               triggerRoundEndMilkTeaRef.current();
               if (!enqueuedRoundEnd) {
@@ -14756,6 +14772,17 @@ export function useClassroomEngine() {
           if (isPureLiveTab && p.command) {
             remoteBoardCommandHandlersRef.current(String(p.command));
           }
+          break;
+        }
+        case 'SYNC_ROUND_END_TROPHIES': {
+          if (Array.isArray(p.winners) && p.winners.length > 0) {
+            roundEndWinnersRef.current = p.winners;
+          }
+          if (p.roundSeq) {
+            roundEndTargetRoundSeqRef.current = Number(p.roundSeq) || 1;
+          }
+          setCameraFocus({ pilgrimId: null, focusRole: null, until: 0 });
+          triggerRoundEndMilkTeaRef.current(true);
           break;
         }
         case 'SYNC_CLASS_BOARD_STATE':

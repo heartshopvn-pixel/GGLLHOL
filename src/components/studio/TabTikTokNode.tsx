@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Plug, Radio, Terminal, Unplug } from 'lucide-react';
+import { Check, Copy, Plug, Radio, ShieldCheck, Terminal, Unplug } from 'lucide-react';
 import { NODE_SERVER_CODE } from '../../config/constants';
 import { syncService, WsConnectionStatus } from '../../services/syncService';
 
@@ -21,15 +21,22 @@ export const TabTikTokNode: React.FC<TabTikTokNodeProps> = ({ wsStatus, onConnec
   });
   const [isConnectingRoom, setIsConnectingRoom] = useState(false);
   const [roomStatusMsg, setRoomStatusMsg] = useState('');
+  const [eulerKeyActive, setEulerKeyActive] = useState<boolean>(
+    () => Boolean(syncService.getRoomInfo().eulerKeyConfigured)
+  );
   const [liveLogs, setLiveLogs] = useState<string[]>(() => syncService.getTikTokLogs());
   const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
+    void syncService.refreshTikTokServerStatus();
     const unsubLogs = syncService.onTikTokLog((logs) => {
       setLiveLogs([...logs]);
     });
     const unsubRoom = syncService.onRoomInfoChange((info) => {
       if (info.message) setRoomStatusMsg(info.message);
+      if (typeof info.eulerKeyConfigured === 'boolean') {
+        setEulerKeyActive(info.eulerKeyConfigured);
+      }
       if (info.username && !tiktokUsername) {
         setTiktokUsername(info.username);
       }
@@ -151,6 +158,32 @@ export const TabTikTokNode: React.FC<TabTikTokNodeProps> = ({ wsStatus, onConnec
             {roomStatusMsg}
           </div>
         )}
+
+        <div className="p-2.5 rounded-lg bg-stone-950/80 border border-emerald-500/30 space-y-1.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-300">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Đã bật 4 Chốt Chống Đốt Lượt Kết Nối</span>
+            </div>
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                eulerKeyActive
+                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-stone-900 text-amber-300 border border-amber-500/30'
+              }`}
+            >
+              {eulerKeyActive
+                ? '🔑 Server đã nhận Euler Key riêng'
+                : '🔑 Đang dùng miễn phí theo IP'}
+            </span>
+          </div>
+          <p className="text-[10px] text-stone-300 leading-relaxed">
+            • Tự dừng 100% khi kênh chưa bật Live, tắt Live (<code className="text-amber-300">streamEnd</code>) hoặc báo quá hạn mức (<code className="text-amber-300">429</code>). Rớt mạng giữa phiên chỉ thử lại giãn cách <code className="text-amber-300">8s ➔ 20s ➔ 45s ➔ 90s</code> (tối đa 4 lần).
+          </p>
+          <p className="text-[10px] text-stone-400 leading-relaxed">
+            • <b>Cách gắn khóa EulerStream trên máy chủ:</b> Tạo file <code className="text-emerald-300">.env</code> (ghi <code className="text-amber-300">EULER_API_KEY=mã_key_của_bạn</code>) hoặc file <code className="text-emerald-300">euler_key.txt</code> nằm cùng thư mục với <code className="text-amber-300">server.js</code> — hệ thống tự nhận ngay lập tức khi bấm <b>Kết nối Live</b> mà không cần khởi động lại!
+          </p>
+        </div>
       </section>
 
       {/* 2. Kết nối WebSocket Local Bridge */}
@@ -248,7 +281,7 @@ export const TabTikTokNode: React.FC<TabTikTokNodeProps> = ({ wsStatus, onConnec
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xs font-bold text-stone-200">
-              Mã Nguồn <code className="text-amber-300">server.js</code> (Đã fix log CMD + Cổng 8080)
+              Mã Nguồn <code className="text-amber-300">server.js</code> Mới Nhất (4 Chốt Bảo Vệ Lượt + Hỗ Trợ Euler Key)
             </h2>
             <p className="text-[10px] text-stone-400 font-mono mt-0.5">
               npm i tiktok-live-connector ws express cors

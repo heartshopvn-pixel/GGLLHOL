@@ -3,10 +3,52 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import {
+  applyEulerSignConfig,
+  classifyTikTokError,
+  computeTikTokReconnectPlan,
+} from './src/utils/tiktokReconnectPolicy';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STUDENT_EXP_JSON_PATH = path.join(__dirname, 'classroom-student-exp.json');
+
+function resolveServerEulerApiKey(): string {
+  const fromEnv = String(
+    process.env.EULER_API_KEY || process.env.SIGN_API_KEY || ''
+  ).trim();
+  if (fromEnv) return fromEnv;
+
+  try {
+    const keyTxtPath = path.join(__dirname, 'euler_key.txt');
+    if (fs.existsSync(keyTxtPath)) {
+      const txt = fs.readFileSync(keyTxtPath, 'utf-8').trim();
+      if (txt && !txt.startsWith('#')) return txt;
+    }
+  } catch {
+    // Ignore
+  }
+
+  try {
+    const envPath = path.join(__dirname, '.env');
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const match = trimmed.match(/^(?:EULER_API_KEY|SIGN_API_KEY)\s*=\s*(.*)$/);
+        if (match) {
+          const val = match[1].trim().replace(/^['"]|['"]$/g, '');
+          if (val) return val;
+        }
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  return '';
+}
 
 process.on('uncaughtException', (err) => {
   console.error('⚠️ [UNCAUGHT EXCEPTION]:', err?.message || err);
@@ -308,6 +350,10 @@ async function startServer() {
         username: item.username || '',
         roomId: item.roomId || '',
         message: item.message || '',
+        eulerKeyConfigured:
+          typeof item.eulerKeyConfigured === 'boolean'
+            ? item.eulerKeyConfigured
+            : Boolean(resolveServerEulerApiKey()),
       });
       return;
     }
@@ -344,11 +390,16 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // Built-in Backend TikTok Live Connector (allows connecting directly by @username from Web UI)
+  // Built-in Backend TikTok Live Connector (with 4 Quota-Protection Locks & EulerStream Key support)
   let activeTikTokConn: any = null;
   let activeTikTokUsername = '';
   let activeTikTokStatus: 'idle' | 'connecting' | 'connected' | 'error' = 'idle';
   let activeTikTokRoomId = '';
+  let tiktokReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let tiktokReconnectAttempt = 0;
+  let isConnectingTikTok = false;
+  let lastManualConnectAt = 0;
+  let manualDisconnected = false;
 
   const extractTikTokUsername = (data: any): string => {
     const u = data?.user || data?.userDetails || data || {};
@@ -403,10 +454,17 @@ async function startServer() {
       status: activeTikTokStatus,
       username: activeTikTokUsername,
       roomId: activeTikTokRoomId,
+      eulerKeyConfigured: Boolean(resolveServerEulerApiKey()),
     });
   });
 
   app.post('/api/tiktok/disconnect', async (_req: Request, res: Response) => {
+    manualDisconnected = true;
+    tiktokReconnectAttempt = 0;
+    if (tiktokReconnectTimer) {
+      clearTimeout(tiktokReconnectTimer);
+      tiktokReconnectTimer = null;
+    }
     if (activeTikTokConn) {
       try {
         activeTikTokConn.removeAllListeners?.();
@@ -422,18 +480,39 @@ async function startServer() {
       type: 'TIKTOK_LIVE_STATUS',
       status: 'simulated',
       username: activeTikTokUsername,
-      message: 'Đã ngắt kết nối phiên Live',
+      message: '⏹️ Đã ngắt kết nối phiên Live (Đã dừng hoàn toàn tự động kết nối lại)',
+      eulerKeyConfigured: Boolean(resolveServerEulerApiKey()),
     });
     res.json({ ok: true });
   });
 
-  app.post('/api/tiktok/connect', async (req: Request, res: Response) => {
-    const rawUser = String(req.body?.username || '')
-      .trim()
-      .replace(/^@+/, '');
-    if (!rawUser) {
-      res.status(400).json({ ok: false, error: 'Vui lòng nhập ID TikTok' });
-      return;
+  const startManagedTikTokConnection = async (
+    rawUser: string,
+    isAutoRetry: boolean
+  ): Promise<{ ok: boolean; roomId?: string; error?: string }> => {
+    if (isConnectingTikTok) {
+      return {
+        ok: false,
+        error: '⏳ Hệ thống đang trong quá trình kết nối, vui lòng chờ giây lát...',
+      };
+    }
+
+    if (!isAutoRetry) {
+      const now = Date.now();
+      if (now - lastManualConnectAt < 2200) {
+        return {
+          ok: false,
+          error: '⏳ Vui lòng chờ 2 giây giữa các lần bấm Kết nối để tránh tốn lượt EulerStream!',
+        };
+      }
+      lastManualConnectAt = now;
+      manualDisconnected = false;
+      tiktokReconnectAttempt = 0;
+    }
+
+    if (tiktokReconnectTimer) {
+      clearTimeout(tiktokReconnectTimer);
+      tiktokReconnectTimer = null;
     }
 
     if (activeTikTokConn) {
@@ -446,13 +525,20 @@ async function startServer() {
       activeTikTokConn = null;
     }
 
+    isConnectingTikTok = true;
     activeTikTokUsername = rawUser;
     activeTikTokStatus = 'connecting';
+    const eulerKey = resolveServerEulerApiKey();
+    const hasEulerKey = Boolean(eulerKey);
+
     broadcastSSE({
       type: 'TIKTOK_LIVE_STATUS',
       status: 'connecting',
       username: rawUser,
-      message: `Đang kết nối tới phòng Live @${rawUser}...`,
+      eulerKeyConfigured: hasEulerKey,
+      message: isAutoRetry
+        ? `🔄 Đang tự kết nối lại @${rawUser} (Lần ${tiktokReconnectAttempt}/4)...`
+        : `⏳ Đang kết nối tới phòng Live @${rawUser}${hasEulerKey ? ' [Euler Key]' : ''}...`,
     });
 
     try {
@@ -462,6 +548,8 @@ async function startServer() {
       } else if (tiktokPkg.default?.RoomIdRouteConfig) {
         tiktokPkg.default.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
       }
+
+      applyEulerSignConfig(tiktokPkg, eulerKey);
 
       const ConnectorClass =
         tiktokPkg.TikTokLiveConnection ||
@@ -473,11 +561,15 @@ async function startServer() {
         processInitialData: false,
         enableExtendedGiftInfo: false,
         fetchRoomInfoOnConnect: false,
+        ...(eulerKey ? { signApiKey: eulerKey } : {}),
       });
       if (typeof conn.fetchAvailableGifts === 'function') {
         conn.fetchAvailableGifts = async () => [];
       }
       activeTikTokConn = conn;
+
+      let streamEndedByHost = false;
+      let fatalStreamError: unknown = undefined;
 
       const GIFT_ID_FALLBACK: Record<number, { name: string; coins: number }> = {
         5655: { name: 'Rose', coins: 1 },
@@ -589,35 +681,153 @@ async function startServer() {
         if (key.includes('follow')) onFollow(data);
       });
       conn.on('error', (err: any) => {
+        const check = classifyTikTokError(err);
+        if (!check.shouldAutoReconnect) {
+          fatalStreamError = err;
+        }
         console.warn('⚠️ [TIKTOK ERROR]:', err?.message || err?.info || err);
       });
+
+      // Chốt 1: Khi chủ kênh tắt phiên Live (streamEnd) -> Dừng hẳn, không tự gọi lại!
+      conn.on('streamEnd', () => {
+        if (activeTikTokConn !== conn) return;
+        streamEndedByHost = true;
+        if (tiktokReconnectTimer) {
+          clearTimeout(tiktokReconnectTimer);
+          tiktokReconnectTimer = null;
+        }
+        activeTikTokConn = null;
+        activeTikTokStatus = 'idle';
+        activeTikTokRoomId = '';
+        const msg = `⏹️ Phiên Live @${rawUser} đã kết thúc (streamEnd) — Tự động dừng kết nối lại để bảo vệ lượt miễn phí.`;
+        console.log(msg);
+        broadcastSSE({
+          type: 'TIKTOK_LIVE_STATUS',
+          status: 'simulated',
+          username: rawUser,
+          eulerKeyConfigured: Boolean(resolveServerEulerApiKey()),
+          message: msg,
+        });
+      });
+
+      // Chốt 3: Đang Live thật sự mà rớt mạng giữa chừng -> Giãn nhịp 8s -> 20s -> 45s -> 90s (tối đa 4 lần)
       conn.on('disconnected', () => {
-        console.warn('🔄 [TIKTOK] Mất kết nối phòng Live');
+        if (activeTikTokConn !== conn) return;
+        const plan = computeTikTokReconnectPlan({
+          currentAttempt: tiktokReconnectAttempt,
+          manualDisconnect: manualDisconnected,
+          streamEndedByHost,
+          error: fatalStreamError,
+        });
+        console.warn(`🔄 [TIKTOK DISCONNECTED] ${plan.reasonVi}`);
+        if (!plan.shouldReconnect) {
+          activeTikTokStatus = 'idle';
+          activeTikTokRoomId = '';
+          broadcastSSE({
+            type: 'TIKTOK_LIVE_STATUS',
+            status: 'simulated',
+            username: rawUser,
+            eulerKeyConfigured: Boolean(resolveServerEulerApiKey()),
+            message: plan.reasonVi,
+          });
+          return;
+        }
+        tiktokReconnectAttempt = plan.nextAttempt;
+        broadcastSSE({
+          type: 'TIKTOK_LIVE_STATUS',
+          status: 'connecting',
+          username: rawUser,
+          eulerKeyConfigured: Boolean(resolveServerEulerApiKey()),
+          message: plan.reasonVi,
+        });
+        tiktokReconnectTimer = setTimeout(() => {
+          void startManagedTikTokConnection(rawUser, true);
+        }, plan.delayMs);
       });
 
       const state = await conn.connect();
+      isConnectingTikTok = false;
+      tiktokReconnectAttempt = 0; // Reset bộ đếm ngay khi vào phòng thành công!
       activeTikTokStatus = 'connected';
       activeTikTokRoomId = String(state?.roomId || '');
-      console.log(`✅ [TIKTOK LIVE] Đã kết nối phòng @${rawUser} (Room ID: ${activeTikTokRoomId})`);
+      console.log(
+        `✅ [TIKTOK LIVE] Đã kết nối phòng @${rawUser} (Room ID: ${activeTikTokRoomId})${hasEulerKey ? ' [Euler API Key Active]' : ''}`
+      );
       broadcastSSE({
         type: 'TIKTOK_LIVE_STATUS',
         status: 'connected',
         username: rawUser,
         roomId: activeTikTokRoomId,
-        message: `Đã kết nối phòng Live @${rawUser} (Room: ${activeTikTokRoomId})`,
+        eulerKeyConfigured: hasEulerKey,
+        message: `Đã kết nối phòng Live @${rawUser} (Room: ${activeTikTokRoomId})${hasEulerKey ? ' • 🔑 Euler Key' : ''}`,
       });
-      res.json({ ok: true, roomId: activeTikTokRoomId, username: rawUser });
+      return { ok: true, roomId: activeTikTokRoomId };
     } catch (err: any) {
+      isConnectingTikTok = false;
+      activeTikTokConn = null;
       activeTikTokStatus = 'error';
-      const errMsg = err?.message || 'Không thể kết nối phòng Live (kiểm tra ID hoặc trạng thái đang Live)';
-      console.error('❌ [TIKTOK CONNECT ERROR]:', errMsg);
+      const classified = classifyTikTokError(err);
+      const displayMsg =
+        classified.category === 'transient_error'
+          ? err?.message || 'Không thể kết nối phòng Live'
+          : classified.userMessageVi;
+      console.error('❌ [TIKTOK CONNECT ERROR]:', displayMsg);
+
+      // Chỉ tiếp tục giãn nhịp nếu đây là nhịp tự nối lại khi rớt mạng giữa chừng VÀ không vi phạm Chốt 1 / Chốt 2
+      if (isAutoRetry && classified.shouldAutoReconnect) {
+        const plan = computeTikTokReconnectPlan({
+          currentAttempt: tiktokReconnectAttempt,
+          manualDisconnect: manualDisconnected,
+          error: err,
+        });
+        if (plan.shouldReconnect) {
+          tiktokReconnectAttempt = plan.nextAttempt;
+          broadcastSSE({
+            type: 'TIKTOK_LIVE_STATUS',
+            status: 'connecting',
+            username: rawUser,
+            eulerKeyConfigured: hasEulerKey,
+            message: `${displayMsg} • ${plan.reasonVi}`,
+          });
+          tiktokReconnectTimer = setTimeout(() => {
+            void startManagedTikTokConnection(rawUser, true);
+          }, plan.delayMs);
+          return { ok: false, error: displayMsg };
+        }
+        broadcastSSE({
+          type: 'TIKTOK_LIVE_STATUS',
+          status: 'error',
+          username: rawUser,
+          eulerKeyConfigured: hasEulerKey,
+          message: plan.reasonVi,
+        });
+        return { ok: false, error: plan.reasonVi };
+      }
+
       broadcastSSE({
         type: 'TIKTOK_LIVE_STATUS',
         status: 'error',
         username: rawUser,
-        message: errMsg,
+        eulerKeyConfigured: hasEulerKey,
+        message: displayMsg,
       });
-      res.status(500).json({ ok: false, error: errMsg });
+      return { ok: false, error: displayMsg };
+    }
+  };
+
+  app.post('/api/tiktok/connect', async (req: Request, res: Response) => {
+    const rawUser = String(req.body?.username || '')
+      .trim()
+      .replace(/^@+/, '');
+    if (!rawUser) {
+      res.status(400).json({ ok: false, error: 'Vui lòng nhập ID TikTok' });
+      return;
+    }
+    const result = await startManagedTikTokConnection(rawUser, false);
+    if (result.ok) {
+      res.json({ ok: true, roomId: result.roomId, username: rawUser });
+    } else {
+      res.status(500).json({ ok: false, error: result.error });
     }
   });
 
