@@ -514,8 +514,6 @@ class TempleSoundService {
     const startMs = Date.now();
     try {
       const res = await fetch(candidateUrl, { signal: controller.signal });
-      clearTimeout(timer);
-      const latencyMs = Math.max(1, Date.now() - startMs);
       if (!res.ok) return null;
       const contentType = (
         res.headers.get('content-type') || ''
@@ -543,10 +541,12 @@ class TempleSoundService {
       }
       const blob = await res.blob();
       if (!blob || blob.size < 128) return null;
+      const latencyMs = Math.max(1, Date.now() - startMs);
       return { blob, rawSource, switchedMirror, decodedFail, latencyMs };
     } catch {
-      clearTimeout(timer);
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -568,19 +568,25 @@ class TempleSoundService {
     if (existingPromise) return existingPromise;
 
     const p = (async () => {
+      const startedAt = Date.now();
       // 1. Thử máy chủ hiện tại (/api/tts)
       let fetched = await this.fetchSingleAudioBlobCandidate(url, timeoutMs);
 
       // 2. Nếu host hiện tại là static host hoặc IP cloud bị Google giới hạn 429/502 -> thử cổng local server.js (127.0.0.1:8080) trên máy người dùng (vẫn 100% cùng giọng Google Warm)
+      const remainingTimeoutMs = Math.max(
+        0,
+        timeoutMs - (Date.now() - startedAt)
+      );
       if (
         !fetched &&
+        remainingTimeoutMs > 0 &&
         url.startsWith('/api/tts') &&
         typeof window !== 'undefined' &&
         window.location.port !== '8080'
       ) {
         fetched = await this.fetchSingleAudioBlobCandidate(
           `http://127.0.0.1:8080${url}`,
-          1800
+          Math.min(1800, remainingTimeoutMs)
         );
       }
 
@@ -3732,6 +3738,13 @@ class TempleSoundService {
     let hasStartedPlaying = false;
     let activeAudio: HTMLAudioElement | null = null;
     let skipTimer: ReturnType<typeof setTimeout> | null = null;
+    let lagTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const clearLagTimeout = () => {
+      if (!lagTimeout) return;
+      clearTimeout(lagTimeout);
+      lagTimeout = null;
+    };
 
     const cleanupAudio = () => {
       if (!activeAudio) return;
@@ -3753,7 +3766,7 @@ class TempleSoundService {
     };
 
     const clearStreamTimers = () => {
-      clearTimeout(lagTimeout);
+      clearLagTimeout();
       if (playbackWatchdog) {
         clearTimeout(playbackWatchdog);
         playbackWatchdog = null;
@@ -3794,11 +3807,14 @@ class TempleSoundService {
     };
 
     const timeoutBudget = 3500;
-    const lagTimeout = setTimeout(() => {
-      if (!hasStartedPlaying) {
-        skipOnce('Google Warm phản hồi quá hạn >3.5s ➔ Tự động Skip');
-      }
-    }, timeoutBudget);
+    const armLagTimeout = () => {
+      clearLagTimeout();
+      lagTimeout = setTimeout(() => {
+        if (!hasStartedPlaying) {
+          skipOnce('Google Warm phản hồi quá hạn >3.5s ➔ Tự động Skip');
+        }
+      }, timeoutBudget);
+    };
 
     const approxStreamRate = Math.max(0.5, Number(config.ttsRate || 1));
     const estimatedPlayMs = Math.max(
@@ -3825,6 +3841,7 @@ class TempleSoundService {
         }
         const meta = this.audioBlobMetaCache.get(proxyUrl);
         const startViaHtmlAudio = (srcUrl: string, isDirectStream = false) => {
+          armLagTimeout();
           const audio = new Audio();
           (
             audio as HTMLAudioElement & { referrerPolicy?: string }
@@ -3875,7 +3892,7 @@ class TempleSoundService {
 
           audio.onplaying = () => {
             hasStartedPlaying = true;
-            clearTimeout(lagTimeout);
+            clearLagTimeout();
             this.applyAudioPlaybackParams(
               audio,
               effectiveRate,
@@ -3930,6 +3947,7 @@ class TempleSoundService {
           audio.play().catch((err) => {
             cleanupAudio();
             if (!isDirectStream && blobUrl) {
+              armLagTimeout();
               void this.tryPlayBlobViaWebAudio(
                 blobUrl,
                 effectiveRate,
@@ -3937,7 +3955,7 @@ class TempleSoundService {
                 token,
                 (durSec) => {
                   hasStartedPlaying = true;
-                  clearTimeout(lagTimeout);
+                  clearLagTimeout();
                   if (playbackWatchdog) clearTimeout(playbackWatchdog);
                   const exactMs = Math.ceil(durSec * 1000) + 1500;
                   playbackWatchdog = setTimeout(() => {
@@ -3983,6 +4001,7 @@ class TempleSoundService {
         }
 
         if (forceMaleWarmFilter) {
+          armLagTimeout();
           void this.tryPlayBlobViaWebAudio(
             blobUrl,
             config.ttsRate || 1.05,
@@ -3990,7 +4009,7 @@ class TempleSoundService {
             token,
             (actualPlaySec) => {
               hasStartedPlaying = true;
-              clearTimeout(lagTimeout);
+              clearLagTimeout();
               if (playbackWatchdog) clearTimeout(playbackWatchdog);
               const exactMs = Math.ceil(actualPlaySec * 1000) + 1200;
               playbackWatchdog = setTimeout(() => {
